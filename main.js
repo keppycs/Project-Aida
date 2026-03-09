@@ -85,12 +85,18 @@ async function init() {
 
   player.configure({
     streaming: {
-      bufferingGoal: 30,
+      bufferingGoal: 12,
       rebufferingGoal: 2,
       bufferBehind: 30,
-      retryParameters: { maxAttempts: 4, baseDelay: 1000, backoffFactor: 2 },
+      // Prevent ABR from switching too aggressively
+      safeSeekOffset: 2,
     },
-    abr: { enabled: true },
+    abr: {
+      enabled: true,
+      defaultBandwidthEstimate: 20000000, // start ABR estimate at 20Mbps
+      bandwidthUpgradeTarget: 0.85, // only upgrade if 85% of bandwidth available
+      bandwidthDowngradeTarget: 0.95, // downgrade quickly if needed
+    },
   });
 
   player.addEventListener("error", (e) => console.error("Shaka error", e.detail));
