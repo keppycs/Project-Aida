@@ -93,7 +93,7 @@ async function init() {
     },
     abr: {
       enabled: true,
-      defaultBandwidthEstimate: 20000000, // start ABR estimate at 20Mbps
+      defaultBandwidthEstimate: 50000000, // start ABR estimate at 20Mbps
       bandwidthUpgradeTarget: 0.85, // only upgrade if 85% of bandwidth available
       bandwidthDowngradeTarget: 0.95, // downgrade quickly if needed
     },
