@@ -373,7 +373,7 @@ function buildQualityMenu() {
     heightSeen[track.height] = (heightSeen[track.height] || 0) + 1;
     const isDupe = heightCount[track.height] > 1;
     const isFirst = heightSeen[track.height] === 1;
-    const label = `${track.height}p${isDupe && isFirst ? " Max" : ""}${fps ? " " + fps + "fps" : ""}`;
+    const label = `${String(track.height).padStart(4, "\u00A0")}p${fps}${isDupe && isFirst ? " Max" : ""}`;
 
     item.innerHTML = `
       <svg class="check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">

@@ -404,7 +404,7 @@ video {
   background: var(--surface);
   border: 1px solid rgba(255, 255, 255, 0.1);
   border-radius: var(--radius);
-  min-width: 180px;
+  min-width: 250px;
   overflow: hidden;
   opacity: 0;
   pointer-events: none;
@@ -435,6 +435,7 @@ video {
   align-items: center;
   gap: 10px;
   padding: 9px 14px;
+  font-family: var(--mono);
   font-size: 14px;
   font-weight: 400;
   cursor: pointer;
