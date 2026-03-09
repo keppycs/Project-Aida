@@ -1130,16 +1130,10 @@
       // ── Quality menu ───────────────────────────────────────────────────────────────
       function buildQualityMenu() {
         if (!player) return;
-        const tracks = player.getVariantTracks();
-
-        // Deduplicate by height, keep highest bandwidth per height
-        const byHeight = {};
-        tracks.forEach((t) => {
-          if (!byHeight[t.height] || t.bandwidth > byHeight[t.height].bandwidth)
-            byHeight[t.height] = t;
-        });
-
-        const sorted = Object.values(byHeight).sort((a, b) => b.height - a.height);
+        const tracks = player
+          .getVariantTracks()
+          .filter((t) => t.height) // exclude audio-only tracks
+          .sort((a, b) => b.height - a.height || b.bandwidth - a.bandwidth);
 
         qualMenu.innerHTML = '<div class="menu-header">Quality</div>';
 
@@ -1156,17 +1150,33 @@
         autoItem.addEventListener("click", () => selectQuality(-1));
         qualMenu.appendChild(autoItem);
 
-        sorted.forEach((track) => {
+        // Track how many times we've seen each height
+        // so we can label duplicates as "4K Max" vs "4K"
+        const heightCount = {};
+        tracks.forEach((t) => {
+          heightCount[t.height] = (heightCount[t.height] || 0) + 1;
+        });
+        const heightSeen = {};
+
+        tracks.forEach((track) => {
           const item = document.createElement("button");
           item.className = "menu-item";
           item.dataset.id = track.id;
+
           const kbps = Math.round(track.bandwidth / 1000);
           const fps = track.frameRate ? Math.round(track.frameRate) : "";
+
+          // If multiple tracks share a height, label the first (highest bandwidth) as "Max"
+          heightSeen[track.height] = (heightSeen[track.height] || 0) + 1;
+          const isDupe = heightCount[track.height] > 1;
+          const isFirst = heightSeen[track.height] === 1;
+          const label = `${track.height}p${isDupe && isFirst ? " Max" : ""}${fps ? " " + fps + "fps" : ""}`;
+
           item.innerHTML = `
       <svg class="check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
         <polyline points="20 6 9 17 4 12"/>
       </svg>
-      ${track.height}p${fps ? " " + fps + "fps" : ""}
+      ${label}
       <span class="menu-badge">${kbps > 1000 ? (kbps / 1000).toFixed(1) + " Mbps" : kbps + " kbps"}</span>`;
           item.addEventListener("click", () => selectQuality(track.id));
           qualMenu.appendChild(item);
