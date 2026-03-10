@@ -22,11 +22,13 @@ async function supportsAV1() {
     const r = await navigator.mediaCapabilities?.decodingInfo({
       type: "media-source",
       video: {
-        contentType: 'video/mp4; codecs="av01.0.08M.10"',
+        contentType: 'video/mp4; codecs="av01.0.08H.10.0.110.09.16.09.0"',
         width: 3840,
         height: 2160,
         bitrate: 20000000,
         framerate: 120,
+        transferFunction: "pq",
+        colorGamut: "rec2020",
       },
     });
     return r?.supported ?? false;
