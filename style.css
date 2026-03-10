@@ -569,3 +569,76 @@ video {
 :fullscreen #player-wrap {
   border-radius: 0;
 }
+
+/* ── HDR toggle button ── */
+#hdr-btn {
+  width: auto;
+  padding: 0 8px;
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  color: var(--text-dim);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 4px;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
+#hdr-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.4);
+  color: var(--text);
+}
+#hdr-btn.active {
+  color: var(--accent);
+  border-color: rgba(232, 255, 71, 0.5);
+}
+#hdr-btn.active:hover {
+  background: rgba(232, 255, 71, 0.08);
+  border-color: var(--accent);
+}
+
+/* ── HDR notice ── */
+#hdr-notice {
+  position: absolute;
+  bottom: 70px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(0, 0, 0, 0.82);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: var(--text);
+  padding: 10px 14px;
+  border-radius: 8px;
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  white-space: nowrap;
+  z-index: 15;
+  backdrop-filter: blur(8px);
+  animation: notice-in 0.25s var(--ease);
+}
+#hdr-notice strong {
+  color: var(--accent);
+}
+#hdr-notice-close {
+  background: rgba(255, 255, 255, 0.1);
+  border: none;
+  color: var(--text);
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  cursor: pointer;
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: background 0.15s;
+}
+#hdr-notice-close:hover {
+  background: rgba(255, 255, 255, 0.2);
+}
+@keyframes notice-in {
+  from { opacity: 0; transform: translateX(-50%) translateY(6px); }
+  to   { opacity: 1; transform: translateX(-50%) translateY(0); }
+}

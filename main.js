@@ -67,6 +67,7 @@ const speedMenu = document.getElementById("speed-menu");
 const hdrBadge = document.getElementById("hdr-badge");
 const codecBadge = document.getElementById("codec-badge");
 const titleText = document.getElementById("title-text");
+const hdrBtn = document.getElementById("hdr-btn");
 
 // ── State ──────────────────────────────────────────────────────────────────────
 let player,
@@ -135,7 +136,49 @@ async function init() {
   } catch (e) {
     console.error("Load failed", e);
   }
+
+  // ── HDR tone mapping for SDR displays ────────────────────────────────────────
+  if (CONFIG.isHdr && !window.matchMedia("(dynamic-range: high)").matches) {
+    const saved = localStorage.getItem("hdr-filter");
+    const on = saved !== "disabled"; // default ON
+    hdrBtn.style.display = "";
+    applyHdrFilter(on);
+    updateHdrBtn(on);
+    if (!localStorage.getItem("hdr-filter-noticed")) {
+      showHdrNotice();
+      localStorage.setItem("hdr-filter-noticed", "1");
+    }
+  }
 }
+
+// ── HDR filter ─────────────────────────────────────────────────────────────────
+function applyHdrFilter(on) {
+  video.style.filter = on ? "brightness(1) contrast(1.7) saturate(1.3)" : "";
+}
+
+function updateHdrBtn(on) {
+  hdrBtn.classList.toggle("active", on);
+  hdrBtn.title = on ? "HDR tone mapping: ON" : "HDR tone mapping: OFF";
+}
+
+function showHdrNotice() {
+  const notice = document.createElement("div");
+  notice.id = "hdr-notice";
+  notice.innerHTML = `
+    <span>HDR capability not detected. SDR tonemapper applied. Use the <strong>HDR</strong> button to toggle.</span>
+    <button id="hdr-notice-close">✕</button>
+  `;
+  wrap.appendChild(notice);
+  document.getElementById("hdr-notice-close").addEventListener("click", () => notice.remove());
+  setTimeout(() => notice?.remove(), 10000);
+}
+
+hdrBtn.addEventListener("click", () => {
+  const on = video.style.filter === "";
+  applyHdrFilter(on);
+  updateHdrBtn(on);
+  localStorage.setItem("hdr-filter", on ? "enabled" : "disabled");
+});
 
 // ── Formatting ─────────────────────────────────────────────────────────────────
 function fmt(s) {
