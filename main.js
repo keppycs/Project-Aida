@@ -85,6 +85,7 @@ async function init() {
 
   player = new shaka.Player();
   await player.attach(video);
+  video.volume = 0.5;
 
   player.configure({
     streaming: {
