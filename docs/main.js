@@ -8,21 +8,32 @@ const CONFIG = {
 };
 
 // ── Codec detection ─────────────────────────────────────────────────────────────
-function isApple() {
-  return (
-    /iPad|iPhone|iPod/.test(navigator.userAgent) ||
-    (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1) ||
-    /^((?!chrome|android).)*safari/i.test(navigator.userAgent)
-  );
-}
-
 async function supportsAV1() {
-  if (isApple()) return false;
   try {
     const r = await navigator.mediaCapabilities?.decodingInfo({
       type: "media-source",
       video: {
         contentType: 'video/mp4; codecs="av01.0.08H.10.0.110.09.16.09.0"',
+        width: 3840,
+        height: 2160,
+        bitrate: 20000000,
+        framerate: 120,
+        transferFunction: "pq",
+        colorGamut: "rec2020",
+      },
+    });
+    return (r?.supported && r?.smooth) ?? false;
+  } catch {
+    return false;
+  }
+}
+
+async function supportsH265Dash() {
+  try {
+    const r = await navigator.mediaCapabilities?.decodingInfo({
+      type: "media-source",
+      video: {
+        contentType: 'video/mp4; codecs="hvc1.1.6.H150.B0"',
         width: 3840,
         height: 2160,
         bitrate: 20000000,
@@ -140,25 +151,24 @@ async function init() {
   titleText.textContent = CONFIG.title;
   if (CONFIG.isHdr) hdrBadge.classList.add("show");
 
-  const useAV1 = await supportsAV1();
+  const useAV1      = await supportsAV1();
+  const useH265Dash = !useAV1 && await supportsH265Dash();
   let src, mime;
 
   if (useAV1) {
-    src = CONFIG.av1Dash;
+    src  = CONFIG.av1Dash;
     mime = "application/dash+xml";
     codecBadge.textContent = "AV1";
-    codecBadge.classList.add("show");
-  } else if (isApple()) {
-    src = CONFIG.h265Hls;
-    mime = "application/x-mpegURL";
-    codecBadge.textContent = "H.265";
-    codecBadge.classList.add("show");
-  } else {
-    src = CONFIG.h265Dash;
+  } else if (useH265Dash) {
+    src  = CONFIG.h265Dash;
     mime = "application/dash+xml";
     codecBadge.textContent = "H.265";
-    codecBadge.classList.add("show");
+  } else {
+    src  = CONFIG.h265Hls;
+    mime = "application/x-mpegURL";
+    codecBadge.textContent = "H.265";
   }
+  codecBadge.classList.add("show");
 
   try {
     await player.load(src, null, mime);
