@@ -568,8 +568,8 @@ video {
   border-radius: 0;
 }
 
-/* ── HDR toggle button ── */
-#hdr-btn {
+/* ── Tonemapping toggle button ── */
+#tm-btn {
   width: auto;
   padding: 0 8px;
   font-family: var(--mono);
@@ -584,22 +584,22 @@ video {
     border-color 0.15s,
     background 0.15s;
 }
-#hdr-btn:hover {
+#tm-btn:hover {
   background: rgba(255, 255, 255, 0.08);
   border-color: rgba(255, 255, 255, 0.4);
   color: var(--text);
 }
-#hdr-btn.active {
+#tm-btn.active {
   color: var(--accent);
   border-color: rgba(232, 255, 71, 0.5);
 }
-#hdr-btn.active:hover {
+#tm-btn.active:hover {
   background: rgba(232, 255, 71, 0.08);
   border-color: var(--accent);
 }
 
-/* ── HDR notice ── */
-#hdr-notice {
+/* ── Tonemapping notice ── */
+#tm-notice {
   position: absolute;
   bottom: 70px;
   left: 50%;
@@ -618,10 +618,10 @@ video {
   backdrop-filter: blur(8px);
   animation: notice-in 0.25s var(--ease);
 }
-#hdr-notice strong {
+#tm-notice strong {
   color: var(--accent);
 }
-#hdr-notice-close {
+#tm-notice-close {
   background: rgba(255, 255, 255, 0.1);
   border: none;
   color: var(--text);
@@ -636,7 +636,7 @@ video {
   flex-shrink: 0;
   transition: background 0.15s;
 }
-#hdr-notice-close:hover {
+#tm-notice-close:hover {
   background: rgba(255, 255, 255, 0.2);
 }
 @keyframes notice-in {
