@@ -1,0 +1,18 @@
+# Credentials
+.env
+
+# Python
+__pycache__/
+*.pyc
+
+# Video source and transcoded output
+src/*.mp4
+src/*.mkv
+src/*.mov
+transcodes/*
+
+# Logs
+*.log
+
+# VSCode
+.vscode/
