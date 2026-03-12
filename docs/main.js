@@ -31,7 +31,7 @@ async function supportsAV1() {
         colorGamut: "rec2020",
       },
     });
-    return r?.supported ?? false;
+    return (r?.supported && r?.smooth) ?? false;
   } catch {
     return false;
   }
@@ -74,6 +74,35 @@ let player,
   uiTimer,
   isDragging = false,
   selectedQuality = -1; // -1 = auto
+
+// ── HDR detection ─────────────────────────────────────────────────────────────
+async function detectHDR() {
+  const signals = {
+    dynamicRange: window.matchMedia("(dynamic-range: high)").matches,
+    wideGamut:    window.matchMedia("(color-gamut: p3)").matches ||
+                  window.matchMedia("(color-gamut: rec2020)").matches,
+    colorDepth:   screen.colorDepth >= 30,
+    mediaCapabilities: false,
+  };
+
+  try {
+    const r = await navigator.mediaCapabilities?.decodingInfo({
+      type: "media-source",
+      video: {
+        contentType: 'video/mp4; codecs="hvc1"',
+        width: 1920, height: 1080,
+        bitrate: 10000000, framerate: 60,
+        transferFunction: "pq",
+        colorGamut: "rec2020",
+      },
+    });
+    signals.mediaCapabilities = r?.supported && r?.smooth;
+  } catch {}
+
+  const isHDR = signals.dynamicRange || (signals.mediaCapabilities && signals.wideGamut);
+  console.debug("[HDR detect]", signals, "→", isHDR);
+  return isHDR;
+}
 
 // ── Init ───────────────────────────────────────────────────────────────────────
 async function init() {
@@ -139,15 +168,18 @@ async function init() {
   }
 
   // ── HDR tone mapping for SDR displays ────────────────────────────────────────
-  if (CONFIG.isHdr && !window.matchMedia("(dynamic-range: high)").matches) {
-    const saved = localStorage.getItem("hdr-filter");
-    const on = saved !== "disabled"; // default ON
-    hdrBtn.style.display = "";
-    applyHdrFilter(on);
-    updateHdrBtn(on);
-    if (!localStorage.getItem("hdr-filter-noticed")) {
-      showHdrNotice();
-      localStorage.setItem("hdr-filter-noticed", "1");
+  if (CONFIG.isHdr) {
+    const hdrCapable = await detectHDR();
+    if (!hdrCapable) {
+      const saved = localStorage.getItem("hdr-filter");
+      const on = saved === "enabled"; // default OFF
+      hdrBtn.style.display = "";
+      applyHdrFilter(on);
+      updateHdrBtn(on);
+      if (!localStorage.getItem("hdr-filter-noticed")) {
+        showHdrNotice();
+        localStorage.setItem("hdr-filter-noticed", "1");
+      }
     }
   }
 }
@@ -166,7 +198,7 @@ function showHdrNotice() {
   const notice = document.createElement("div");
   notice.id = "hdr-notice";
   notice.innerHTML = `
-    <span>HDR capability not detected. SDR tonemapper applied. Use the <strong>HDR</strong> button to toggle.</span>
+    <span>HDR display not detected. If colours look washed out, use the <strong>HDR</strong> button to enable tone mapping.</span>
     <button id="hdr-notice-close">✕</button>
   `;
   wrap.appendChild(notice);
