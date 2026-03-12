@@ -10,6 +10,7 @@ src/*.mp4
 src/*.mkv
 src/*.mov
 transcodes/*
+!transcodes/.gitkeep
 
 # Logs
 *.log
