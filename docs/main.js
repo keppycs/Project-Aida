@@ -2,18 +2,22 @@
 const CONFIG = {
   title: "2160p60 HDR",
   av1Dash: "https://cdn.keppy.dev/file/ProjectAida/2160p60+HDR/AV1/manifest.mpd",
+  av1Hls: "https://cdn.keppy.dev/file/ProjectAida/2160p60+HDR/AV1/master.m3u8",
   h265Dash: "https://cdn.keppy.dev/file/ProjectAida/2160p60+HDR/H265/manifest.mpd",
   h265Hls: "https://cdn.keppy.dev/file/ProjectAida/2160p60+HDR/H265/master.m3u8",
   isHdr: true,
 };
 
 // ── Codec detection ─────────────────────────────────────────────────────────────
-async function supportsAV1() {
+const AV1_CODEC = 'video/mp4; codecs="av01.0.08H.10.0.110.09.16.09.0"';
+const H265_CODEC = 'video/mp4; codecs="hvc1.1.6.H150.B0"';
+
+async function canDecode(type, contentType) {
   try {
     const r = await navigator.mediaCapabilities?.decodingInfo({
-      type: "media-source",
+      type,
       video: {
-        contentType: 'video/mp4; codecs="av01.0.08H.10.0.110.09.16.09.0"',
+        contentType,
         width: 3840,
         height: 2160,
         bitrate: 20000000,
@@ -28,25 +32,10 @@ async function supportsAV1() {
   }
 }
 
-async function supportsH265Dash() {
-  try {
-    const r = await navigator.mediaCapabilities?.decodingInfo({
-      type: "media-source",
-      video: {
-        contentType: 'video/mp4; codecs="hvc1.1.6.H150.B0"',
-        width: 3840,
-        height: 2160,
-        bitrate: 20000000,
-        framerate: 120,
-        transferFunction: "pq",
-        colorGamut: "rec2020",
-      },
-    });
-    return (r?.supported && r?.smooth) ?? false;
-  } catch {
-    return false;
-  }
-}
+const supportsAV1Dash = () => canDecode("media-source", AV1_CODEC);
+const supportsAV1Hls = () => canDecode("file", AV1_CODEC);
+const supportsH265Dash = () => canDecode("media-source", H265_CODEC);
+const supportsH265Hls = () => canDecode("file", H265_CODEC);
 
 // ── Elements ───────────────────────────────────────────────────────────────────
 const wrap = document.getElementById("player-wrap");
@@ -77,8 +66,9 @@ const speedBtn = document.getElementById("speed-btn");
 const speedMenu = document.getElementById("speed-menu");
 const hdrBadge = document.getElementById("hdr-badge");
 const codecBadge = document.getElementById("codec-badge");
+const protocolBadge = document.getElementById("protocol-badge");
 const titleText = document.getElementById("title-text");
-const hdrBtn = document.getElementById("hdr-btn");
+const tmBtn = document.getElementById("tm-btn");
 
 // ── State ──────────────────────────────────────────────────────────────────────
 let player,
@@ -90,9 +80,10 @@ let player,
 async function detectHDR() {
   const signals = {
     dynamicRange: window.matchMedia("(dynamic-range: high)").matches,
-    wideGamut:    window.matchMedia("(color-gamut: p3)").matches ||
-                  window.matchMedia("(color-gamut: rec2020)").matches,
-    colorDepth:   screen.colorDepth >= 30,
+    wideGamut:
+      window.matchMedia("(color-gamut: p3)").matches ||
+      window.matchMedia("(color-gamut: rec2020)").matches,
+    colorDepth: screen.colorDepth >= 30,
     mediaCapabilities: false,
   };
 
@@ -101,8 +92,10 @@ async function detectHDR() {
       type: "media-source",
       video: {
         contentType: 'video/mp4; codecs="hvc1"',
-        width: 1920, height: 1080,
-        bitrate: 10000000, framerate: 60,
+        width: 1920,
+        height: 1080,
+        bitrate: 10000000,
+        framerate: 60,
         transferFunction: "pq",
         colorGamut: "rec2020",
       },
@@ -151,24 +144,37 @@ async function init() {
   titleText.textContent = CONFIG.title;
   if (CONFIG.isHdr) hdrBadge.classList.add("show");
 
-  const useAV1      = await supportsAV1();
-  const useH265Dash = !useAV1 && await supportsH265Dash();
-  let src, mime;
+  let src, mime, codecLabel, protocolLabel;
 
-  if (useAV1) {
-    src  = CONFIG.av1Dash;
+  if (await supportsAV1Dash()) {
+    src = CONFIG.av1Dash;
     mime = "application/dash+xml";
-    codecBadge.textContent = "AV1";
-  } else if (useH265Dash) {
-    src  = CONFIG.h265Dash;
-    mime = "application/dash+xml";
-    codecBadge.textContent = "H.265";
-  } else {
-    src  = CONFIG.h265Hls;
+    codecLabel = "AV1";
+    protocolLabel = "DASH";
+  } else if (await supportsAV1Hls()) {
+    src = CONFIG.av1Hls;
     mime = "application/x-mpegURL";
-    codecBadge.textContent = "H.265";
+    codecLabel = "AV1";
+    protocolLabel = "HLS";
+  } else if (await supportsH265Dash()) {
+    src = CONFIG.h265Dash;
+    mime = "application/dash+xml";
+    codecLabel = "H.265";
+    protocolLabel = "DASH";
+  } else if (await supportsH265Hls()) {
+    src = CONFIG.h265Hls;
+    mime = "application/x-mpegURL";
+    codecLabel = "H.265";
+    protocolLabel = "HLS";
+  } else {
+    showUnsupportedNotice();
+    return;
   }
+
+  codecBadge.textContent = codecLabel;
+  protocolBadge.textContent = protocolLabel;
   codecBadge.classList.add("show");
+  protocolBadge.classList.add("show");
 
   try {
     await player.load(src, null, mime);
@@ -177,50 +183,61 @@ async function init() {
     console.error("Load failed", e);
   }
 
-  // ── HDR tone mapping for SDR displays ────────────────────────────────────────
+  // ── Tonemapping for SDR displays ─────────────────────────────────────────────
   if (CONFIG.isHdr) {
     const hdrCapable = await detectHDR();
     if (!hdrCapable) {
-      const saved = localStorage.getItem("hdr-filter");
+      const saved = localStorage.getItem("tm-filter");
       const on = saved === "enabled"; // default OFF
-      hdrBtn.style.display = "";
-      applyHdrFilter(on);
-      updateHdrBtn(on);
-      if (!localStorage.getItem("hdr-filter-noticed")) {
-        showHdrNotice();
-        localStorage.setItem("hdr-filter-noticed", "1");
+      tmBtn.style.display = "";
+      applyTonemapping(on);
+      updateTmBtn(on);
+      if (!localStorage.getItem("tm-filter-noticed")) {
+        showTmNotice();
+        localStorage.setItem("tm-filter-noticed", "1");
       }
     }
   }
 }
 
-// ── HDR filter ─────────────────────────────────────────────────────────────────
-function applyHdrFilter(on) {
+// ── Tonemapping ────────────────────────────────────────────────────────────────
+function applyTonemapping(on) {
   video.style.filter = on ? "brightness(1) contrast(1.7) saturate(1.3)" : "";
 }
 
-function updateHdrBtn(on) {
-  hdrBtn.classList.toggle("active", on);
-  hdrBtn.title = on ? "HDR tone mapping: ON" : "HDR tone mapping: OFF";
+function updateTmBtn(on) {
+  tmBtn.classList.toggle("active", on);
+  tmBtn.title = on ? "Tonemapping: ON" : "Tonemapping: OFF";
 }
 
-function showHdrNotice() {
+function showTmNotice() {
   const notice = document.createElement("div");
-  notice.id = "hdr-notice";
+  notice.id = "tm-notice";
   notice.innerHTML = `
-    <span>HDR display not detected. If colours look washed out, use the <strong>HDR</strong> button to enable tone mapping.</span>
-    <button id="hdr-notice-close">✕</button>
+    <span>HDR display not detected. If colours look washed out, use the <strong>Tonemapping</strong> button to enable it.</span>
+    <button id="tm-notice-close">✕</button>
   `;
   wrap.appendChild(notice);
-  document.getElementById("hdr-notice-close").addEventListener("click", () => notice.remove());
+  document.getElementById("tm-notice-close").addEventListener("click", () => notice.remove());
   setTimeout(() => notice?.remove(), 10000);
 }
 
-hdrBtn.addEventListener("click", () => {
+function showUnsupportedNotice() {
+  const notice = document.createElement("div");
+  notice.id = "tm-notice";
+  notice.innerHTML = `
+    <span>Your browser or device does not support any available video codec. Try a different browser.</span>
+    <button id="tm-notice-close">✕</button>
+  `;
+  wrap.appendChild(notice);
+  document.getElementById("tm-notice-close").addEventListener("click", () => notice.remove());
+}
+
+tmBtn.addEventListener("click", () => {
   const on = video.style.filter === "";
-  applyHdrFilter(on);
-  updateHdrBtn(on);
-  localStorage.setItem("hdr-filter", on ? "enabled" : "disabled");
+  applyTonemapping(on);
+  updateTmBtn(on);
+  localStorage.setItem("tm-filter", on ? "enabled" : "disabled");
 });
 
 // ── Formatting ─────────────────────────────────────────────────────────────────

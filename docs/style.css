@@ -104,6 +104,10 @@ video {
   pointer-events: none;
   z-index: 10;
 }
+#title-bar > :nth-child(2) {
+  margin-left: auto; /* Keeps the title to the left, and the badges to the right. */
+}
+
 #player-wrap.ui-visible #title-bar {
   opacity: 1;
   transform: none;
@@ -492,8 +496,7 @@ video {
   position: relative;
 }
 
-/* ── HDR badge ── */
-#hdr-badge {
+.badge-accent {
   font-family: var(--mono);
   font-size: 10px;
   font-weight: 500;
@@ -505,24 +508,19 @@ video {
   display: none;
   flex-shrink: 0;
 }
+
+/* ── HDR badge ── */
 #hdr-badge.show {
   display: block;
 }
 
 /* ── Codec badge ── */
-#codec-badge {
-  font-family: var(--mono);
-  font-size: 10px;
-  font-weight: 500;
-  padding: 2px 6px;
-  border: 1px solid rgba(255, 255, 255, 0.15);
-  color: var(--text-dim);
-  border-radius: 4px;
-  letter-spacing: 0.06em;
-  display: none;
-  flex-shrink: 0;
-}
 #codec-badge.show {
+  display: block;
+}
+
+/* ── Protocol badge ── */
+#protocol-badge.show {
   display: block;
 }
 

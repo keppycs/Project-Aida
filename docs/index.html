@@ -31,9 +31,10 @@
 
       <!-- Title -->
       <div id="title-bar">
-        <div id="hdr-badge">HDR</div>
-        <div id="codec-badge">AV1</div>
         <div id="title-text">Video Title</div>
+        <div class="badge-accent" id="hdr-badge">HDR</div>
+        <div class="badge-accent" id="codec-badge">AV1</div>
+        <div class="badge-accent" id="protocol-badge">DASH</div>
       </div>
 
       <!-- Big play -->
@@ -187,9 +188,9 @@
             </div>
           </div>
 
-          <!-- HDR filter toggle (only shown on SDR displays) -->
-          <button class="ctrl-btn" id="hdr-btn" title="HDR tone mapping" style="display: none">
-            <span id="hdr-btn-label">HDR</span>
+          <!-- Tonemapping toggle (only shown on SDR displays) -->
+          <button class="ctrl-btn" id="tm-btn" title="Tonemapping" style="display: none">
+            Tonemapping
           </button>
 
           <!-- Quality -->
