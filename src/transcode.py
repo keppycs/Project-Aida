@@ -6,7 +6,7 @@ import subprocess
 import json
 import sys
 
-from config import SEG_DURATION
+from config import SEG_DURATION, ENCODE_SETTINGS
 
 
 def setup_logging(log_path: Path) -> logging.Logger:
@@ -55,6 +55,7 @@ def build_cmd(
     color_trc: str,
     colorspace: str,
     gop_size: int,
+    settings: dict = ENCODE_SETTINGS,
 ) -> list:
     split_count   = len(variants)
     split_outputs = "".join(f"[v{i}]" for i in range(split_count))
@@ -62,7 +63,7 @@ def build_cmd(
     # ── Filter graph ────────────────────────────────────────────────────────────
     filter_parts = [f"[0:v]split={split_count}{split_outputs}"]
     for i, (_, res, _, _) in enumerate(variants):
-        filter_parts.append(f"[v{i}]scale_cuda={res}:format=p010le:interp_algo=lanczos[s{i}]")
+        filter_parts.append(f"[v{i}]scale_cuda={res}:format={settings['pix_fmt']}:interp_algo={settings['scale_algo']}[s{i}]")
 
     filter_graph = ";".join(filter_parts)
 
@@ -93,8 +94,8 @@ def build_cmd(
         cmd += [
             # Codec + quality
             f"-c:v:{i}",                 encoder,
-            f"-preset:v:{i}",            "p7",
-            f"-tune:v:{i}",              "hq",
+            f"-preset:v:{i}",            settings["preset"],
+            f"-tune:v:{i}",              settings["tune"],
             f"-rc:v:{i}",                "vbr",
             f"-cq:v:{i}",                str(cq),
             f"-maxrate:v:{i}",           f"{maxrate_k}k",
@@ -103,18 +104,18 @@ def build_cmd(
             # GOP / keyframe alignment
             f"-g:v:{i}",                 str(gop_size),
             f"-keyint_min:v:{i}",        str(gop_size),
-            f"-sc_threshold:v:{i}",      "0",
-            f"-strict_gop:v:{i}",        "1",
+            f"-sc_threshold:v:{i}",      str(settings["sc_threshold"]),
+            f"-strict_gop:v:{i}",        str(settings["strict_gop"]),
 
             # Quality enhancement
-            f"-multipass:v:{i}",         "fullres",
-            f"-split_encode_mode:v:{i}", "forced",
-            f"-spatial-aq:v:{i}",        "1",
-            f"-temporal-aq:v:{i}",       "1",
-            f"-aq-strength:v:{i}",       "8",
-            f"-rc-lookahead:v:{i}",      "32",
-            f"-lookahead_level:v:{i}",   "3",
-            f"-b_ref_mode:v:{i}",        "middle",
+            f"-multipass:v:{i}",         settings["multipass"],
+            f"-split_encode_mode:v:{i}", settings["split_encode_mode"],
+            f"-spatial-aq:v:{i}",        "1" if settings["spatial_aq"] else "0",
+            f"-temporal-aq:v:{i}",       "1" if settings["temporal_aq"] else "0",
+            f"-aq-strength:v:{i}",       str(settings["aq_strength"]),
+            f"-rc-lookahead:v:{i}",      str(settings["rc_lookahead"]),
+            f"-lookahead_level:v:{i}",   str(settings["lookahead_level"]),
+            f"-b_ref_mode:v:{i}",        settings["b_ref_mode"],
 
             # HDR metadata
             f"-color_primaries:v:{i}",   color_primaries,
@@ -128,7 +129,7 @@ def build_cmd(
         ]
 
     # ── Audio ───────────────────────────────────────────────────────────────────
-    cmd += ["-c:a", "aac", "-b:a", "320k"]
+    cmd += ["-c:a", settings["audio_codec"], "-b:a", settings["audio_bitrate"]]
 
     # ── CMAF DASH + HLS output ──────────────────────────────────────────────────
     cmd += [

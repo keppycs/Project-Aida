@@ -26,13 +26,64 @@ UPLOAD_TO_B2 = False
 # The source video and log are always kept locally regardless.
 DELETE_TRANSCODES_AFTER_UPLOAD = False
 
+# ── Encoder settings ──────────────────────────────────────────────────────────
+# Flip FAST_TRANSCODE to True for quick test encodes.
+# All quality enhancement flags are disabled and preset is dialled down to p1.
+FAST_TRANSCODE = True
+
+ENCODE_SETTINGS_PRODUCTION = {
+    # NVENC
+    "preset":            "p7",
+    "tune":              "hq",
+    "multipass":         "fullres",
+    "split_encode_mode": "forced",
+    "spatial_aq":        True,
+    "temporal_aq":       True,
+    "aq_strength":       8,
+    "rc_lookahead":      32,
+    "lookahead_level":   3,
+    "b_ref_mode":        "middle",
+    "sc_threshold":      0,
+    "strict_gop":        1,
+    # Filter graph
+    "pix_fmt":           "p010le",
+    "scale_algo":        "lanczos",
+    # Audio
+    "audio_codec":       "aac",
+    "audio_bitrate":     "320k",
+}
+
+ENCODE_SETTINGS_FAST = {
+    # NVENC
+    "preset":            "p1",
+    "tune":              "hq",
+    "multipass":         "fullres",
+    "split_encode_mode": "forced",
+    "spatial_aq":        False,
+    "temporal_aq":       False,
+    "aq_strength":       0,
+    "rc_lookahead":      0,
+    "lookahead_level":   0,
+    "b_ref_mode":        "disabled",
+    "sc_threshold":      0,
+    "strict_gop":        1,
+    # Filter graph
+    "pix_fmt":           "p010le",
+    "scale_algo":        "lanczos",
+    # Audio
+    "audio_codec":       "aac",
+    "audio_bitrate":     "128k",
+}
+
+ENCODE_SETTINGS = ENCODE_SETTINGS_FAST if FAST_TRANSCODE else ENCODE_SETTINGS_PRODUCTION
+
 # ── Ladder ─────────────────────────────────────────────────────────────────────
 # Each entry: (label, resolution, cq, maxrate_mbps)
 # maxrate is enforced as a ceiling — CQ drives quality, maxrate caps segment size.
 # bufsize is always 2× maxrate (2-second window, aligned to seg duration).
 # 2160p Max has a high cap to let quality breathe — in practice CQ will sit well below it.
 
-VARIANTS_AV1 = [
+VARIANTS_AV1_PRODUCTION = [
     ("2160p_Max", "3840:2160", 18, 180),
     ("2160p",     "3840:2160", 24,  80),
     ("1440p",     "2560:1440", 26,  50),
@@ -42,7 +93,7 @@ VARIANTS_AV1 = [
     ("360p",      "640:360",   32,  15),
 ]
 
-VARIANTS_H265 = [
+VARIANTS_H265_PRODUCTION = [
     ("2160p_Max", "3840:2160", 15, 180),
     ("2160p",     "3840:2160", 20,  80),
     ("1440p",     "2560:1440", 22,  50),
@@ -51,6 +102,21 @@ VARIANTS_H265 = [
     ("540p",      "960:540",   32,  15),
     ("360p",      "640:360",   32,  15),
 ]
+
+VARIANTS_AV1_FAST = [
+    ("2160p", "3840:2160", 40, 2),
+    ("1080p", "1920:1080", 40, 2),
+    ("720p",  "1280:720",  40, 2),
+]
+
+VARIANTS_H265_FAST = [
+    ("2160p", "3840:2160", 40, 2),
+    ("1080p", "1920:1080", 40, 2),
+    ("720p",  "1280:720",  40, 2),
+]
+
+VARIANTS_AV1  = VARIANTS_AV1_FAST  if FAST_TRANSCODE else VARIANTS_AV1_PRODUCTION
+VARIANTS_H265 = VARIANTS_H265_FAST if FAST_TRANSCODE else VARIANTS_H265_PRODUCTION
 
 CODECS: dict[str, tuple[str, list]] = {
     #          encoder         variant ladder
