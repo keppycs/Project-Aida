@@ -1,15 +1,9 @@
 <!doctype html>
 <html lang="en">
   <head>
-    <!-- Debug stuff 
-    <script src="https://cdn.jsdelivr.net/npm/eruda"></script>
-    <script>
-      eruda.init();
-    </script>
-    -->
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Project Aida</title>
+    <title>Project Aida — Debug</title>
 
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link
@@ -19,18 +13,42 @@
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/shaka-player/4.7.11/shaka-player.compiled.js"></script>
 
-    <link rel="stylesheet" href="style.css" />
-    <script defer src="player.js"></script>
-    <script defer src="main.js"></script>
+    <link rel="stylesheet" href="../style.css" />
+
+    <!-- config.js injected by pipeline — sets DEBUG_STEM and DEBUG_IS_HDR -->
+    <script src="config.js"></script>
+    <script defer src="../player.js"></script>
+    <script defer src="debug.js"></script>
+
+    <style>
+      #debug-banner {
+        position: fixed;
+        top: 12px;
+        right: 12px;
+        font-family: var(--mono);
+        font-size: 10px;
+        font-weight: 500;
+        letter-spacing: 0.08em;
+        color: #ff6b35;
+        border: 1px solid rgba(255, 107, 53, 0.5);
+        padding: 3px 7px;
+        border-radius: 4px;
+        background: rgba(0, 0, 0, 0.6);
+        backdrop-filter: blur(6px);
+        pointer-events: none;
+        z-index: 9999;
+      }
+    </style>
   </head>
   <body>
+    <div id="debug-banner">DEBUG</div>
+
     <div id="player-wrap">
       <video id="video" playsinline></video>
 
       <div class="grad-top"></div>
       <div class="grad-bot"></div>
 
-      <!-- Title -->
       <div id="title-bar">
         <div id="title-text">Video Title</div>
         <div class="badge-accent" id="hdr-badge">HDR</div>
@@ -38,7 +56,6 @@
         <div class="badge-accent" id="protocol-badge">DASH</div>
       </div>
 
-      <!-- Big play -->
       <div id="big-play" class="show">
         <svg viewBox="0 0 72 72" fill="none">
           <circle
@@ -53,18 +70,11 @@
         </svg>
       </div>
 
-      <!-- Buffering -->
       <div id="spinner"><div class="spin-ring"></div></div>
-
-      <!-- Seek flash -->
       <div id="seek-flash"></div>
-
-      <!-- Keyboard toast -->
       <div id="kb-toast"></div>
 
-      <!-- Controls -->
       <div id="controls">
-        <!-- Progress -->
         <div id="progress-wrap">
           <div id="progress-track">
             <div id="progress-buffer"></div>
@@ -74,16 +84,13 @@
           <div id="time-tooltip">0:00</div>
         </div>
 
-        <!-- Bottom row -->
         <div id="ctrl-row">
-          <!-- Play/Pause -->
           <button class="ctrl-btn" id="play-btn" title="Play (k)">
             <svg id="play-icon" viewBox="0 0 24 24" fill="currentColor">
               <polygon points="5,3 19,12 5,21" />
             </svg>
           </button>
 
-          <!-- Skip back -->
           <button class="ctrl-btn" id="back-btn" title="–10s (j)">
             <svg
               viewBox="0 0 24 24"
@@ -108,7 +115,6 @@
             </svg>
           </button>
 
-          <!-- Skip forward -->
           <button class="ctrl-btn" id="fwd-btn" title="+10s (l)">
             <svg
               viewBox="0 0 24 24"
@@ -133,7 +139,6 @@
             </svg>
           </button>
 
-          <!-- Volume -->
           <div id="vol-cluster">
             <button class="ctrl-btn" id="mute-btn" title="Mute (m)">
               <svg
@@ -155,14 +160,12 @@
             </div>
           </div>
 
-          <!-- Time -->
           <div id="time-display">
             <span id="cur-time">0:00</span><span> / </span><span id="dur-time">0:00</span>
           </div>
 
           <div class="spacer"></div>
 
-          <!-- Speed -->
           <div class="menu-wrap">
             <button class="ctrl-btn" id="speed-btn" title="Playback speed">
               <svg
@@ -189,12 +192,10 @@
             </div>
           </div>
 
-          <!-- Tonemapping toggle (only shown on SDR displays) -->
           <button class="ctrl-btn" id="tm-btn" title="Tonemapping" style="display: none">
             Tonemapping
           </button>
 
-          <!-- Quality -->
           <div class="menu-wrap">
             <button class="ctrl-btn" id="quality-btn" title="Quality">
               <svg
@@ -216,7 +217,6 @@
             </div>
           </div>
 
-          <!-- Fullscreen -->
           <button class="ctrl-btn" id="fs-btn" title="Fullscreen (f)">
             <svg
               id="fs-icon"

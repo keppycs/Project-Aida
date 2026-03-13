@@ -12,6 +12,11 @@ src/*.mov
 transcodes/*
 !transcodes/.gitkeep
 
+# Debug video folders in docs/ (transcoded files for local testing, not for git)
+docs/*/
+!docs/debug/
+docs/debug/config.js
+
 # Logs
 *.log
 
