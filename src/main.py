@@ -150,8 +150,10 @@ def main() -> None:
         if upload_errors:
             log.error(f"Upload failures    : {', '.join(upload_errors)}")
         sys.exit(1)
-    else:
+    elif UPLOAD_TO_B2:
         log.info("All variants transcoded and uploaded.")
+    else:
+        log.info("All variants transcoded. (upload disabled)")
 
 
 if __name__ == "__main__":

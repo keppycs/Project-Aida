@@ -61,7 +61,7 @@ ENCODE_SETTINGS_FAST = {
     "split_encode_mode": "forced",
     "spatial_aq":        False,
     "temporal_aq":       False,
-    "aq_strength":       0,
+    "aq_strength":       1,
     "rc_lookahead":      0,
     "lookahead_level":   0,
     "b_ref_mode":        "disabled",
