@@ -28,9 +28,13 @@ B2_BUCKET   = _require_env("B2_BUCKET")
 B2_REGION   = _require_env("B2_REGION")
 B2_ENDPOINT = _require_env("B2_ENDPOINT")
 
+# Set to True to upload encoded segments to B2 after encoding.
+# Disable when testing locally to skip the upload step entirely.
+UPLOAD_TO_B2 = False
+
 # Set to True to delete local transcode files after a successful upload.
 # The source video and log are always kept locally regardless.
-CLEAN_AFTER_UPLOAD = False
+DELETE_TRANSCODES_AFTER_UPLOAD = False
 
 # ── Ladder ─────────────────────────────────────────────────────────────────────
 # Each entry: (label, resolution, cq, maxrate_mbps)
@@ -178,12 +182,128 @@ def upload_folder(b2: Any, local_dir: Path, b2_prefix: str, log: logging.Logger)
     return True
 
 
-def patch_hls_hdr(master_path: Path, log: logging.Logger) -> None:
-    """Inject VIDEO-RANGE=PQ into every EXT-X-STREAM-INF line in the HLS master."""
-    text = master_path.read_text(encoding="utf-8")
-    patched = re.sub(r"(#EXT-X-STREAM-INF:.*)", r"\1,VIDEO-RANGE=PQ", text)
-    master_path.write_text(patched, encoding="utf-8")
+# ── HEVC level/tier bitrate limits ────────────────────────────────────────────
+# Source: https://en.wikipedia.org/wiki/High_Efficiency_Video_Coding_tiers_and_levels
+# Keys are level_idc (level × 30). Values are (main_tier_max_kbps, high_tier_max_kbps).
+# High tier is only defined from Level 4.0 (idc=120) onwards.
+HEVC_LEVEL_BITRATES: dict[int, tuple[int, Optional[int]]] = {
+    30:  (128,    None),
+    60:  (1_500,  None),
+    63:  (3_000,  None),
+    90:  (6_000,  None),
+    93:  (10_000, None),
+    120: (12_000, 30_000),
+    123: (20_000, 50_000),
+    150: (25_000, 100_000),
+    153: (40_000, 160_000),
+    156: (60_000, 240_000),
+    180: (60_000, 240_000),
+    183: (120_000, 480_000),
+    186: (240_000, 800_000),
+}
+
+# Map ffprobe profile name → profile_idc used in codec string
+HEVC_PROFILE_IDC: dict[str, int] = {
+    "Main":              1,
+    "Main 10":           2,
+    "Main Still Picture": 3,
+    "Rext":              4,
+}
+
+
+def get_hevc_codec_string(init_mp4: Path, maxrate_kbps: int, log: logging.Logger) -> str:
+    """Probe an H265 init segment and return a full hvc1 codec string.
+
+    Determines profile, level, and tier (Main vs High) based on maxrate_kbps
+    against the HEVC level bitrate table from Wikipedia.
+    Falls back to bare 'hvc1' on any failure.
+    """
+    try:
+        result = subprocess.run(
+            ["ffprobe", "-v", "quiet", "-print_format", "json", "-show_streams", str(init_mp4)],
+            capture_output=True, text=True,
+        )
+        data    = json.loads(result.stdout)
+        stream  = next((s for s in data["streams"] if s["codec_type"] == "video"), None)
+        if stream is None:
+            raise ValueError("No video stream found")
+
+        profile_name = stream.get("profile", "Main 10")
+        level_idc    = int(stream.get("level", 156))
+        profile_idc  = HEVC_PROFILE_IDC.get(profile_name, 2)
+
+        # Determine tier: use High if Main tier max is insufficient for this variant's maxrate
+        main_max, high_max = HEVC_LEVEL_BITRATES.get(level_idc, (60_000, 240_000))
+        if maxrate_kbps <= main_max:
+            tier = "L"  # Main tier
+        elif high_max is not None:
+            tier = "H"  # High tier
+        else:
+            tier = "L"  # High tier not defined at this level, stay Main
+
+        codec_str = f"hvc1.{profile_idc}.4.{tier}{level_idc}.B0"
+        log.info(f"  {init_mp4.name}: {profile_name} L{level_idc/30:.1f} → {codec_str}")
+        return codec_str
+
+    except Exception as e:
+        log.warning(f"  Could not probe {init_mp4.name}: {e} — falling back to 'hvc1'")
+        return "hvc1"
+
+
+def patch_hls_video_range(master_path: Path, log: logging.Logger) -> None:
+    """Inject VIDEO-RANGE=PQ on every EXT-X-STREAM-INF line in an HLS master."""
+    text  = master_path.read_text(encoding="utf-8")
+    lines = text.splitlines(keepends=True)
+    out   = []
+
+    for line in lines:
+        if line.startswith("#EXT-X-STREAM-INF:"):
+            line = line.rstrip()
+            if "VIDEO-RANGE=" not in line:
+                line += ",VIDEO-RANGE=PQ"
+            line += "\n"
+        out.append(line)
+
+    master_path.write_text("".join(out), encoding="utf-8")
     log.info(f"  Patched VIDEO-RANGE=PQ into {master_path.name}")
+
+
+def patch_hls_hdr(
+    master_path: Path,
+    out_dir: Path,
+    variants: list,
+    log: logging.Logger,
+) -> None:
+    """Patch the H265 HLS master playlist:
+    - Replace bare 'hvc1' codec strings with full profile/level/tier strings
+      probed from each init segment.
+    - Inject VIDEO-RANGE=PQ on every EXT-X-STREAM-INF line.
+    """
+    # Build per-stream codec strings by probing init_N.mp4 files
+    codec_strings: list[str] = []
+    for i, (_, _, _, maxrate_mbps) in enumerate(variants):
+        init_mp4 = out_dir / f"init_{i}.mp4"
+        codec_strings.append(get_hevc_codec_string(init_mp4, maxrate_mbps * 1000, log))
+
+    text  = master_path.read_text(encoding="utf-8")
+    lines = text.splitlines(keepends=True)
+    out   = []
+    stream_index = 0
+
+    for line in lines:
+        if line.startswith("#EXT-X-STREAM-INF:"):
+            codec = codec_strings[stream_index] if stream_index < len(codec_strings) else "hvc1"
+            # Replace bare hvc1 (with or without trailing comma/quote) with full string
+            line = re.sub(r'hvc1(?=[,"])', codec, line.rstrip())
+            # Inject VIDEO-RANGE=PQ if not already present
+            if "VIDEO-RANGE=" not in line:
+                line += ",VIDEO-RANGE=PQ"
+            line += "\n"
+            stream_index += 1
+        out.append(line)
+
+    master_path.write_text("".join(out), encoding="utf-8")
+    log.info(f"  Patched codec strings and VIDEO-RANGE=PQ into {master_path.name}")
 
 
 def build_cmd(
@@ -391,8 +511,14 @@ def main() -> None:
 
             log.info(f"[DONE ENCODE]  {codec_name}")
 
-            if codec_name == "H265":
-                patch_hls_hdr(out_dir / "master.m3u8", log)
+            if codec_name == "AV1":
+                patch_hls_video_range(out_dir / "master.m3u8", log)
+            elif codec_name == "H265":
+                patch_hls_hdr(out_dir / "master.m3u8", out_dir, variants, log)
+
+        if not UPLOAD_TO_B2:
+            log.info(f"[SKIP UPLOAD]  {codec_name} — UPLOAD_TO_B2 is disabled.")
+            continue
 
         if is_already_uploaded(b2, B2_BUCKET, b2_prefix, log):
             log.info(f"[SKIP UPLOAD]  {codec_name} — already exists in B2.")
@@ -403,7 +529,7 @@ def main() -> None:
 
         if not ok:
             upload_errors.append(codec_name)
-        elif CLEAN_AFTER_UPLOAD:
+        elif DELETE_TRANSCODES_AFTER_UPLOAD:
             log.info(f"[CLEAN]  Removing local segments for {codec_name}")
             for f in out_dir.iterdir():
                 if f.is_file():
