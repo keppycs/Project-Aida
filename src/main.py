@@ -354,7 +354,7 @@ def build_cmd(
             # Codec + quality
             f"-c:v:{i}",               encoder,
             f"-preset:v:{i}",          "p7",
-            f"-tune:v:{i}",            "uhq",
+            f"-tune:v:{i}",            "hq",
             f"-rc:v:{i}",              "vbr",          # explicit VBR for CQ+maxrate
             f"-cq:v:{i}",              str(cq),
             f"-maxrate:v:{i}",         f"{maxrate_k}k",
