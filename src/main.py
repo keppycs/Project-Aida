@@ -268,23 +268,24 @@ def patch_hls_video_range(master_path: Path, log: logging.Logger) -> None:
     log.info(f"  Patched VIDEO-RANGE=PQ into {master_path.name}")
 
 
-def patch_hls_hdr(
-    master_path: Path,
-    out_dir: Path,
-    variants: list,
-    log: logging.Logger,
-) -> None:
-    """Patch the H265 HLS master playlist:
-    - Replace bare 'hvc1' codec strings with full profile/level/tier strings
-      probed from each init segment.
-    - Inject VIDEO-RANGE=PQ on every EXT-X-STREAM-INF line.
-    """
-    # Build per-stream codec strings by probing init_N.mp4 files
+def build_hevc_codec_strings(out_dir: Path, variants: list, log: logging.Logger) -> list[str]:
+    """Probe each init_N.mp4 in out_dir and return a per-variant list of full hvc1 codec strings."""
     codec_strings: list[str] = []
     for i, (_, _, _, maxrate_mbps) in enumerate(variants):
         init_mp4 = out_dir / f"init_{i}.mp4"
         codec_strings.append(get_hevc_codec_string(init_mp4, maxrate_mbps * 1000, log))
+    return codec_strings
 
+
+def patch_hls_hdr(
+    master_path: Path,
+    codec_strings: list[str],
+    log: logging.Logger,
+) -> None:
+    """Patch the H265 HLS master playlist:
+    - Replace bare 'hvc1' with full profile/level/tier codec strings.
+    - Inject VIDEO-RANGE=PQ on every EXT-X-STREAM-INF line.
+    """
     text  = master_path.read_text(encoding="utf-8")
     lines = text.splitlines(keepends=True)
     out   = []
@@ -303,7 +304,31 @@ def patch_hls_hdr(
         out.append(line)
 
     master_path.write_text("".join(out), encoding="utf-8")
-    log.info(f"  Patched codec strings and VIDEO-RANGE=PQ into {master_path.name}")
+    log.info(f"  Patched HLS codec strings and VIDEO-RANGE=PQ into {master_path.name}")
+
+
+def patch_dash_hdr(
+    mpd_path: Path,
+    codec_strings: list[str],
+    log: logging.Logger,
+) -> None:
+    """Patch the H265 DASH manifest:
+    - Replace bare 'hvc1' codecs attribute on each video Representation
+      with the full profile/level/tier codec string.
+    """
+    text = mpd_path.read_text(encoding="utf-8")
+    rep_index = 0
+
+    def replacer(m: re.Match) -> str:
+        nonlocal rep_index
+        codec = codec_strings[rep_index] if rep_index < len(codec_strings) else "hvc1"
+        rep_index += 1
+        return f'codecs="{codec}"'
+
+    # Only replace codecs="hvc1" (exact), leaving audio codecs untouched
+    patched = re.sub(r'codecs="hvc1"', replacer, text)
+    mpd_path.write_text(patched, encoding="utf-8")
+    log.info(f"  Patched DASH codec strings into {mpd_path.name}")
 
 
 def build_cmd(
@@ -514,7 +539,9 @@ def main() -> None:
             if codec_name == "AV1":
                 patch_hls_video_range(out_dir / "master.m3u8", log)
             elif codec_name == "H265":
-                patch_hls_hdr(out_dir / "master.m3u8", out_dir, variants, log)
+                codec_strings = build_hevc_codec_strings(out_dir, variants, log)
+                patch_hls_hdr(out_dir / "master.m3u8", codec_strings, log)
+                patch_dash_hdr(out_dir / "manifest.mpd", codec_strings, log)
 
         if not UPLOAD_TO_B2:
             log.info(f"[SKIP UPLOAD]  {codec_name} — UPLOAD_TO_B2 is disabled.")
