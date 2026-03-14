@@ -56,7 +56,7 @@ ENCODE_SETTINGS_PRODUCTION = {
 ENCODE_SETTINGS_FAST = {
     # NVENC
     "preset":            "p1",
-    "tune":              "hq",
+    "tune":              "ull",
     "multipass":         "fullres",
     "split_encode_mode": "forced",
     "spatial_aq":        False,
