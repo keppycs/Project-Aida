@@ -128,12 +128,12 @@ def main() -> None:
 
         if not UPLOAD_TO_B2:
             log.info(f"[SKIP UPLOAD]  {codec_name} — UPLOAD_TO_B2 is disabled.")
-            docs_codec_dir = root.parent / "docs" / video_file.stem / codec_name
+            docs_codec_dir = root.parent / "docs" / "debug" / video_file.stem / codec_name
             docs_codec_dir.parent.mkdir(parents=True, exist_ok=True)
             if docs_codec_dir.exists():
                 shutil.rmtree(docs_codec_dir)
             shutil.move(str(out_dir), str(docs_codec_dir))
-            log.info(f"[DEBUG MOVE]   {codec_name} → docs/{video_file.stem}/{codec_name}/")
+            log.info(f"[DEBUG MOVE]   {codec_name} → docs/debug/{video_file.stem}/{codec_name}/")
             continue
 
         if is_already_uploaded(b2, B2_BUCKET, b2_prefix, log):
