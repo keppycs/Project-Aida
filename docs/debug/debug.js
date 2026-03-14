@@ -4,7 +4,7 @@
 const _local = location.hostname === "localhost" || location.hostname === "127.0.0.1";
 const _base =
   _local ?
-    `../${DEBUG_STEM}`
+    `${DEBUG_STEM}`
   : `https://cdn.keppy.dev/file/ProjectAida/${encodeURIComponent(DEBUG_STEM)}`;
 
 const CONFIG = {
