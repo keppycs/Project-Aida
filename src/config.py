@@ -20,7 +20,7 @@ B2_ENDPOINT = _require_env("B2_ENDPOINT")
 
 # Set to True to upload encoded segments to B2 after encoding.
 # Disable when testing locally to skip the upload step entirely.
-UPLOAD_TO_B2 = False
+UPLOAD_TO_B2 = True
 
 # Set to True to delete local transcode files after a successful upload.
 # The source video and log are always kept locally regardless.
