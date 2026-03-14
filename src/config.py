@@ -29,7 +29,7 @@ DELETE_TRANSCODES_AFTER_UPLOAD = False
 # ── Encoder settings ──────────────────────────────────────────────────────────
 # Flip FAST_TRANSCODE to True for quick test encodes.
 # All quality enhancement flags are disabled and preset is dialled down to p1.
-FAST_TRANSCODE = True
+FAST_TRANSCODE = False
 
 ENCODE_SETTINGS_PRODUCTION = {
     # NVENC
