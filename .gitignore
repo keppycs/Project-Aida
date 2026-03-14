@@ -22,3 +22,6 @@ docs/debug/config.js
 
 # VSCode
 .vscode/
+
+# Todo
+todo.md
