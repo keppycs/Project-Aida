@@ -5,16 +5,17 @@
 __pycache__/
 *.pyc
 
-# Video source and transcoded output
+# Video sources and manifests
+*.fmp4
 *.mp4
 *.mkv
 *.mov
+*.mpd
+*.m3u8
+
+# Keep the transcodes folder
 transcodes/*
 !transcodes/.gitkeep
-
-# Debug video folders in docs/debug/ (transcoded files for local testing, not for git)
-!docs/debug/
-docs/debug/*p120*/
 
 # Logs
 *.log

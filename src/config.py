@@ -20,7 +20,7 @@ B2_ENDPOINT = _require_env("B2_ENDPOINT")
 
 # Set to True to upload encoded segments to B2 after encoding.
 # Disable when testing locally to skip the upload step entirely.
-UPLOAD_TO_B2 = True
+UPLOAD_TO_B2 = False
 
 # Set to True to delete local transcode files after a successful upload.
 # The source video and log are always kept locally regardless.
@@ -29,7 +29,7 @@ DELETE_TRANSCODES_AFTER_UPLOAD = False
 # ── Encoder settings ──────────────────────────────────────────────────────────
 # Flip FAST_TRANSCODE to True for quick test encodes.
 # All quality enhancement flags are disabled and preset is dialled down to p1.
-FAST_TRANSCODE = False
+FAST_TRANSCODE = True
 
 ENCODE_SETTINGS_PRODUCTION = {
     # NVENC
@@ -97,22 +97,22 @@ VARIANTS_H265_PRODUCTION = [
     ("2160p_Max", "3840:2160", 15, 180),
     ("2160p",     "3840:2160", 20,  80),
     ("1440p",     "2560:1440", 22,  50),
-    ("1080p",     "1920:1080", 24,  30),
+    ("1080p",     "1920:1080", 25,  30),
     ("720p",      "1280:720",  28,  15),
     ("540p",      "960:540",   32,  15),
     ("360p",      "640:360",   32,  15),
 ]
 
 VARIANTS_AV1_FAST = [
-    ("2160p", "3840:2160", 40, 2),
-    ("1080p", "1920:1080", 40, 2),
-    ("720p",  "1280:720",  40, 2),
+    ("2160p", "3840:2160", 50, 1),
+    ("1080p", "1920:1080", 50, 1),
+    ("720p",  "1280:720",  50, 1),
 ]
 
 VARIANTS_H265_FAST = [
-    ("2160p", "3840:2160", 40, 2),
-    ("1080p", "1920:1080", 40, 2),
-    ("720p",  "1280:720",  40, 2),
+    ("2160p", "3840:2160", 50, 1),
+    ("1080p", "1920:1080", 50, 1),
+    ("720p",  "1280:720",  50, 1),
 ]
 
 VARIANTS_AV1  = VARIANTS_AV1_FAST  if FAST_TRANSCODE else VARIANTS_AV1_PRODUCTION
