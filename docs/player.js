@@ -73,7 +73,6 @@ async function detectHDR() {
     wideGamut:
       window.matchMedia("(color-gamut: p3)").matches ||
       window.matchMedia("(color-gamut: rec2020)").matches,
-    colorDepth: screen.colorDepth >= 30,
     mediaCapabilities: false,
   };
 
