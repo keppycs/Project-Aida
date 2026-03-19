@@ -55,6 +55,7 @@ def build_cmd(
     color_trc: str,
     colorspace: str,
     gop_size: int,
+    pix_fmt: str,
     settings: dict = ENCODE_SETTINGS,
 ) -> list:
     split_count   = len(variants)
@@ -63,7 +64,7 @@ def build_cmd(
     # ── Filter graph ────────────────────────────────────────────────────────────
     filter_parts = [f"[0:v]split={split_count}{split_outputs}"]
     for i, (_, res, _, _) in enumerate(variants):
-        filter_parts.append(f"[v{i}]scale_cuda={res}:format={settings['pix_fmt']}:interp_algo={settings['scale_algo']}[s{i}]")
+        filter_parts.append(f"[v{i}]scale_cuda={res}:format={pix_fmt}:interp_algo={settings['scale_algo']}[s{i}]")
 
     filter_graph = ";".join(filter_parts)
 

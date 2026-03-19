@@ -55,8 +55,8 @@ def build_hevc_codec_strings(out_dir: Path, variants: list, log: logging.Logger)
     return codec_strings
 
 
-def patch_hls_video_range(master_path: Path, log: logging.Logger) -> None:
-    """Inject VIDEO-RANGE=PQ on every EXT-X-STREAM-INF line in an HLS master."""
+def patch_hls_video_range(master_path: Path, video_range: str, log: logging.Logger) -> None:
+    """Inject VIDEO-RANGE on every EXT-X-STREAM-INF line in an HLS master."""
     text  = master_path.read_text(encoding="utf-8")
     lines = text.splitlines(keepends=True)
     out   = []
@@ -65,22 +65,23 @@ def patch_hls_video_range(master_path: Path, log: logging.Logger) -> None:
         if line.startswith("#EXT-X-STREAM-INF:"):
             line = line.rstrip()
             if "VIDEO-RANGE=" not in line:
-                line += ",VIDEO-RANGE=PQ"
+                line += f",VIDEO-RANGE={video_range}"
             line += "\n"
         out.append(line)
 
     master_path.write_text("".join(out), encoding="utf-8")
-    log.info(f"  Patched VIDEO-RANGE=PQ into {master_path.name}")
+    log.info(f"  Patched VIDEO-RANGE={video_range} into {master_path.name}")
 
 
 def patch_hls_hdr(
     master_path: Path,
     codec_strings: list[str],
+    video_range: str,
     log: logging.Logger,
 ) -> None:
     """Patch the H265 HLS master playlist:
     - Replace bare 'hvc1' with full profile/level/tier codec strings.
-    - Inject VIDEO-RANGE=PQ on every EXT-X-STREAM-INF line.
+    - Inject VIDEO-RANGE on every EXT-X-STREAM-INF line.
     """
     text  = master_path.read_text(encoding="utf-8")
     lines = text.splitlines(keepends=True)
@@ -92,15 +93,15 @@ def patch_hls_hdr(
             codec = codec_strings[stream_index] if stream_index < len(codec_strings) else "hvc1"
             # Replace bare hvc1 (with or without trailing comma/quote) with full string
             line = re.sub(r'hvc1(?=[,"])', codec, line.rstrip())
-            # Inject VIDEO-RANGE=PQ if not already present
+            # Inject VIDEO-RANGE if not already present
             if "VIDEO-RANGE=" not in line:
-                line += ",VIDEO-RANGE=PQ"
+                line += f",VIDEO-RANGE={video_range}"
             line += "\n"
             stream_index += 1
         out.append(line)
 
     master_path.write_text("".join(out), encoding="utf-8")
-    log.info(f"  Patched HLS codec strings and VIDEO-RANGE=PQ into {master_path.name}")
+    log.info(f"  Patched HLS codec strings and VIDEO-RANGE={video_range} into {master_path.name}")
 
 
 def patch_dash_hdr(

@@ -46,7 +46,6 @@ ENCODE_SETTINGS_PRODUCTION = {
     "sc_threshold":      0,
     "strict_gop":        1,
     # Filter graph
-    "pix_fmt":           "p010le",
     "scale_algo":        "lanczos",
     # Audio
     "audio_codec":       "aac",
@@ -68,7 +67,6 @@ ENCODE_SETTINGS_FAST = {
     "sc_threshold":      0,
     "strict_gop":        1,
     # Filter graph
-    "pix_fmt":           "p010le",
     "scale_algo":        "lanczos",
     # Audio
     "audio_codec":       "aac",

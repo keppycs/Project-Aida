@@ -59,6 +59,13 @@ def main() -> None:
     colorspace      = video_stream.get("color_space",     "bt2020nc")
     fps             = parse_framerate(video_stream.get("r_frame_rate", "60/1"))
     gop_size        = math.ceil(fps * SEG_DURATION)
+    source_height   = int(video_stream.get("height", 2160))
+    source_bits     = int(video_stream.get("bits_per_raw_sample") or
+                         video_stream.get("bits_per_coded_sample") or 8)
+    # NVENC only supports 8-bit (nv12) and 10-bit (p010le) — 12-bit input is
+    # downsampled to p010le since that's the highest CUDA-compatible format.
+    pix_fmt         = "p010le" if source_bits >= 10 else "nv12"
+    is_hdr          = color_trc in HDR_TRANSFERS
 
     log.info(f"Codec           : {source_codec}")
     log.info(f"Frame rate      : {fps:.3f} fps")
@@ -66,8 +73,11 @@ def main() -> None:
     log.info(f"Color primaries : {color_primaries}")
     log.info(f"Color transfer  : {color_trc}")
     log.info(f"Color space     : {colorspace}")
+    log.info(f"Source height   : {source_height}px")
+    log.info(f"Pixel format    : {pix_fmt} ({source_bits}-bit source)")
+    log.info(f"HDR             : {is_hdr}")
 
-    if color_trc not in HDR_TRANSFERS:
+    if not is_hdr:
         log.warning(
             f"Transfer '{color_trc}' is not a recognised HDR transfer function. "
             "Metadata will be copied as-is — verify your output."
@@ -92,21 +102,31 @@ def main() -> None:
 
         out_dir.mkdir(parents=True, exist_ok=True)
 
+        # Drop any variants taller than the source — never upscale
+        active_variants = [
+            v for v in variants
+            if int(v[1].split(":")[1]) <= source_height
+        ]
+        if not active_variants:
+            log.warning(f"[SKIP ENCODE]  {codec_name} — no variants at or below source height {source_height}px.")
+            continue
+
         if is_already_encoded(out_dir):
             log.info(f"[SKIP ENCODE]  {codec_name} — segments already exist locally.")
         else:
             log.info(f"[START ENCODE] {codec_name}  encoder={encoder}")
-            log.info(f"  Ladder: {' | '.join(f'{n} CQ{c} {m}Mbps' for n, _, c, m in variants)}")
+            log.info(f"  Ladder: {' | '.join(f'{n} CQ{c} {m}Mbps' for n, _, c, m in active_variants)}")
 
             cmd = build_cmd(
                 source=video_file,
                 encoder=encoder,
-                variants=variants,
+                variants=active_variants,
                 cuda_decoder=cuda_decoder,
                 color_primaries=color_primaries,
                 color_trc=color_trc,
                 colorspace=colorspace,
                 gop_size=gop_size,
+                pix_fmt=pix_fmt,
             )
 
             log.debug("CMD: " + " ".join(cmd))
@@ -125,11 +145,13 @@ def main() -> None:
 
             log.info(f"[DONE ENCODE]  {codec_name}")
 
+            video_range = "PQ" if is_hdr else "SDR"
+
             if codec_name == "AV1":
-                patch_hls_video_range(out_dir / "master.m3u8", log)
+                patch_hls_video_range(out_dir / "master.m3u8", video_range, log)
             elif codec_name == "H265":
-                codec_strings = build_hevc_codec_strings(out_dir, variants, log)
-                patch_hls_hdr(out_dir / "master.m3u8", codec_strings, log)
+                codec_strings = build_hevc_codec_strings(out_dir, active_variants, log)
+                patch_hls_hdr(out_dir / "master.m3u8", codec_strings, video_range, log)
                 patch_dash_hdr(out_dir / "manifest.mpd", codec_strings, log)
 
         if not UPLOAD_TO_B2:
