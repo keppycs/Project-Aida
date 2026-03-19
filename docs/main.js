@@ -1,11 +1,17 @@
 // ── Config ─────────────────────────────────────────────────────────────────────
-const CONFIG = {
-  title: "2160p120 HDR",
-  av1Dash: "https://cdn.keppy.dev/file/ProjectAida/2160p120%20HDR/AV1/manifest.mpd",
-  av1Hls: "https://cdn.keppy.dev/file/ProjectAida/2160p120%20HDR/AV1/master.m3u8",
-  h265Dash: "https://cdn.keppy.dev/file/ProjectAida/2160p120%20HDR/H265/manifest.mpd",
-  h265Hls: "https://cdn.keppy.dev/file/ProjectAida/2160p120%20HDR/H265/master.m3u8",
-  isHdr: true,
-};
+const CDN_BASE = "https://cdn.keppy.dev/file/ProjectAida";
+const DEFAULT_ID = "LXb3EKWsInQ"; // fallback when no ?v= param in URL
 
-init();
+const _id = new URLSearchParams(location.search).get("v") || DEFAULT_ID;
+const _base = `${CDN_BASE}/${_id}`;
+
+fetch(`${_base}/metadata.json`)
+  .then((r) => {
+    if (!r.ok) throw new Error(r.status);
+    return r.json();
+  })
+  .then((meta) => init(meta, _base))
+  .catch((err) => {
+    console.error("Failed to load metadata.json:", err);
+    document.getElementById("title-text").textContent = "Failed to load video.";
+  });

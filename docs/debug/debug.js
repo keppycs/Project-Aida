@@ -1,19 +1,23 @@
 // ── Debug config ───────────────────────────────────────────────────────────────
-// DEBUG_STEM and DEBUG_IS_HDR are injected by config.js (written by the pipeline).
-// When running locally, files are served from docs/{stem}/. When live, use CDN.
+// Reads ?v= from the URL. Base URL switches between local files and CDN
+// depending on whether the page is being served locally or live.
+const CDN_BASE = "https://cdn.keppy.dev/file/ProjectAida";
 const _local = location.hostname === "localhost" || location.hostname === "127.0.0.1";
-const _base =
-  _local ?
-    `${DEBUG_STEM}`
-  : `https://cdn.keppy.dev/file/ProjectAida/${encodeURIComponent(DEBUG_STEM)}`;
+const _id = new URLSearchParams(location.search).get("v");
 
-const CONFIG = {
-  title: DEBUG_STEM,
-  av1Dash: `${_base}/AV1/manifest.mpd`,
-  av1Hls: `${_base}/AV1/master.m3u8`,
-  h265Dash: `${_base}/H265/manifest.mpd`,
-  h265Hls: `${_base}/H265/master.m3u8`,
-  isHdr: typeof DEBUG_IS_HDR !== "undefined" ? DEBUG_IS_HDR : true,
-};
+if (!_id) {
+  document.getElementById("title-text").textContent = "No video ID in URL. Add ?v=ID";
+} else {
+  const _base = _local ? `../${_id}` : `${CDN_BASE}/${_id}`;
 
-init();
+  fetch(`${_base}/metadata.json`)
+    .then((r) => {
+      if (!r.ok) throw new Error(r.status);
+      return r.json();
+    })
+    .then((meta) => init(meta, _base))
+    .catch((err) => {
+      console.error("Failed to load metadata.json:", err);
+      document.getElementById("title-text").textContent = "Failed to load video.";
+    });
+}

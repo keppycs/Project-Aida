@@ -66,7 +66,9 @@ let player,
   isDragging = false,
   selectedQuality = -1; // -1 = auto
 
-// ── HDR detection ─────────────────────────────────────────────────────────────
+// ── Display HDR detection ─────────────────────────────────────────────────────
+// Detects whether the *display* is HDR-capable, not the content.
+// Used to decide whether to show the tonemapping button.
 async function detectHDR() {
   const signals = {
     dynamicRange: window.matchMedia("(dynamic-range: high)").matches,
@@ -98,7 +100,9 @@ async function detectHDR() {
 }
 
 // ── Init ───────────────────────────────────────────────────────────────────────
-async function init() {
+// meta: parsed metadata.json
+// base: base URL for manifest paths, no trailing slash
+async function init(meta, base) {
   shaka.polyfill.installAll();
   if (!shaka.Player.isBrowserSupported()) {
     alert("Your browser does not support this player.");
@@ -129,28 +133,30 @@ async function init() {
   player.addEventListener("adaptation", updateQualityLabel);
   player.addEventListener("variantchanged", updateQualityLabel);
 
-  titleText.textContent = CONFIG.title;
-  if (CONFIG.isHdr) hdrBadge.classList.add("show");
+  titleText.textContent = meta.title;
+
+  const hasAV1 = meta.codecs.includes("AV1");
+  const hasH265 = meta.codecs.includes("H265");
 
   let src, mime, codecLabel, protocolLabel;
 
-  if (await supportsAV1Dash()) {
-    src = CONFIG.av1Dash;
+  if (hasAV1 && (await supportsAV1Dash())) {
+    src = `${base}/AV1/manifest.mpd`;
     mime = "application/dash+xml";
     codecLabel = "AV1";
     protocolLabel = "DASH";
-  } else if (await supportsAV1Hls()) {
-    src = CONFIG.av1Hls;
+  } else if (hasAV1 && (await supportsAV1Hls())) {
+    src = `${base}/AV1/master.m3u8`;
     mime = "application/x-mpegURL";
     codecLabel = "AV1";
     protocolLabel = "HLS";
-  } else if (await supportsH265Dash()) {
-    src = CONFIG.h265Dash;
+  } else if (hasH265 && (await supportsH265Dash())) {
+    src = `${base}/H265/manifest.mpd`;
     mime = "application/dash+xml";
     codecLabel = "H.265";
     protocolLabel = "DASH";
-  } else if (await supportsH265Hls()) {
-    src = CONFIG.h265Hls;
+  } else if (hasH265 && (await supportsH265Hls())) {
+    src = `${base}/H265/master.m3u8`;
     mime = "application/x-mpegURL";
     codecLabel = "H.265";
     protocolLabel = "HLS";
@@ -171,8 +177,12 @@ async function init() {
     console.error("Load failed", e);
   }
 
-  // ── Tonemapping for SDR displays ─────────────────────────────────────────────
-  if (CONFIG.isHdr) {
+  // ── HDR from stream — detect post-load from track metadata ──────────────────
+  const tracks = player.getVariantTracks();
+  const isHdr = tracks.some((t) => t.hdr === "PQ" || t.hdr === "HLG");
+
+  if (isHdr) {
+    hdrBadge.classList.add("show");
     const hdrCapable = await detectHDR();
     if (!hdrCapable) {
       const saved = localStorage.getItem("tm-filter");
@@ -319,8 +329,6 @@ video.addEventListener("timeupdate", () => {
   const frac = video.currentTime / video.duration;
   applyProgress(frac);
   curTime.textContent = fmt(video.currentTime);
-
-  // Buffer
   if (video.buffered.length) {
     const end = video.buffered.end(video.buffered.length - 1);
     progBuf.style.width = (end / video.duration) * 100 + "%";
@@ -340,8 +348,7 @@ progWrap.addEventListener("mousemove", (e) => {
 
 progWrap.addEventListener("mousedown", (e) => {
   isDragging = true;
-  const frac = getProgressX(e);
-  applyProgress(frac);
+  applyProgress(getProgressX(e));
 });
 
 document.addEventListener("mousemove", (e) => {
@@ -354,8 +361,7 @@ document.addEventListener("mousemove", (e) => {
 document.addEventListener("mouseup", (e) => {
   if (!isDragging) return;
   isDragging = false;
-  const frac = getProgressX(e);
-  video.currentTime = frac * video.duration;
+  video.currentTime = getProgressX(e) * video.duration;
 });
 
 // ── Skip ───────────────────────────────────────────────────────────────────────
@@ -394,7 +400,6 @@ wrap.addEventListener("mousemove", showUI);
 wrap.addEventListener("mouseleave", () => {
   if (!video.paused) hideUI();
 });
-
 video.addEventListener("pause", showUI);
 video.addEventListener("play", () => {
   clearTimeout(uiTimer);
@@ -402,7 +407,7 @@ video.addEventListener("play", () => {
 });
 
 // ── Menus ──────────────────────────────────────────────────────────────────────
-function toggleMenu(menu, btn) {
+function toggleMenu(menu) {
   const isOpen = menu.classList.contains("open");
   closeAllMenus();
   if (!isOpen) {
@@ -418,11 +423,11 @@ function closeAllMenus() {
 
 qualBtn.addEventListener("click", (e) => {
   e.stopPropagation();
-  toggleMenu(qualMenu, qualBtn);
+  toggleMenu(qualMenu);
 });
 speedBtn.addEventListener("click", (e) => {
   e.stopPropagation();
-  toggleMenu(speedMenu, speedBtn);
+  toggleMenu(speedMenu);
 });
 document.addEventListener("click", closeAllMenus);
 qualMenu.addEventListener("click", (e) => e.stopPropagation());
