@@ -557,9 +557,13 @@ video {
   display: block;
 }
 
-/* ── HDR badge ── */
+/* ── HDR / SDR badge ── */
 #hdr-badge.show {
   display: block;
+}
+#hdr-badge.sdr {
+  color: var(--text-dim);
+  border-color: rgba(255, 255, 255, 0.2);
 }
 
 /* ── Debug badge ── */

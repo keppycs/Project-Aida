@@ -224,8 +224,10 @@ async function init(meta, base) {
 
   // HDR driven by metadata — not from Shaka track data which is unreliable for DASH
   const isHdr = HDR_TRANSFERS.has(meta.colorTransfer);
+  hdrBadge.textContent = isHdr ? "HDR" : "SDR";
+  hdrBadge.classList.toggle("sdr", !isHdr);
+  hdrBadge.classList.add("show");
   if (isHdr) {
-    hdrBadge.classList.add("show");
     const hdrCapable = await detectHDR();
     if (!hdrCapable) {
       const saved = localStorage.getItem("tm-filter");

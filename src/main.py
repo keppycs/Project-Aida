@@ -1,5 +1,5 @@
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
 import argparse
 import json
 import math
@@ -109,11 +109,6 @@ def main() -> None:
     log.info(f"Pixel format    : {pix_fmt} ({source_bits}-bit source)")
     log.info(f"HDR             : {is_hdr}")
 
-    if not is_hdr:
-        log.warning(
-            f"Transfer '{color_trc}' is not a recognised HDR transfer function. "
-            "Metadata will be copied as-is — verify your output."
-        )
 
     cuda_decoder = CUDA_DECODERS.get(source_codec)
     if cuda_decoder:
@@ -160,6 +155,8 @@ def main() -> None:
                 colorspace=colorspace,
                 gop_size=gop_size,
                 pix_fmt=pix_fmt,
+                source_width=source_width,
+                source_height=source_height,
             )
 
             log.debug("CMD: " + " ".join(cmd))
@@ -233,7 +230,7 @@ def main() -> None:
     log.info(f"[METADATA]     Written {meta_local}")
 
     # Update local index.json always, so you have a catalogue regardless of upload
-    date_str   = datetime.utcfromtimestamp(created_at).strftime("%d-%m-%Y")
+    date_str   = datetime.fromtimestamp(created_at, tz=timezone.utc).strftime("%d-%m-%Y %H:%M:%S")
     entry      = {"id": video_id, "date": date_str, "title": video_file.stem}
     index_path = root / "logs" / "index.json"
     try:
