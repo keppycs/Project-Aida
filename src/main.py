@@ -63,7 +63,7 @@ def main() -> None:
     logs_dir = root / "logs"
     logs_dir.mkdir(exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    log       = setup_logging(logs_dir / f"{video_file.stem}_{timestamp}.log")
+    log       = setup_logging(logs_dir / f"{timestamp}_{video_file.stem}.log")
 
     log.info(f"Source    : {video_file}")
     log.info(f"Video ID  : {video_id}")
@@ -83,13 +83,19 @@ def main() -> None:
     gop_size        = math.ceil(fps * SEG_DURATION)
     source_height   = int(video_stream.get("height", 2160))
     source_width    = int(video_stream.get("width",  3840))
-    source_bits     = int(video_stream.get("bits_per_raw_sample") or
-                         video_stream.get("bits_per_coded_sample") or 8)
+    # Bit depth: prefer bits_per_raw_sample, fall back to inferring from pix_fmt.
+    # AV1 and some other codecs often report 0 for bits_per_raw_sample in ffprobe.
+    _bits_raw   = int(video_stream.get("bits_per_raw_sample")  or 0)
+    _bits_coded = int(video_stream.get("bits_per_coded_sample") or 0)
+    _stream_pix = video_stream.get("pix_fmt", "")
+    _hbd_fmts   = {"yuv420p10le", "yuv420p12le", "yuv422p10le", "yuv422p12le",
+                   "yuv444p10le", "yuv444p12le", "p010le", "p012le", "gbrp10le", "gbrp12le"}
+    source_bits = _bits_raw or _bits_coded or (10 if _stream_pix in _hbd_fmts else 8)
     # Duration in seconds from format block
-    duration        = float(probe.get("format", {}).get("duration", 0))
+    duration    = float(probe.get("format", {}).get("duration", 0))
     # NVENC only supports 8-bit (nv12) and 10-bit (p010le) — 12-bit input is
     # downsampled to p010le since that's the highest CUDA-compatible format.
-    pix_fmt         = "p010le" if source_bits >= 10 else "nv12"
+    pix_fmt     = "p010le" if source_bits >= 10 else "nv12"
     is_hdr          = color_trc in HDR_TRANSFERS
 
     log.info(f"Codec           : {source_codec}")
@@ -226,6 +232,19 @@ def main() -> None:
     meta_local.write_text(json.dumps(meta, indent=2), encoding="utf-8")
     log.info(f"[METADATA]     Written {meta_local}")
 
+    # Update local index.json always, so you have a catalogue regardless of upload
+    date_str   = datetime.utcfromtimestamp(created_at).strftime("%d-%m-%Y")
+    entry      = {"id": video_id, "date": date_str, "title": video_file.stem}
+    index_path = root / "logs" / "index.json"
+    try:
+        index = json.loads(index_path.read_text(encoding="utf-8")) if index_path.exists() else []
+    except Exception:
+        index = []
+    index = [e for e in index if e.get("id") != video_id]  # remove if re-encoding same ID
+    index.insert(0, entry)
+    index_path.write_text(json.dumps(index, indent=2), encoding="utf-8")
+    log.info(f"[INDEX]        Updated logs/index.json ({len(index)} entries)")
+
     if UPLOAD_TO_B2 and not upload_errors:
         # Upload metadata.json
         try:
@@ -237,30 +256,13 @@ def main() -> None:
         except Exception as e:
             log.error(f"[METADATA]     Failed to upload metadata.json: {e}")
 
-        # Update index.json at bucket root
-        index_key  = "index.json"
-        index_path = root / "logs" / "index.json"  # local scratch copy
-        try:
-            import io
-            obj = b2.get_object(Bucket=B2_BUCKET, Key=index_key)
-            index = json.loads(obj["Body"].read())
-        except Exception:
-            index = []
-
-        date_str = datetime.utcfromtimestamp(created_at).strftime("%d-%m-%Y")
-        entry    = {"id": video_id, "date": date_str, "title": video_file.stem}
-
-        # Remove existing entry for this ID if re-uploading
-        index = [e for e in index if e.get("id") != video_id]
-        index.insert(0, entry)
-
-        index_path.write_text(json.dumps(index, indent=2), encoding="utf-8")
+        # Upload index.json to bucket root
         try:
             b2.upload_file(
-                str(index_path), B2_BUCKET, index_key,
+                str(index_path), B2_BUCKET, "index.json",
                 ExtraArgs={"ContentType": "application/json"},
             )
-            log.info(f"[INDEX]        Updated index.json ({len(index)} entries)")
+            log.info(f"[INDEX]        Uploaded index.json → b2://{B2_BUCKET}/index.json")
         except Exception as e:
             log.error(f"[INDEX]        Failed to upload index.json: {e}")
 

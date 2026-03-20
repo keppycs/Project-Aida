@@ -17,6 +17,9 @@ __pycache__/
 logs/
 *.log
 
+# Metadata
+*.json
+
 # VSCode
 .vscode/
 

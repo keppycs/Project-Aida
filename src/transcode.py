@@ -19,6 +19,7 @@ def setup_logging(log_path: Path) -> logging.Logger:
     ch.setFormatter(fmt)
     log.addHandler(fh)
     log.addHandler(ch)
+    log.propagate = False
     return log
 
 
