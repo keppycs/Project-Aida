@@ -1,5 +1,6 @@
 from pathlib import Path
-from datetime import datetime, timezone
+from datetime import datetime
+from zoneinfo import ZoneInfo
 import argparse
 import json
 import math
@@ -155,8 +156,6 @@ def main() -> None:
                 colorspace=colorspace,
                 gop_size=gop_size,
                 pix_fmt=pix_fmt,
-                source_width=source_width,
-                source_height=source_height,
             )
 
             log.debug("CMD: " + " ".join(cmd))
@@ -230,7 +229,8 @@ def main() -> None:
     log.info(f"[METADATA]     Written {meta_local}")
 
     # Update local index.json always, so you have a catalogue regardless of upload
-    date_str   = datetime.fromtimestamp(created_at, tz=timezone.utc).strftime("%d-%m-%Y %H:%M:%S")
+    ams = ZoneInfo("Europe/Amsterdam")
+    date_str = datetime.fromtimestamp(created_at, tz=ams).strftime("%d-%m-%Y %H:%M:%S %Z")
     entry      = {"id": video_id, "date": date_str, "title": video_file.stem}
     index_path = root / "logs" / "index.json"
     try:
