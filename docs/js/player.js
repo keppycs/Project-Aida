@@ -551,12 +551,13 @@ function buildQualityMenu() {
   const autoItem = document.createElement("button");
   autoItem.className = "menu-item" + (selectedQuality === -1 ? " active" : "");
   autoItem.dataset.id = "-1";
+  autoItem.id = "quality-auto-item";
   autoItem.innerHTML = `
     <svg class="check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
       <polyline points="20 6 9 17 4 12"/>
     </svg>
     Auto
-    <span class="menu-badge">ABR</span>`;
+    <span class="menu-badge" id="quality-auto-badge">ABR</span>`;
   autoItem.addEventListener("click", () => selectQuality(-1));
   qualMenu.appendChild(autoItem);
 
@@ -594,6 +595,13 @@ function buildQualityMenu() {
   updateQualityLabel();
 }
 
+function trackLabel(track) {
+  const fps    = Math.round(track.frameRate || currentMeta?.frameRate || 0);
+  const all    = player.getVariantTracks().filter(t => t.height === track.height);
+  const isMax  = all.length > 1 && all[0].id === track.id;
+  return `${track.height}p${fps || ""}${isMax ? " Max" : ""}`;
+}
+
 function selectQuality(id) {
   selectedQuality = id;
   if (id === -1) {
@@ -604,7 +612,7 @@ function selectQuality(id) {
     const track = player.getVariantTracks().find((t) => t.id === id);
     if (track) {
       player.selectVariantTrack(track, true);
-      qualLabel.textContent = track.height + "p";
+      qualLabel.textContent = trackLabel(track);
     }
   }
   qualMenu.querySelectorAll(".menu-item").forEach((item) => {
@@ -616,7 +624,10 @@ function selectQuality(id) {
 function updateQualityLabel() {
   if (selectedQuality !== -1 || !player) return;
   const active = player.getVariantTracks().find((t) => t.active);
-  qualLabel.textContent = active ? "Auto · " + active.height + "p" : "Auto";
+  const label  = active ? trackLabel(active) : null;
+  qualLabel.textContent = label ? `Auto · ${label}` : "Auto";
+  const autoBadge = document.getElementById("quality-auto-badge");
+  if (autoBadge) autoBadge.textContent = label ?? "ABR";
 }
 
 // ── Speed menu ─────────────────────────────────────────────────────────────────
