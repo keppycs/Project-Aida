@@ -181,10 +181,10 @@ def main() -> None:
             video_range = "PQ" if is_hdr else "SDR"
 
             if codec_name == "AV1":
-                patch_hls_video_range(out_dir / "master.m3u8", video_range, log)
+                patch_hls_video_range(out_dir / "master.m3u8", video_range, fps, log)
             elif codec_name == "H265":
                 codec_strings = build_hevc_codec_strings(out_dir, active_variants, log)
-                patch_hls_hdr(out_dir / "master.m3u8", codec_strings, video_range, log)
+                patch_hls_hdr(out_dir / "master.m3u8", codec_strings, video_range, fps, log)
                 patch_dash_hdr(out_dir / "manifest.mpd", codec_strings, log)
 
         encoded_codecs.append(codec_name)

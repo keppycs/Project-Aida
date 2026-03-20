@@ -560,7 +560,9 @@ function buildQualityMenu() {
     item.dataset.id = track.id;
 
     const kbps = Math.round(track.bandwidth / 1000);
-    const fps = track.frameRate ? Math.round(track.frameRate) : "";
+    // Fall back to meta.frameRate — HLS manifests lack FRAME-RATE attributes
+    // so Shaka only populates track.frameRate for some tracks.
+    const fps = Math.round(track.frameRate || currentMeta?.frameRate || 0) || "";
 
     heightSeen[track.height] = (heightSeen[track.height] || 0) + 1;
     const isDupe = heightCount[track.height] > 1;

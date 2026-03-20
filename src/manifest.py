@@ -55,38 +55,43 @@ def build_hevc_codec_strings(out_dir: Path, variants: list, log: logging.Logger)
     return codec_strings
 
 
-def patch_hls_video_range(master_path: Path, video_range: str, log: logging.Logger) -> None:
-    """Inject VIDEO-RANGE on every EXT-X-STREAM-INF line in an HLS master."""
+def patch_hls_video_range(master_path: Path, video_range: str, fps: float, log: logging.Logger) -> None:
+    """Inject VIDEO-RANGE and FRAME-RATE on every EXT-X-STREAM-INF line in an HLS master."""
     text  = master_path.read_text(encoding="utf-8")
     lines = text.splitlines(keepends=True)
     out   = []
+    fps_str = f"{fps:.3f}".rstrip("0").rstrip(".")
 
     for line in lines:
         if line.startswith("#EXT-X-STREAM-INF:"):
             line = line.rstrip()
             if "VIDEO-RANGE=" not in line:
                 line += f",VIDEO-RANGE={video_range}"
+            if "FRAME-RATE=" not in line:
+                line += f",FRAME-RATE={fps_str}"
             line += "\n"
         out.append(line)
 
     master_path.write_text("".join(out), encoding="utf-8")
-    log.info(f"  Patched VIDEO-RANGE={video_range} into {master_path.name}")
+    log.info(f"  Patched VIDEO-RANGE={video_range}, FRAME-RATE={fps_str} into {master_path.name}")
 
 
 def patch_hls_hdr(
     master_path: Path,
     codec_strings: list[str],
     video_range: str,
+    fps: float,
     log: logging.Logger,
 ) -> None:
     """Patch the H265 HLS master playlist:
     - Replace bare 'hvc1' with full profile/level/tier codec strings.
-    - Inject VIDEO-RANGE on every EXT-X-STREAM-INF line.
+    - Inject VIDEO-RANGE and FRAME-RATE on every EXT-X-STREAM-INF line.
     """
     text  = master_path.read_text(encoding="utf-8")
     lines = text.splitlines(keepends=True)
     out   = []
     stream_index = 0
+    fps_str = f"{fps:.3f}".rstrip("0").rstrip(".")
 
     for line in lines:
         if line.startswith("#EXT-X-STREAM-INF:"):
@@ -96,12 +101,14 @@ def patch_hls_hdr(
             # Inject VIDEO-RANGE if not already present
             if "VIDEO-RANGE=" not in line:
                 line += f",VIDEO-RANGE={video_range}"
+            if "FRAME-RATE=" not in line:
+                line += f",FRAME-RATE={fps_str}"
             line += "\n"
             stream_index += 1
         out.append(line)
 
     master_path.write_text("".join(out), encoding="utf-8")
-    log.info(f"  Patched HLS codec strings and VIDEO-RANGE={video_range} into {master_path.name}")
+    log.info(f"  Patched HLS codec strings, VIDEO-RANGE={video_range}, FRAME-RATE={fps_str} into {master_path.name}")
 
 
 def patch_dash_hdr(
