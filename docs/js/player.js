@@ -1,3 +1,13 @@
+// ── Suppress noisy Shaka warnings ───────────────────────────────────────────────
+// Shaka attempts CEA-608/708 closed caption parsing on all HLS streams and warns
+// when it can't determine the bitstream format. Since we don't use captions, filter
+// this out rather than polluting the console.
+const _origWarn = console.warn.bind(console);
+console.warn = (...args) => {
+  if (typeof args[0] === "string" && args[0].includes("CEA")) return;
+  _origWarn(...args);
+};
+
 // ── Codec detection ─────────────────────────────────────────────────────────────
 const AV1_CODEC = 'video/mp4; codecs="av01.0.08H.10.0.110.09.16.09.0"';
 const H265_CODEC = 'video/mp4; codecs="hvc1.1.6.H150.B0"';
