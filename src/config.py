@@ -56,7 +56,7 @@ ENCODE_SETTINGS_FAST = {
     # NVENC
     "preset":            "p1",
     "tune":              "ull",
-    "multipass":         "fullres",
+    "multipass":         "disabled",
     "split_encode_mode": "forced",
     "spatial_aq":        False,
     "temporal_aq":       False,
@@ -132,6 +132,11 @@ CUDA_DECODERS = {
 HDR_TRANSFERS    = {"smpte2084", "arib-std-b67", "smpte428", "bt2020-10", "bt2020-12"}
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".mkv", ".mxf", ".mts", ".m2ts"}
 SEG_DURATION     = 2
+
+try:
+    from config_local import *  # noqa: F401, F403
+except ImportError:
+    pass
 
 # ── HEVC level/tier bitrate limits ────────────────────────────────────────────
 # Source: https://en.wikipedia.org/wiki/High_Efficiency_Video_Coding_tiers_and_levels

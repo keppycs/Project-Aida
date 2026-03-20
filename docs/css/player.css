@@ -482,19 +482,56 @@ video {
   justify-content: space-between;
 }
 
-/* ── Settings label ── */
+/* ── Quality button ── */
+#quality-btn {
+  width: auto;
+  padding: 0 10px;
+  gap: 6px;
+  flex-direction: row;
+}
+#quality-btn svg {
+  flex-shrink: 0;
+}
 #quality-label {
   font-family: var(--mono);
   font-size: 11px;
   color: var(--accent);
   pointer-events: none;
-  position: absolute;
-  top: 2px;
-  right: 2px;
-  line-height: 1;
+  white-space: nowrap;
 }
-#quality-btn {
-  position: relative;
+
+/* ── Codec / Protocol toggle row ── */
+.menu-toggle-row {
+  display: flex;
+  gap: 6px;
+  padding: 6px 10px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+}
+.menu-toggle {
+  flex: 1;
+  padding: 5px 0;
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 500;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 5px;
+  background: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.menu-toggle:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.07);
+  color: var(--text);
+}
+.menu-toggle.active {
+  background: rgba(232, 255, 71, 0.1);
+  border-color: rgba(232, 255, 71, 0.4);
+  color: var(--accent);
+}
+.menu-toggle.disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
 }
 
 .badge-accent {

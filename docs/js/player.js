@@ -2,6 +2,8 @@
 const AV1_CODEC = 'video/mp4; codecs="av01.0.08H.10.0.110.09.16.09.0"';
 const H265_CODEC = 'video/mp4; codecs="hvc1.1.6.H150.B0"';
 
+// Check supported only — smooth is reported conservatively by browsers
+// (e.g. Chrome reports smooth=false for 4K120 PQ AV1 even on capable hardware).
 async function canDecode(type, contentType) {
   try {
     const r = await navigator.mediaCapabilities?.decodingInfo({
@@ -16,7 +18,7 @@ async function canDecode(type, contentType) {
         colorGamut: "rec2020",
       },
     });
-    return (r?.supported && r?.smooth) ?? false;
+    return r?.supported ?? false;
   } catch {
     return false;
   }
@@ -26,6 +28,9 @@ const supportsAV1Dash = () => canDecode("media-source", AV1_CODEC);
 const supportsAV1Hls = () => canDecode("file", AV1_CODEC);
 const supportsH265Dash = () => canDecode("media-source", H265_CODEC);
 const supportsH265Hls = () => canDecode("file", H265_CODEC);
+
+// HDR transfer functions — mirrors config.py HDR_TRANSFERS
+const HDR_TRANSFERS = new Set(["smpte2084", "arib-std-b67", "smpte428", "bt2020-10", "bt2020-12"]);
 
 // ── Elements ───────────────────────────────────────────────────────────────────
 const wrap = document.getElementById("player-wrap");
@@ -64,11 +69,14 @@ const tmBtn = document.getElementById("tm-btn");
 let player,
   uiTimer,
   isDragging = false,
-  selectedQuality = -1; // -1 = auto
+  selectedQuality = -1, // -1 = auto
+  currentMeta = null,
+  currentBase = null,
+  currentCodec = null, // "AV1" | "H265"
+  currentProtocol = null; // "DASH" | "HLS"
 
 // ── Display HDR detection ─────────────────────────────────────────────────────
 // Detects whether the *display* is HDR-capable, not the content.
-// Used to decide whether to show the tonemapping button.
 async function detectHDR() {
   const signals = {
     dynamicRange: window.matchMedia("(dynamic-range: high)").matches,
@@ -77,7 +85,6 @@ async function detectHDR() {
       window.matchMedia("(color-gamut: rec2020)").matches,
     mediaCapabilities: false,
   };
-
   try {
     const r = await navigator.mediaCapabilities?.decodingInfo({
       type: "media-source",
@@ -91,17 +98,101 @@ async function detectHDR() {
         colorGamut: "rec2020",
       },
     });
-    signals.mediaCapabilities = r?.supported && r?.smooth;
+    signals.mediaCapabilities = r?.supported ?? false;
   } catch {}
-
   const isHDR = signals.dynamicRange || (signals.mediaCapabilities && signals.wideGamut);
   console.debug("[HDR detect]", signals, "→", isHDR);
   return isHDR;
 }
 
+// ── Source selection ──────────────────────────────────────────────────────────
+// Returns the best {src, mime, codec, protocol} given availability + preference.
+// preferCodec / preferProtocol override auto-detection when set.
+async function selectSource(meta, base, preferCodec, preferProtocol) {
+  const hasAV1 = meta.codecs.includes("AV1");
+  const hasH265 = meta.codecs.includes("H265");
+
+  const candidates = [];
+
+  if (hasAV1) {
+    if (await supportsAV1Dash())
+      candidates.push({
+        codec: "AV1",
+        protocol: "DASH",
+        src: `${base}/AV1/manifest.mpd`,
+        mime: "application/dash+xml",
+      });
+    if (await supportsAV1Hls())
+      candidates.push({
+        codec: "AV1",
+        protocol: "HLS",
+        src: `${base}/AV1/master.m3u8`,
+        mime: "application/x-mpegURL",
+      });
+  }
+  if (hasH265) {
+    if (await supportsH265Dash())
+      candidates.push({
+        codec: "H265",
+        protocol: "DASH",
+        src: `${base}/H265/manifest.mpd`,
+        mime: "application/dash+xml",
+      });
+    if (await supportsH265Hls())
+      candidates.push({
+        codec: "H265",
+        protocol: "HLS",
+        src: `${base}/H265/master.m3u8`,
+        mime: "application/x-mpegURL",
+      });
+  }
+
+  if (!candidates.length) return null;
+
+  // Apply preferences — filter by codec/protocol if specified, fall back to best available
+  let filtered = candidates;
+  if (preferCodec)
+    filtered =
+      filtered.filter((c) => c.codec === preferCodec).length ?
+        filtered.filter((c) => c.codec === preferCodec)
+      : filtered;
+  if (preferProtocol)
+    filtered =
+      filtered.filter((c) => c.protocol === preferProtocol).length ?
+        filtered.filter((c) => c.protocol === preferProtocol)
+      : filtered;
+
+  return filtered[0];
+}
+
+// ── Load source ───────────────────────────────────────────────────────────────
+async function loadSource(meta, base, preferCodec, preferProtocol) {
+  const chosen = await selectSource(meta, base, preferCodec, preferProtocol);
+  if (!chosen) {
+    showUnsupportedNotice();
+    return;
+  }
+
+  currentMeta = meta;
+  currentBase = base;
+  currentCodec = chosen.codec;
+  currentProtocol = chosen.protocol;
+
+  codecBadge.textContent = chosen.codec === "H265" ? "H.265" : chosen.codec;
+  protocolBadge.textContent = chosen.protocol;
+  codecBadge.classList.add("show");
+  protocolBadge.classList.add("show");
+
+  selectedQuality = -1;
+  try {
+    await player.load(chosen.src, null, chosen.mime);
+  } catch (e) {
+    console.error("Load failed", e);
+  }
+}
+
 // ── Init ───────────────────────────────────────────────────────────────────────
-// meta: parsed metadata.json
-// base: base URL for manifest paths, no trailing slash
+// meta: parsed metadata.json  |  base: base URL, no trailing slash
 async function init(meta, base) {
   shaka.polyfill.installAll();
   if (!shaka.Player.isBrowserSupported()) {
@@ -114,12 +205,7 @@ async function init(meta, base) {
   video.volume = 0.5;
 
   player.configure({
-    streaming: {
-      bufferingGoal: 12,
-      rebufferingGoal: 2,
-      bufferBehind: 30,
-      safeSeekOffset: 2,
-    },
+    streaming: { bufferingGoal: 12, rebufferingGoal: 2, bufferBehind: 30, safeSeekOffset: 2 },
     abr: {
       enabled: true,
       defaultBandwidthEstimate: 50000000,
@@ -132,55 +218,12 @@ async function init(meta, base) {
   player.addEventListener("buffering", (e) => spinner.classList.toggle("show", e.buffering));
   player.addEventListener("adaptation", updateQualityLabel);
   player.addEventListener("variantchanged", updateQualityLabel);
+  player.addEventListener("trackschanged", buildQualityMenu);
 
   titleText.textContent = meta.title;
 
-  const hasAV1 = meta.codecs.includes("AV1");
-  const hasH265 = meta.codecs.includes("H265");
-
-  let src, mime, codecLabel, protocolLabel;
-
-  if (hasAV1 && (await supportsAV1Dash())) {
-    src = `${base}/AV1/manifest.mpd`;
-    mime = "application/dash+xml";
-    codecLabel = "AV1";
-    protocolLabel = "DASH";
-  } else if (hasAV1 && (await supportsAV1Hls())) {
-    src = `${base}/AV1/master.m3u8`;
-    mime = "application/x-mpegURL";
-    codecLabel = "AV1";
-    protocolLabel = "HLS";
-  } else if (hasH265 && (await supportsH265Dash())) {
-    src = `${base}/H265/manifest.mpd`;
-    mime = "application/dash+xml";
-    codecLabel = "H.265";
-    protocolLabel = "DASH";
-  } else if (hasH265 && (await supportsH265Hls())) {
-    src = `${base}/H265/master.m3u8`;
-    mime = "application/x-mpegURL";
-    codecLabel = "H.265";
-    protocolLabel = "HLS";
-  } else {
-    showUnsupportedNotice();
-    return;
-  }
-
-  codecBadge.textContent = codecLabel;
-  protocolBadge.textContent = protocolLabel;
-  codecBadge.classList.add("show");
-  protocolBadge.classList.add("show");
-
-  try {
-    await player.load(src, null, mime);
-    buildQualityMenu();
-  } catch (e) {
-    console.error("Load failed", e);
-  }
-
-  // ── HDR from stream — detect post-load from track metadata ──────────────────
-  const tracks = player.getVariantTracks();
-  const isHdr = tracks.some((t) => t.hdr === "PQ" || t.hdr === "HLG");
-
+  // HDR driven by metadata — not from Shaka track data which is unreliable for DASH
+  const isHdr = HDR_TRANSFERS.has(meta.colorTransfer);
   if (isHdr) {
     hdrBadge.classList.add("show");
     const hdrCapable = await detectHDR();
@@ -196,6 +239,8 @@ async function init(meta, base) {
       }
     }
   }
+
+  await loadSource(meta, base, null, null);
 }
 
 // ── Tonemapping ────────────────────────────────────────────────────────────────
@@ -300,13 +345,11 @@ muteBtn.addEventListener("click", () => {
   video.muted = !video.muted;
   updateVolIcon();
 });
-
 volSlider.addEventListener("input", () => {
   video.volume = parseFloat(volSlider.value);
   video.muted = video.volume === 0;
   updateVolIcon();
 });
-
 video.addEventListener("volumechange", () => {
   volSlider.value = video.muted ? 0 : video.volume;
   updateVolIcon();
@@ -326,12 +369,11 @@ function applyProgress(frac) {
 
 video.addEventListener("timeupdate", () => {
   if (isDragging || !video.duration) return;
-  const frac = video.currentTime / video.duration;
-  applyProgress(frac);
+  applyProgress(video.currentTime / video.duration);
   curTime.textContent = fmt(video.currentTime);
   if (video.buffered.length) {
-    const end = video.buffered.end(video.buffered.length - 1);
-    progBuf.style.width = (end / video.duration) * 100 + "%";
+    progBuf.style.width =
+      (video.buffered.end(video.buffered.length - 1) / video.duration) * 100 + "%";
   }
 });
 
@@ -340,24 +382,18 @@ video.addEventListener("loadedmetadata", () => {
 });
 
 progWrap.addEventListener("mousemove", (e) => {
-  const frac = getProgressX(e);
-  const rect = progWrap.getBoundingClientRect();
-  timeTip.textContent = fmt(frac * (video.duration || 0));
-  timeTip.style.left = e.clientX - rect.left + "px";
+  timeTip.textContent = fmt(getProgressX(e) * (video.duration || 0));
+  timeTip.style.left = e.clientX - progWrap.getBoundingClientRect().left + "px";
 });
-
 progWrap.addEventListener("mousedown", (e) => {
   isDragging = true;
   applyProgress(getProgressX(e));
 });
-
 document.addEventListener("mousemove", (e) => {
   if (!isDragging) return;
-  const frac = getProgressX(e);
-  applyProgress(frac);
-  curTime.textContent = fmt(frac * (video.duration || 0));
+  applyProgress(getProgressX(e));
+  curTime.textContent = fmt(getProgressX(e) * (video.duration || 0));
 });
-
 document.addEventListener("mouseup", (e) => {
   if (!isDragging) return;
   isDragging = false;
@@ -436,15 +472,72 @@ speedMenu.addEventListener("click", (e) => e.stopPropagation());
 // ── Quality menu ───────────────────────────────────────────────────────────────
 function buildQualityMenu() {
   if (!player) return;
+
+  qualMenu.innerHTML = "";
+
+  // ── Codec toggle ──
+  const codecHeader = document.createElement("div");
+  codecHeader.className = "menu-header";
+  codecHeader.textContent = "Codec";
+  qualMenu.appendChild(codecHeader);
+
+  const codecRow = document.createElement("div");
+  codecRow.className = "menu-toggle-row";
+
+  const codecs = currentMeta?.codecs || [];
+  [
+    ["AV1", "AV1"],
+    ["H265", "H.265"],
+  ].forEach(([value, label]) => {
+    const btn = document.createElement("button");
+    btn.className = "menu-toggle" + (currentCodec === value ? " active" : "");
+    btn.textContent = label;
+    if (!codecs.includes(value)) {
+      btn.disabled = true;
+      btn.classList.add("disabled");
+    }
+    btn.addEventListener("click", async () => {
+      if (btn.disabled || currentCodec === value) return;
+      await loadSource(currentMeta, currentBase, value, currentProtocol);
+    });
+    codecRow.appendChild(btn);
+  });
+  qualMenu.appendChild(codecRow);
+
+  // ── Protocol toggle ──
+  const protHeader = document.createElement("div");
+  protHeader.className = "menu-header";
+  protHeader.textContent = "Protocol";
+  qualMenu.appendChild(protHeader);
+
+  const protRow = document.createElement("div");
+  protRow.className = "menu-toggle-row";
+
+  ["DASH", "HLS"].forEach((value) => {
+    const btn = document.createElement("button");
+    btn.className = "menu-toggle" + (currentProtocol === value ? " active" : "");
+    btn.textContent = value;
+    btn.addEventListener("click", async () => {
+      if (currentProtocol === value) return;
+      await loadSource(currentMeta, currentBase, currentCodec, value);
+    });
+    protRow.appendChild(btn);
+  });
+  qualMenu.appendChild(protRow);
+
+  // ── Quality ──
+  const qualHeader = document.createElement("div");
+  qualHeader.className = "menu-header";
+  qualHeader.textContent = "Quality";
+  qualMenu.appendChild(qualHeader);
+
   const tracks = player
     .getVariantTracks()
     .filter((t) => t.height)
     .sort((a, b) => b.height - a.height || b.bandwidth - a.bandwidth);
 
-  qualMenu.innerHTML = '<div class="menu-header">Quality</div>';
-
   const autoItem = document.createElement("button");
-  autoItem.className = "menu-item active";
+  autoItem.className = "menu-item" + (selectedQuality === -1 ? " active" : "");
   autoItem.dataset.id = "-1";
   autoItem.innerHTML = `
     <svg class="check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
@@ -509,7 +602,7 @@ function selectQuality(id) {
 function updateQualityLabel() {
   if (selectedQuality !== -1 || !player) return;
   const active = player.getVariantTracks().find((t) => t.active);
-  if (active) qualLabel.textContent = "Auto · " + active.height + "p";
+  qualLabel.textContent = active ? "Auto · " + active.height + "p" : "Auto";
 }
 
 // ── Speed menu ─────────────────────────────────────────────────────────────────
