@@ -42,6 +42,9 @@ const supportsH265Hls = () => canDecode("file", H265_CODEC);
 // HDR transfer functions — mirrors config.py HDR_TRANSFERS
 const HDR_TRANSFERS = new Set(["smpte2084", "arib-std-b67", "smpte428", "bt2020-10", "bt2020-12"]);
 
+// Mobile detection — used to adjust volume default, hide vol cluster, and enable touch
+const isMobile = navigator.maxTouchPoints > 0;
+
 // ── Elements ───────────────────────────────────────────────────────────────────
 const wrap = document.getElementById("player-wrap");
 const video = document.getElementById("video");
@@ -212,7 +215,9 @@ async function init(meta, base) {
 
   player = new shaka.Player();
   await player.attach(video);
-  video.volume = 0.5;
+  // On mobile the OS owns volume — default to full and hide the vol cluster
+  video.volume = isMobile ? 1.0 : 0.5;
+  if (isMobile) document.getElementById("vol-cluster").style.display = "none";
 
   player.configure({
     streaming: { bufferingGoal: 12, rebufferingGoal: 2, bufferBehind: 30, safeSeekOffset: 2 },
@@ -333,7 +338,8 @@ video.addEventListener("ended", () => {
 
 playBtn.addEventListener("click", togglePlay);
 bigPlay.addEventListener("click", togglePlay);
-video.addEventListener("click", togglePlay);
+// On mobile, taps on the video are handled by the touch section below
+if (!isMobile) video.addEventListener("click", togglePlay);
 
 // ── Volume ─────────────────────────────────────────────────────────────────────
 const VOL_FULL = `<polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>
@@ -432,7 +438,7 @@ function flashSeek(txt) {
 function showUI() {
   wrap.classList.add("ui-visible", "cursor-visible");
   clearTimeout(uiTimer);
-  if (!video.paused) uiTimer = setTimeout(hideUI, 3000);
+  if (!video.paused) uiTimer = setTimeout(hideUI, isMobile ? 2000 : 3000);
 }
 
 function hideUI() {
@@ -725,3 +731,115 @@ document.addEventListener("keydown", (e) => {
     showToast(`${pct * 100}%`);
   }
 });
+
+// ── Touch support ─────────────────────────────────────────────────────────────────────
+if (isMobile) {
+  const SWIPE_THRESHOLD = 10; // px before a touch is considered a swipe
+
+  let touchStartX    = 0;
+  let touchStartY    = 0;
+  let touchMoved     = false;
+  let swipeActive    = false;
+  let swipeStartVol  = 0;
+  let swipeStartTime = 0;
+
+  // ── Progress bar touch ──────────────────────────────────────────────────────────
+  progWrap.addEventListener("touchstart", (e) => {
+    e.preventDefault();
+    isDragging = true;
+    const rect = progWrap.getBoundingClientRect();
+    const frac = Math.max(0, Math.min(1, (e.touches[0].clientX - rect.left) / rect.width));
+    applyProgress(frac);
+    showUI();
+  }, { passive: false });
+
+  progWrap.addEventListener("touchmove", (e) => {
+    e.preventDefault();
+    if (!isDragging) return;
+    const rect = progWrap.getBoundingClientRect();
+    const frac = Math.max(0, Math.min(1, (e.touches[0].clientX - rect.left) / rect.width));
+    applyProgress(frac);
+    curTime.textContent   = fmt(frac * (video.duration || 0));
+    timeTip.textContent   = fmt(frac * (video.duration || 0));
+    timeTip.style.left    = e.touches[0].clientX - rect.left + "px";
+  }, { passive: false });
+
+  progWrap.addEventListener("touchend", (e) => {
+    if (!isDragging) return;
+    isDragging = false;
+    const rect = progWrap.getBoundingClientRect();
+    const frac = Math.max(0, Math.min(1, (e.changedTouches[0].clientX - rect.left) / rect.width));
+    video.currentTime = frac * video.duration;
+    showUI();
+  });
+
+  // ── Video area tap and swipe ───────────────────────────────────────────────
+  wrap.addEventListener("touchstart", (e) => {
+    if (e.target.closest("#controls, .menu-popup")) return;
+    touchStartX   = e.touches[0].clientX;
+    touchStartY   = e.touches[0].clientY;
+    touchMoved    = false;
+    swipeActive   = false;
+    swipeStartVol = video.volume;
+    swipeStartTime = video.currentTime;
+  }, { passive: true });
+
+  wrap.addEventListener("touchmove", (e) => {
+    if (e.target.closest("#controls, .menu-popup, #progress-wrap")) return;
+    const dx  = e.touches[0].clientX - touchStartX;
+    const dy  = e.touches[0].clientY - touchStartY;
+    const adx = Math.abs(dx);
+    const ady = Math.abs(dy);
+
+    if (adx > SWIPE_THRESHOLD || ady > SWIPE_THRESHOLD) touchMoved = true;
+
+    // Vertical swipe only (ignore horizontal to avoid fighting scroll)
+    if (ady > SWIPE_THRESHOLD && ady > adx * 1.5) {
+      e.preventDefault();
+      swipeActive = true;
+      const rect      = wrap.getBoundingClientRect();
+      const rightHalf = touchStartX > rect.left + rect.width / 2;
+
+      if (rightHalf) {
+        // Right half → volume: 200px = full range
+        const newVol = Math.max(0, Math.min(1, swipeStartVol + (-dy / 200)));
+        video.volume = newVol;
+        showToast(`Volume ${Math.round(newVol * 100)}%`);
+      } else {
+        // Left half → seek: 150px = 30s
+        const delta   = (-dy / 150) * 30;
+        const newTime = Math.max(0, Math.min(video.duration, swipeStartTime + delta));
+        video.currentTime = newTime;
+        const secs = Math.round(Math.abs(delta));
+        flashSeek(delta >= 0 ? `+${secs}s` : `−${secs}s`);
+      }
+      showUI();
+    }
+  }, { passive: false });
+
+  wrap.addEventListener("touchend", (e) => {
+    if (e.target.closest("#controls, .menu-popup, #progress-wrap")) return;
+    if (swipeActive) { swipeActive = false; showUI(); return; }
+    if (touchMoved)  { showUI(); return; }
+
+    // Clean tap on video area
+    const uiVisible = wrap.classList.contains("ui-visible");
+    if (!uiVisible) {
+      // First tap: show UI, don't toggle play
+      showUI();
+    } else if (isAnyMenuOpen()) {
+      // Menu open: close it, keep UI
+      closeAllMenus();
+      showUI();
+    } else {
+      // UI visible, no menu: toggle play
+      togglePlay();
+      showUI();
+    }
+  }, { passive: true });
+
+  // Reset UI timer whenever any control is interacted with
+  wrap.addEventListener("touchend", (e) => {
+    if (e.target.closest(".ctrl-btn, .menu-toggle, .menu-item")) showUI();
+  }, { passive: true });
+}
