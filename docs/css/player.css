@@ -363,7 +363,7 @@ video {
   appearance: none;
   -webkit-appearance: none;
   width: 64px;
-  height: 3px;
+  height: 12px;
   background: rgba(255, 255, 255, 0.2);
   border-radius: 99px;
   outline: none;
@@ -518,7 +518,10 @@ video {
   background: none;
   color: var(--text-dim);
   cursor: pointer;
-  transition: background 0.15s, color 0.15s, border-color 0.15s;
+  transition:
+    background 0.15s,
+    color 0.15s,
+    border-color 0.15s;
 }
 .menu-toggle:hover:not(:disabled) {
   background: rgba(255, 255, 255, 0.07);
