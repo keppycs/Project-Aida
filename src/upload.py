@@ -81,9 +81,9 @@ def upload_folder(b2: Any, local_dir: Path, b2_prefix: str, log: logging.Logger,
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Upload a local folder to the Project Aida B2 bucket.")
-    parser.add_argument("folder", help="Path to the folder to upload (e.g. docs/debug/00000000000/AV1)")
+    parser.add_argument("folder", help="Path to the video ID folder to upload (e.g. docs/debug/00000000000). All contents are uploaded recursively.")
     parser.add_argument("--prefix", default=None, metavar="PREFIX",
-                        help="B2 key prefix override (default: last two path components, e.g. 00000000000/AV1)")
+                        help="B2 key prefix override (default: folder name, e.g. 00000000000)")
     args = parser.parse_args()
 
     folder = Path(args.folder).resolve()
@@ -91,7 +91,7 @@ if __name__ == "__main__":
         print(f"Error: '{folder}' is not a directory.", file=sys.stderr)
         sys.exit(1)
 
-    # Derive prefix from last two components (id/codec) unless overridden
+    # Derive prefix from folder name (the video ID) unless overridden
     prefix = args.prefix or folder.name
 
     log = logging.getLogger("upload")
