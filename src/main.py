@@ -65,8 +65,8 @@ def main() -> None:
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     log       = setup_logging(logs_dir / f"{timestamp}_{video_file.stem}.log")
 
-    log.info(f"Source    : {video_file}")
-    log.info(f"Video ID  : {video_id}")
+    log.info(f"Source          : {video_file}")
+    log.info(f"Video ID        : {video_id}")
     probe = probe_video(video_file)
 
     video_stream = next(
