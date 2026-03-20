@@ -528,7 +528,7 @@ video {
 /* ── Debug badge ── */
 #debug-badge.show {
   display: block;
-  color: rgba(255, 0, 0, 14);
+  color: rgba(255, 0, 0, 0.8);
   border: 1px solid rgba(255, 0, 0, 0.8);
 }
 
