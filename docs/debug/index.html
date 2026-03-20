@@ -23,8 +23,6 @@
     <script defer src="main.js"></script>
   </head>
   <body>
-    <div id="debug-banner">DEBUG</div>
-
     <div id="player-wrap">
       <video id="video" playsinline></video>
 
@@ -33,9 +31,11 @@
 
       <div id="title-bar">
         <div id="title-text">Video Title</div>
+        <div class="title-spacer"></div>
         <div class="badge-accent" id="hdr-badge">HDR</div>
         <div class="badge-accent" id="codec-badge">AV1</div>
         <div class="badge-accent" id="protocol-badge">DASH</div>
+        <div class="badge-accent show" id="debug-badge">DEBUG</div>
       </div>
 
       <div id="big-play" class="show">

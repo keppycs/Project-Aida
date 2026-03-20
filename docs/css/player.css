@@ -104,8 +104,9 @@ video {
   pointer-events: none;
   z-index: 10;
 }
-#title-bar > :nth-child(2) {
-  margin-left: auto; /* Keeps the title to the left, and the badges to the right. */
+
+.title-spacer {
+  flex: 1; /* Keeps the title to the left, and the badges to the right. */
 }
 
 #player-wrap.ui-visible #title-bar {
@@ -509,11 +510,6 @@ video {
   flex-shrink: 0;
 }
 
-/* ── HDR badge ── */
-#hdr-badge.show {
-  display: block;
-}
-
 /* ── Codec badge ── */
 #codec-badge.show {
   display: block;
@@ -522,6 +518,18 @@ video {
 /* ── Protocol badge ── */
 #protocol-badge.show {
   display: block;
+}
+
+/* ── HDR badge ── */
+#hdr-badge.show {
+  display: block;
+}
+
+/* ── Debug badge ── */
+#debug-badge.show {
+  display: block;
+  color: rgba(255, 0, 0, 14);
+  border: 1px solid rgba(255, 0, 0, 0.8);
 }
 
 /* ── Keyboard shortcut toast ── */
