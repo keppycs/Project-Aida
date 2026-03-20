@@ -1,6 +1,6 @@
 // ── Loader ─────────────────────────────────────────────────────────────────────
-const CDN_BASE   = "https://cdn.keppy.dev/file/ProjectAida";
-const DEFAULT_ID = "00000000000"; // fallback when no ?v= param in URL
+const CDN_BASE = "https://cdn.keppy.dev/file/ProjectAida";
+const DEFAULT_ID = "0"; // fallback when no ?v= param in URL
 
 // Fetches metadata.json from base and passes it to init().
 // Called by each page's own main.js with the appropriate base URL.
