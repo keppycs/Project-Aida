@@ -60,10 +60,11 @@ def main() -> None:
     # ID: use provided YouTube ID or generate from unix timestamp (0-padded to 11 chars)
     video_id  = yt_id if yt_id else f"0{int(time.time())}"
     created_at = int(time.time())
+    ams        = ZoneInfo("Europe/Amsterdam")
 
     logs_dir = root / "logs"
     logs_dir.mkdir(exist_ok=True)
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    timestamp = datetime.now(tz=ams).strftime("%d-%m-%Y_%H-%M-%S_%Z")
     log       = setup_logging(logs_dir / f"{timestamp}_{video_file.stem}.log")
 
     log.info(f"Source          : {video_file}")
