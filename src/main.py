@@ -4,6 +4,7 @@ from zoneinfo import ZoneInfo
 import argparse
 import json
 import math
+import shutil
 import sys
 import time
 
@@ -110,7 +111,6 @@ def main() -> None:
     log.info(f"Pixel format    : {pix_fmt} ({source_bits}-bit source)")
     log.info(f"HDR             : {is_hdr}")
 
-
     cuda_decoder = CUDA_DECODERS.get(source_codec)
     if cuda_decoder:
         log.info(f"CUDA decoder    : {cuda_decoder}")
@@ -120,7 +120,8 @@ def main() -> None:
             "Falling back to software decode — GPU encode still active."
         )
 
-    b2 = make_b2_client() if UPLOAD_TO_B2 else None
+    b2           = make_b2_client() if UPLOAD_TO_B2 else None
+    total_frames = math.ceil(duration * fps)
     transcode_errors: list[str] = []
     encoded_codecs:   list[str] = []
 
@@ -158,7 +159,6 @@ def main() -> None:
 
             log.debug("CMD: " + " ".join(cmd))
 
-            total_frames = math.ceil(duration * fps)
             rc = run_ffmpeg(cmd, out_dir, total_frames, codec_name, log)
 
             if rc != 0:
@@ -226,11 +226,7 @@ def main() -> None:
                 if DELETE_TRANSCODES_AFTER_UPLOAD:
                     log.info("[CLEAN]  Removing local segments")
                     for codec_name in encoded_codecs:
-                        codec_dir = video_dir / codec_name
-                        for f in codec_dir.rglob("*"):
-                            if f.is_file():
-                                f.unlink()
-                        codec_dir.rmdir()
+                        shutil.rmtree(video_dir / codec_name, ignore_errors=True)
             else:
                 log.error("Upload failed.")
                 sys.exit(1)

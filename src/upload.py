@@ -81,7 +81,8 @@ def upload_folder(b2: Any, local_dir: Path, b2_prefix: str, log: logging.Logger,
             if result:
                 failed.append(result)
 
-    print()  # newline after the progress line
+    sys.stdout.write("\n")  # newline after the progress line
+    sys.stdout.flush()
 
     if failed:
         log.error(f"  {len(failed)} file(s) failed: {', '.join(failed)}")

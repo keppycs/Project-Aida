@@ -90,7 +90,8 @@ def run_ffmpeg(
             sys.stdout.flush()
 
     proc.wait()
-    print()  # newline after progress line
+    sys.stdout.write("\n")  # newline after progress line
+    sys.stdout.flush()
 
     if proc.returncode != 0:
         # Surface last 3000 chars of stderr for the error log
