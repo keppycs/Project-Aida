@@ -82,7 +82,9 @@ const tmBtn = document.getElementById("tm-btn");
 let player,
   uiTimer,
   isDragging = false,
-  selectedQuality = -1, // -1 = auto
+  selectedQuality = -1, // -1 = auto, or Shaka track ID (current stream only)
+  selectedHeight = null, // persists across codec/protocol switches; null = auto
+  selectedIsMax = false, // whether the selected rung is the Max variant
   currentMeta = null,
   currentBase = null,
   currentCodec = null, // "AV1" | "H265"
@@ -196,7 +198,8 @@ async function loadSource(meta, base, preferCodec, preferProtocol) {
   codecBadge.classList.add("show");
   protocolBadge.classList.add("show");
 
-  selectedQuality = -1;
+  // Don't reset selectedQuality here — buildQualityMenu will restore it from
+  // selectedHeight/selectedIsMax after trackschanged fires.
   try {
     await player.load(chosen.src, null, chosen.mime);
   } catch (e) {
@@ -598,25 +601,62 @@ function buildQualityMenu() {
     qualMenu.appendChild(item);
   });
 
+  // Restore previously selected quality by matching height + Max status.
+  // Falls back to auto if no match found in the new track list.
+  if (selectedHeight !== null) {
+    const all = tracks.filter((t) => t.height === selectedHeight);
+    let target = null;
+    if (all.length > 1) {
+      // There are two rungs at this height (e.g. 2160p Max and 2160p)
+      target = selectedIsMax ? all[0] : all[1];
+    } else if (all.length === 1) {
+      target = all[0];
+    }
+    if (target) {
+      selectedQuality = target.id;
+      player.configure("abr.enabled", false);
+      player.selectVariantTrack(target, true);
+      qualLabel.textContent = trackLabel(target);
+      qualMenu.querySelectorAll(".menu-item").forEach((item) => {
+        item.classList.toggle("active", parseInt(item.dataset.id) === target.id);
+      });
+      return;
+    }
+    // Height no longer exists in this stream — fall back to auto
+    selectedHeight = null;
+    selectedIsMax = false;
+  }
+
+  selectedQuality = -1;
+  player.configure("abr.enabled", true);
   updateQualityLabel();
 }
 
 function trackLabel(track) {
-  const fps    = Math.round(track.frameRate || currentMeta?.frameRate || 0);
-  const all    = player.getVariantTracks().filter(t => t.height === track.height);
-  const isMax  = all.length > 1 && all[0].id === track.id;
+  const fps = Math.round(track.frameRate || currentMeta?.frameRate || 0);
+  const all = player.getVariantTracks().filter((t) => t.height === track.height);
+  const isMax = all.length > 1 && all[0].id === track.id;
   return `${track.height}p${fps || ""}${isMax ? " Max" : ""}`;
+}
+
+function isMaxTrack(track) {
+  const all = player.getVariantTracks().filter((t) => t.height === track.height);
+  return all.length > 1 && all[0].id === track.id;
 }
 
 function selectQuality(id) {
   selectedQuality = id;
   if (id === -1) {
+    selectedHeight = null;
+    selectedIsMax = false;
     player.configure("abr.enabled", true);
     qualLabel.textContent = "Auto";
   } else {
     player.configure("abr.enabled", false);
     const track = player.getVariantTracks().find((t) => t.id === id);
     if (track) {
+      selectedHeight = track.height;
+      selectedIsMax = isMaxTrack(track);
       player.selectVariantTrack(track, true);
       qualLabel.textContent = trackLabel(track);
     }
@@ -624,13 +664,12 @@ function selectQuality(id) {
   qualMenu.querySelectorAll(".menu-item").forEach((item) => {
     item.classList.toggle("active", parseInt(item.dataset.id) === id);
   });
-  closeAllMenus();
 }
 
 function updateQualityLabel() {
   if (selectedQuality !== -1 || !player) return;
   const active = player.getVariantTracks().find((t) => t.active);
-  const label  = active ? trackLabel(active) : null;
+  const label = active ? trackLabel(active) : null;
   qualLabel.textContent = label ? `Auto · ${label}` : "Auto";
   const autoBadge = document.getElementById("quality-auto-badge");
   if (autoBadge) autoBadge.textContent = label ?? "ABR";
@@ -736,33 +775,41 @@ document.addEventListener("keydown", (e) => {
 if (isMobile) {
   const SWIPE_THRESHOLD = 10; // px before a touch is considered a swipe
 
-  let touchStartX    = 0;
-  let touchStartY    = 0;
-  let touchMoved     = false;
-  let swipeActive    = false;
-  let swipeStartVol  = 0;
+  let touchStartX = 0;
+  let touchStartY = 0;
+  let touchMoved = false;
+  let swipeActive = false;
+  let swipeStartVol = 0;
   let swipeStartTime = 0;
 
   // ── Progress bar touch ──────────────────────────────────────────────────────────
-  progWrap.addEventListener("touchstart", (e) => {
-    e.preventDefault();
-    isDragging = true;
-    const rect = progWrap.getBoundingClientRect();
-    const frac = Math.max(0, Math.min(1, (e.touches[0].clientX - rect.left) / rect.width));
-    applyProgress(frac);
-    showUI();
-  }, { passive: false });
+  progWrap.addEventListener(
+    "touchstart",
+    (e) => {
+      e.preventDefault();
+      isDragging = true;
+      const rect = progWrap.getBoundingClientRect();
+      const frac = Math.max(0, Math.min(1, (e.touches[0].clientX - rect.left) / rect.width));
+      applyProgress(frac);
+      showUI();
+    },
+    { passive: false },
+  );
 
-  progWrap.addEventListener("touchmove", (e) => {
-    e.preventDefault();
-    if (!isDragging) return;
-    const rect = progWrap.getBoundingClientRect();
-    const frac = Math.max(0, Math.min(1, (e.touches[0].clientX - rect.left) / rect.width));
-    applyProgress(frac);
-    curTime.textContent   = fmt(frac * (video.duration || 0));
-    timeTip.textContent   = fmt(frac * (video.duration || 0));
-    timeTip.style.left    = e.touches[0].clientX - rect.left + "px";
-  }, { passive: false });
+  progWrap.addEventListener(
+    "touchmove",
+    (e) => {
+      e.preventDefault();
+      if (!isDragging) return;
+      const rect = progWrap.getBoundingClientRect();
+      const frac = Math.max(0, Math.min(1, (e.touches[0].clientX - rect.left) / rect.width));
+      applyProgress(frac);
+      curTime.textContent = fmt(frac * (video.duration || 0));
+      timeTip.textContent = fmt(frac * (video.duration || 0));
+      timeTip.style.left = e.touches[0].clientX - rect.left + "px";
+    },
+    { passive: false },
+  );
 
   progWrap.addEventListener("touchend", (e) => {
     if (!isDragging) return;
@@ -774,72 +821,95 @@ if (isMobile) {
   });
 
   // ── Video area tap and swipe ───────────────────────────────────────────────
-  wrap.addEventListener("touchstart", (e) => {
-    if (e.target.closest("#controls, .menu-popup")) return;
-    touchStartX   = e.touches[0].clientX;
-    touchStartY   = e.touches[0].clientY;
-    touchMoved    = false;
-    swipeActive   = false;
-    swipeStartVol = video.volume;
-    swipeStartTime = video.currentTime;
-  }, { passive: true });
+  wrap.addEventListener(
+    "touchstart",
+    (e) => {
+      if (e.target.closest("#controls, .menu-popup")) return;
+      touchStartX = e.touches[0].clientX;
+      touchStartY = e.touches[0].clientY;
+      touchMoved = false;
+      swipeActive = false;
+      swipeStartVol = video.volume;
+      swipeStartTime = video.currentTime;
+    },
+    { passive: true },
+  );
 
-  wrap.addEventListener("touchmove", (e) => {
-    if (e.target.closest("#controls, .menu-popup, #progress-wrap")) return;
-    const dx  = e.touches[0].clientX - touchStartX;
-    const dy  = e.touches[0].clientY - touchStartY;
-    const adx = Math.abs(dx);
-    const ady = Math.abs(dy);
+  wrap.addEventListener(
+    "touchmove",
+    (e) => {
+      if (e.target.closest("#controls, .menu-popup, #progress-wrap")) return;
+      const dx = e.touches[0].clientX - touchStartX;
+      const dy = e.touches[0].clientY - touchStartY;
+      const adx = Math.abs(dx);
+      const ady = Math.abs(dy);
 
-    if (adx > SWIPE_THRESHOLD || ady > SWIPE_THRESHOLD) touchMoved = true;
+      if (adx > SWIPE_THRESHOLD || ady > SWIPE_THRESHOLD) touchMoved = true;
 
-    // Vertical swipe only (ignore horizontal to avoid fighting scroll)
-    if (ady > SWIPE_THRESHOLD && ady > adx * 1.5) {
-      e.preventDefault();
-      swipeActive = true;
-      const rect      = wrap.getBoundingClientRect();
-      const rightHalf = touchStartX > rect.left + rect.width / 2;
+      // Vertical swipe only (ignore horizontal to avoid fighting scroll)
+      if (ady > SWIPE_THRESHOLD && ady > adx * 1.5) {
+        e.preventDefault();
+        swipeActive = true;
+        const rect = wrap.getBoundingClientRect();
+        const rightHalf = touchStartX > rect.left + rect.width / 2;
 
-      if (rightHalf) {
-        // Right half → volume: 200px = full range
-        const newVol = Math.max(0, Math.min(1, swipeStartVol + (-dy / 200)));
-        video.volume = newVol;
-        showToast(`Volume ${Math.round(newVol * 100)}%`);
-      } else {
-        // Left half → seek: 150px = 30s
-        const delta   = (-dy / 150) * 30;
-        const newTime = Math.max(0, Math.min(video.duration, swipeStartTime + delta));
-        video.currentTime = newTime;
-        const secs = Math.round(Math.abs(delta));
-        flashSeek(delta >= 0 ? `+${secs}s` : `−${secs}s`);
+        if (rightHalf) {
+          // Right half → volume: 200px = full range
+          const newVol = Math.max(0, Math.min(1, swipeStartVol + -dy / 200));
+          video.volume = newVol;
+          showToast(`Volume ${Math.round(newVol * 100)}%`);
+        } else {
+          // Left half → seek: 150px = 30s
+          const delta = (-dy / 150) * 30;
+          const newTime = Math.max(0, Math.min(video.duration, swipeStartTime + delta));
+          video.currentTime = newTime;
+          const secs = Math.round(Math.abs(delta));
+          flashSeek(delta >= 0 ? `+${secs}s` : `−${secs}s`);
+        }
+        showUI();
       }
-      showUI();
-    }
-  }, { passive: false });
+    },
+    { passive: false },
+  );
 
-  wrap.addEventListener("touchend", (e) => {
-    if (e.target.closest("#controls, .menu-popup, #progress-wrap")) return;
-    if (swipeActive) { swipeActive = false; showUI(); return; }
-    if (touchMoved)  { showUI(); return; }
+  wrap.addEventListener(
+    "touchend",
+    (e) => {
+      if (e.target.closest("#controls, .menu-popup, #progress-wrap")) return;
+      if (swipeActive) {
+        swipeActive = false;
+        showUI();
+        return;
+      }
+      if (touchMoved) {
+        showUI();
+        return;
+      }
 
-    // Clean tap on video area
-    const uiVisible = wrap.classList.contains("ui-visible");
-    if (!uiVisible) {
-      // First tap: show UI, don't toggle play
-      showUI();
-    } else if (isAnyMenuOpen()) {
-      // Menu open: close it, keep UI
-      closeAllMenus();
-      showUI();
-    } else {
-      // UI visible, no menu: toggle play
-      togglePlay();
-      showUI();
-    }
-  }, { passive: true });
+      // Clean tap on video area
+      const uiVisible = wrap.classList.contains("ui-visible");
+      if (!uiVisible) {
+        // First tap: show UI, don't toggle play
+        showUI();
+      } else if (isAnyMenuOpen()) {
+        // Menu open: close it, keep UI
+        closeAllMenus();
+        showUI();
+      } else {
+        // UI visible, no menu: toggle play
+        togglePlay();
+        showUI();
+      }
+    },
+    { passive: true },
+  );
 
   // Reset UI timer whenever any control is interacted with
-  wrap.addEventListener("touchend", (e) => {
-    if (e.target.closest(".ctrl-btn, .menu-toggle, .menu-item")) showUI();
-  }, { passive: true });
+  wrap.addEventListener(
+    "touchend",
+    (e) => {
+      if (e.target.closest(".ctrl-btn, .menu-toggle, .menu-item")) showUI();
+    },
+    { passive: true },
+  );
 }
