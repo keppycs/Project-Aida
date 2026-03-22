@@ -230,7 +230,6 @@ def main() -> None:
     log.info(f"[METADATA]     Written {meta_local}")
 
     # Update local index.json always, so you have a catalogue regardless of upload
-    ams = ZoneInfo("Europe/Amsterdam")
     date_str = datetime.fromtimestamp(created_at, tz=ams).strftime("%d-%m-%Y %H:%M:%S %Z")
     entry      = {"id": video_id, "date": date_str, "title": video_file.stem}
     index_path = root / "logs" / "index.json"
