@@ -1,7 +1,9 @@
 from pathlib import Path
+from datetime import datetime
 from fractions import Fraction
 from typing import Optional
 import logging
+import re
 import subprocess
 import json
 import sys
@@ -17,6 +19,8 @@ def setup_logging(log_path: Path) -> logging.Logger:
     fh.setFormatter(fmt)
     ch = logging.StreamHandler(sys.stdout)
     ch.setFormatter(fmt)
+    fh.setLevel(logging.DEBUG)   # file gets everything
+    ch.setLevel(logging.INFO)    # console gets INFO+ only (upload per-file detail is DEBUG)
     log.addHandler(fh)
     log.addHandler(ch)
     log.propagate = False
@@ -45,6 +49,55 @@ def parse_framerate(r_frame_rate: str) -> float:
 
 def is_already_encoded(out_dir: Path) -> bool:
     return (out_dir / "manifest.mpd").exists() and any(out_dir.glob("*.fmp4"))
+
+
+def run_ffmpeg(
+    cmd: list,
+    cwd: Path,
+    total_frames: int,
+    codec_name: str,
+    log: logging.Logger,
+) -> int:
+    """Run an ffmpeg command, streaming a live progress line to the terminal.
+
+    Per-line stderr is logged at DEBUG (goes to log file only).
+    Returns the process return code.
+    """
+    frame_re = re.compile(r"frame=\s*(\d+)")
+
+    proc = subprocess.Popen(
+        cmd,
+        stderr=subprocess.PIPE,
+        stdout=subprocess.DEVNULL,
+        text=True,
+        cwd=cwd,
+    )
+
+    stderr_lines: list[str] = []
+    last_frame = 0
+
+    for line in proc.stderr:  # type: ignore[union-attr]
+        line = line.rstrip()
+        if "Opening '" not in line:
+            log.debug(line)
+        stderr_lines.append(line)
+        m = frame_re.search(line)
+        if m:
+            last_frame = int(m.group(1))
+            pct = min(100, round(last_frame / total_frames * 100)) if total_frames else 0
+            ts  = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            sys.stdout.write(f"\r{ts}  INFO      [ENCODE]       {codec_name}  {last_frame}/{total_frames} frames  {pct}%")
+            sys.stdout.flush()
+
+    proc.wait()
+    print()  # newline after progress line
+
+    if proc.returncode != 0:
+        # Surface last 3000 chars of stderr for the error log
+        tail = "\n".join(stderr_lines)[-3000:]
+        log.error(f"[FAIL ENCODE]  {codec_name}\n{tail}")
+
+    return proc.returncode
 
 
 def build_cmd(

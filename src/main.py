@@ -4,7 +4,6 @@ from zoneinfo import ZoneInfo
 import argparse
 import json
 import math
-import subprocess
 import sys
 import time
 
@@ -13,7 +12,7 @@ from config import (
     SEG_DURATION, B2_BUCKET,
     UPLOAD_TO_B2, DELETE_TRANSCODES_AFTER_UPLOAD,
 )
-from transcode import setup_logging, probe_video, parse_framerate, is_already_encoded, build_cmd
+from transcode import setup_logging, probe_video, parse_framerate, is_already_encoded, build_cmd, run_ffmpeg
 from manifest import build_hevc_codec_strings, patch_hls_video_range, patch_hls_hdr, patch_dash_hdr
 from upload import make_b2_client, is_already_uploaded, upload_folder
 
@@ -121,14 +120,12 @@ def main() -> None:
             "Falling back to software decode — GPU encode still active."
         )
 
-    b2               = make_b2_client()
+    b2 = make_b2_client() if UPLOAD_TO_B2 else None
     transcode_errors: list[str] = []
-    upload_errors:    list[str] = []
     encoded_codecs:   list[str] = []
 
     for codec_name, (encoder, variants) in CODECS.items():
-        out_dir   = root / "docs" / "debug" / video_id / codec_name
-        b2_prefix = f"{video_id}/{codec_name}"
+        out_dir = root / "docs" / "debug" / video_id / codec_name
 
         out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -161,15 +158,10 @@ def main() -> None:
 
             log.debug("CMD: " + " ".join(cmd))
 
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                cwd=out_dir,
-            )
+            total_frames = math.ceil(duration * fps)
+            rc = run_ffmpeg(cmd, out_dir, total_frames, codec_name, log)
 
-            if result.returncode != 0:
-                log.error(f"[FAIL ENCODE]  {codec_name}\n{result.stderr[-3000:]}")
+            if rc != 0:
                 transcode_errors.append(codec_name)
                 continue
 
@@ -185,26 +177,6 @@ def main() -> None:
                 patch_dash_hdr(out_dir / "manifest.mpd", codec_strings, log)
 
         encoded_codecs.append(codec_name)
-
-        if not UPLOAD_TO_B2:
-            log.info(f"[SKIP UPLOAD]  {codec_name} — UPLOAD_TO_B2 is disabled.")
-            continue
-
-        if is_already_uploaded(b2, B2_BUCKET, b2_prefix, log):
-            log.info(f"[SKIP UPLOAD]  {codec_name} — already exists in B2.")
-            continue
-
-        log.info(f"[START UPLOAD] {codec_name} → b2://{B2_BUCKET}/{b2_prefix}/")
-        ok = upload_folder(b2, out_dir, b2_prefix, log)
-
-        if not ok:
-            upload_errors.append(codec_name)
-        elif DELETE_TRANSCODES_AFTER_UPLOAD:
-            log.info(f"[CLEAN]  Removing local segments for {codec_name}")
-            for f in out_dir.iterdir():
-                if f.is_file():
-                    f.unlink()
-            out_dir.rmdir()
 
     if transcode_errors:
         log.error(f"Transcode failures : {', '.join(transcode_errors)}")
@@ -242,34 +214,30 @@ def main() -> None:
     index_path.write_text(json.dumps(index, indent=2), encoding="utf-8")
     log.info(f"[INDEX]        Updated logs/index.json ({len(index)} entries)")
 
-    if UPLOAD_TO_B2 and not upload_errors:
-        # Upload metadata.json
-        try:
-            b2.upload_file(
-                str(meta_local), B2_BUCKET, f"{video_id}/metadata.json",
-                ExtraArgs={"ContentType": "application/json"},
-            )
-            log.info(f"[METADATA]     Uploaded metadata.json → b2://{B2_BUCKET}/{video_id}/")
-        except Exception as e:
-            log.error(f"[METADATA]     Failed to upload metadata.json: {e}")
-
-        # Upload index.json to bucket root
-        try:
-            b2.upload_file(
-                str(index_path), B2_BUCKET, "index.json",
-                ExtraArgs={"ContentType": "application/json"},
-            )
-            log.info(f"[INDEX]        Uploaded index.json → b2://{B2_BUCKET}/index.json")
-        except Exception as e:
-            log.error(f"[INDEX]        Failed to upload index.json: {e}")
-
-    if upload_errors:
-        log.error(f"Upload failures    : {', '.join(upload_errors)}")
-        sys.exit(1)
-    elif UPLOAD_TO_B2:
+    if UPLOAD_TO_B2:
+        assert b2 is not None
+        video_dir = root / "docs" / "debug" / video_id
+        if is_already_uploaded(b2, B2_BUCKET, video_id, log):
+            log.info(f"[SKIP UPLOAD]  {video_id} — already exists in B2.")
+        else:
+            log.info(f"[START UPLOAD] {video_id} → b2://{B2_BUCKET}/{video_id}/")
+            ok = upload_folder(b2, video_dir, video_id, log)
+            if ok:
+                if DELETE_TRANSCODES_AFTER_UPLOAD:
+                    log.info("[CLEAN]  Removing local segments")
+                    for codec_name in encoded_codecs:
+                        codec_dir = video_dir / codec_name
+                        for f in codec_dir.rglob("*"):
+                            if f.is_file():
+                                f.unlink()
+                        codec_dir.rmdir()
+            else:
+                log.error("Upload failed.")
+                sys.exit(1)
         log.info("All variants transcoded and uploaded.")
     else:
-        log.info("All variants transcoded. (upload disabled)")
+        log.info("[SKIP UPLOAD]  UPLOAD_TO_B2 is disabled.")
+        log.info("All variants transcoded.")
 
 
 if __name__ == "__main__":

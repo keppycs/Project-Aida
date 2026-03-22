@@ -72,8 +72,6 @@ ENCODE_SETTINGS_FAST = {
     "audio_bitrate":     "128k",
 }
 
-ENCODE_SETTINGS = ENCODE_SETTINGS_FAST if FAST_TRANSCODE else ENCODE_SETTINGS_PRODUCTION
-
 # ── Ladder ─────────────────────────────────────────────────────────────────────
 # Each entry: (label, resolution, cq, maxrate_mbps)
 # maxrate is enforced as a ceiling — CQ drives quality, maxrate caps segment size.
@@ -112,15 +110,6 @@ VARIANTS_H265_FAST = [
     ("720p",  "1280:720",  50, 1),
 ]
 
-VARIANTS_AV1  = VARIANTS_AV1_FAST  if FAST_TRANSCODE else VARIANTS_AV1_PRODUCTION
-VARIANTS_H265 = VARIANTS_H265_FAST if FAST_TRANSCODE else VARIANTS_H265_PRODUCTION
-
-CODECS: dict[str, tuple[str, list]] = {
-    #          encoder         variant ladder
-    "AV1":  ("av1_nvenc",  VARIANTS_AV1),
-    "H265": ("hevc_nvenc", VARIANTS_H265),
-}
-
 CUDA_DECODERS = {
     "av1":  "av1_cuvid",
     "hevc": "hevc_cuvid",
@@ -133,11 +122,22 @@ VIDEO_EXTENSIONS = {".mp4", ".mov", ".mkv", ".mxf", ".mts", ".m2ts"}
 SEG_DURATION     = 2
 
 # config_local.py is gitignored — override any flag defined above this line.
-# The HEVC tables below cannot be overridden as they load after this import.
 try:
     from config_local import *  # noqa: F401, F403
 except ImportError:
     pass
+
+# ── Derived settings — resolved after config_local overrides ───────────────────────
+ENCODE_SETTINGS = ENCODE_SETTINGS_FAST if FAST_TRANSCODE else ENCODE_SETTINGS_PRODUCTION
+
+VARIANTS_AV1  = VARIANTS_AV1_FAST  if FAST_TRANSCODE else VARIANTS_AV1_PRODUCTION
+VARIANTS_H265 = VARIANTS_H265_FAST if FAST_TRANSCODE else VARIANTS_H265_PRODUCTION
+
+CODECS: dict[str, tuple[str, list]] = {
+    #          encoder         variant ladder
+    "AV1":  ("av1_nvenc",  VARIANTS_AV1),
+    "H265": ("hevc_nvenc", VARIANTS_H265),
+}
 
 # ── HEVC level/tier bitrate limits ────────────────────────────────────────────
 # Source: https://en.wikipedia.org/wiki/High_Efficiency_Video_Coding_tiers_and_levels
