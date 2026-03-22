@@ -15,8 +15,7 @@ def _require_env(key: str) -> str:
 B2_KEY_ID   = _require_env("B2_KEY_ID")
 B2_APP_KEY  = _require_env("B2_APP_KEY")
 B2_BUCKET   = _require_env("B2_BUCKET")
-B2_REGION   = _require_env("B2_REGION")
-B2_ENDPOINT = _require_env("B2_ENDPOINT")
+B2_ENDPOINT = _require_env("B2_ENDPOINT")  # region is embedded in the endpoint URL
 
 # Set to True to upload encoded segments to B2 after encoding.
 # Disable when testing locally to skip the upload step entirely.
@@ -133,6 +132,8 @@ HDR_TRANSFERS    = {"smpte2084", "arib-std-b67", "smpte428", "bt2020-10", "bt202
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".mkv", ".mxf", ".mts", ".m2ts"}
 SEG_DURATION     = 2
 
+# config_local.py is gitignored — override any flag defined above this line.
+# The HEVC tables below cannot be overridden as they load after this import.
 try:
     from config_local import *  # noqa: F401, F403
 except ImportError:
