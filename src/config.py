@@ -76,7 +76,7 @@ ENCODE_SETTINGS_FAST = {
 # Each entry: (label, resolution, cq, maxrate_mbps)
 # maxrate is enforced as a ceiling — CQ drives quality, maxrate caps segment size.
 # bufsize is always 2× maxrate (2-second window, aligned to seg duration).
-# 2160p Max has a high cap to let quality breathe — in practice CQ will sit well below it.
+
 
 VARIANTS_AV1_PRODUCTION = [
     ("2160p_Max", "3840:2160", 21, 60),
