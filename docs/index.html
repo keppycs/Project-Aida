@@ -3,14 +3,99 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Project Aida - Under Construction</title>
+    <title>Project Aida</title>
     <link rel="icon" type="image/x-icon" href="assets/favicons/index.svg" />
+
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
+
     <link rel="stylesheet" href="css/index.css" />
+    <script defer src="js/index.js"></script>
   </head>
   <body>
-    <div>
-      <h1>🚧 THE HOME PAGE IS BEING WORKED ON 🚧</h1>
-      <h3>come back later 😇</h3>
+    <!-- Logo / Home link -->
+    <div id="logo-link">
+      <a href="/">
+        <img src="assets/favicons/index.svg" alt="Project Aida" />
+      </a>
     </div>
+
+    <main>
+      <!-- Search bar -->
+      <div id="search-container">
+        <div id="search-wrap">
+          <svg
+            class="search-icon"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          >
+            <circle cx="11" cy="11" r="8" />
+            <path d="m21 21-4.35-4.35" />
+          </svg>
+          <input type="text" id="search-input" placeholder="Search videos..." autocomplete="off" />
+        </div>
+      </div>
+
+      <!-- Hero section -->
+      <section id="hero">
+        <div id="hero-skeleton" class="skeleton-hero">
+          <div class="skeleton-thumbnail"></div>
+          <div class="skeleton-content">
+            <div class="skeleton-title"></div>
+            <div class="skeleton-desc"></div>
+            <div class="skeleton-desc"></div>
+            <div class="skeleton-meta"></div>
+          </div>
+        </div>
+        <div id="hero-content" style="display: none">
+          <div class="hero-thumbnail">
+            <img id="hero-img" src="" alt="" />
+            <div class="hero-overlay">
+              <a id="hero-play" href="" class="hero-play-btn">
+                <svg viewBox="0 0 72 72" fill="none">
+                  <circle
+                    cx="36"
+                    cy="36"
+                    r="35"
+                    fill="rgba(0,0,0,.55)"
+                    stroke="rgba(255,255,255,.25)"
+                    stroke-width="1"
+                  />
+                  <polygon points="28,20 56,36 28,52" fill="white" />
+                </svg>
+              </a>
+            </div>
+          </div>
+          <div class="hero-info">
+            <h1 id="hero-title"></h1>
+            <p id="hero-desc"></p>
+            <div class="hero-meta">
+              <span id="hero-date"></span>
+              <span id="hero-duration"></span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Video grid -->
+      <section id="videos">
+        <div id="videos-grid"></div>
+      </section>
+
+      <!-- No results message -->
+      <div
+        id="no-results"
+        style="display: none; text-align: center; padding: 40px; color: var(--text-dim)"
+      >
+        <p>No videos found.</p>
+      </div>
+    </main>
   </body>
 </html>
