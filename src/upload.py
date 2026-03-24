@@ -92,6 +92,18 @@ def upload_folder(b2: Any, local_dir: Path, b2_prefix: str, log: logging.Logger,
     return True
 
 
+def upload_index(b2: Any, index_path: Path, log: logging.Logger) -> None:
+    """Upload index.json to the bucket root for the public homepage."""
+    try:
+        b2.upload_file(
+            str(index_path), B2_BUCKET, "index.json",
+            ExtraArgs={"ContentType": "application/json"},
+        )
+        log.info(f"[INDEX]        Uploaded index.json → b2://{B2_BUCKET}/index.json")
+    except Exception as e:
+        log.error(f"[INDEX]        Failed to upload index.json: {e}")
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Upload a video ID folder to the Project Aida B2 bucket.")
     parser.add_argument("folder", help="Path to the video ID folder (e.g. docs/debug/00000000000). All contents uploaded recursively.")

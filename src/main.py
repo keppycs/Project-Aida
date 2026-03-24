@@ -15,7 +15,7 @@ from config import (
 )
 from transcode import setup_logging, probe_video, parse_framerate, is_already_encoded, build_cmd, run_ffmpeg
 from manifest import build_hevc_codec_strings, patch_hls_video_range, patch_hls_hdr, patch_dash_hdr
-from upload import make_b2_client, is_already_uploaded, upload_folder
+from upload import make_b2_client, is_already_uploaded, upload_folder, upload_index
 
 
 def main() -> None:
@@ -37,6 +37,14 @@ def main() -> None:
     parser.add_argument(
         "-id", dest="id_flag", default=None, metavar="ID",
         help="YouTube video ID (named alternative to positional).",
+    )
+    parser.add_argument(
+        "-desc", "--description", dest="description", default="", metavar="TEXT",
+        help="Short description shown on the homepage.",
+    )
+    parser.add_argument(
+        "-tags", "--tags", dest="tags", default="", metavar="TAG1,TAG2",
+        help="Comma-separated tags for filtering on the homepage.",
     )
     args = parser.parse_args()
 
@@ -202,8 +210,22 @@ def main() -> None:
     log.info(f"[METADATA]     Written {meta_local}")
 
     # Update local index.json always, so you have a catalogue regardless of upload
-    date_str = datetime.fromtimestamp(created_at, tz=ams).strftime("%d-%m-%Y %H:%M:%S %Z")
-    entry      = {"id": video_id, "date": date_str, "title": video_file.stem}
+    date_str    = datetime.fromtimestamp(created_at, tz=ams).strftime("%d-%m-%Y %H:%M:%S %Z")
+    tags_list   = [t.strip() for t in args.tags.split(",") if t.strip()]
+    entry = {
+        "id":          video_id,
+        "title":       video_file.stem,
+        "description": args.description,
+        "tags":        tags_list,
+        "date":        date_str,
+        "createdAt":   created_at,
+        "duration":    round(duration, 3),
+        "width":       source_width,
+        "height":      source_height,
+        "frameRate":   round(fps, 3),
+        "hdr":         is_hdr,
+        "codecs":      encoded_codecs,
+    }
     index_path = root / "logs" / "index.json"
     try:
         index = json.loads(index_path.read_text(encoding="utf-8")) if index_path.exists() else []
@@ -223,6 +245,7 @@ def main() -> None:
             log.info(f"[START UPLOAD] {video_id} → b2://{B2_BUCKET}/{video_id}/")
             ok = upload_folder(b2, video_dir, video_id, log)
             if ok:
+                upload_index(b2, index_path, log)
                 if DELETE_TRANSCODES_AFTER_UPLOAD:
                     log.info("[CLEAN]  Removing local segments")
                     for codec_name in encoded_codecs:
