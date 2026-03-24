@@ -37,20 +37,27 @@ async function load() {
 }
 
 function renderHero(video) {
-  document.getElementById("hero-img").src = `${CDN_BASE}/${video.id}/thumb.jpg`;
+  heroContent.href = `/watch?v=${video.id}`;
+  document.getElementById("hero-img").src = `${CDN_BASE}/${video.id}/thumbnail.png`;
+  document.getElementById("hero-img").alt = video.title;
   document.getElementById("hero-title").textContent = video.title;
-  document.getElementById("hero-desc").textContent =
-    video.description || "No description available.";
-  document.getElementById("hero-date").textContent = formatDate(video.date);
-  document.getElementById("hero-duration").textContent = formatDuration(video.duration);
-  document.getElementById("hero-play").href = `/watch?v=${video.id}`;
+  document.getElementById("hero-desc").textContent = video.description || "";
+  document.getElementById("hero-date").textContent = formatDate(video.createdAt);
+  const dur = formatDuration(video.duration);
+  const heroDur = document.getElementById("hero-duration");
+  heroDur.textContent = dur;
+  heroDur.style.display = dur ? "" : "none";
 
   heroSkeleton.style.display = "none";
-  heroContent.style.display = "grid";
+  heroContent.style.display = "block";
 }
 
 function renderGrid(videos) {
-  videosGrid.innerHTML = videos.map((v) => createCardHTML(v)).join("");
+  // Skip the first entry — it's already shown in the hero
+  videosGrid.innerHTML = videos
+    .slice(1)
+    .map((v) => createCardHTML(v))
+    .join("");
 }
 
 function createCardHTML(video) {
@@ -58,20 +65,12 @@ function createCardHTML(video) {
     <a href="/watch?v=${video.id}" class="video-card">
       <div class="video-card-thumbnail">
         <img src="${CDN_BASE}/${video.id}/thumb.jpg" alt="${escapeHtml(video.title)}" loading="lazy" />
-        <div class="video-card-overlay">
-          <div class="video-card-play">
-            <svg viewBox="0 0 72 72" fill="none">
-              <circle cx="36" cy="36" r="35" fill="rgba(0,0,0,.55)" stroke="rgba(255,255,255,.25)" stroke-width="1" />
-              <polygon points="28,20 56,36 28,52" fill="white" />
-            </svg>
-          </div>
-        </div>
       </div>
       <div class="video-card-content">
         <div class="video-card-title">${escapeHtml(video.title)}</div>
         <div class="video-card-meta">
-          <span>${formatDate(video.date)}</span>
-          <span>${formatDuration(video.duration)}</span>
+          <span>${formatDate(video.createdAt)}</span>
+          ${video.duration ? `<span>${formatDuration(video.duration)}</span>` : ""}
         </div>
       </div>
     </a>
@@ -117,10 +116,9 @@ searchInput.addEventListener("input", (e) => {
 });
 
 // ── Utilities ──
-function formatDate(dateStr) {
-  const d = new Date(dateStr);
-  return d.toLocaleDateString("en-US", {
-    month: "short",
+function formatDate(ts) {
+  return new Date(ts * 1000).toLocaleDateString("en-US", {
+    month: "long",
     day: "numeric",
     year: "numeric",
   });
@@ -130,7 +128,7 @@ function formatDuration(seconds) {
   if (!seconds) return "";
   const h = Math.floor(seconds / 3600);
   const m = Math.floor((seconds % 3600) / 60);
-  const s = seconds % 60;
+  const s = Math.floor(seconds % 60);
   if (h) return `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
   return `${m}:${String(s).padStart(2, "0")}`;
 }
