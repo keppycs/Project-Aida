@@ -20,6 +20,7 @@
   --mono: "JetBrains Mono", monospace;
   --ease: cubic-bezier(0.4, 0, 0.2, 1);
   --shadow: 0 8px 32px rgba(0, 0, 0, 0.8);
+  --anim-time: 0.2s;
 }
 
 html,
@@ -52,12 +53,12 @@ body {
   height: 48px;
   border-radius: var(--radius);
   transition:
-    background 0.15s,
-    transform 0.15s;
+    background var(--anim-time),
+    transform var(--anim-time);
 }
 #logo-link a:hover {
   background: rgba(255, 255, 255, 0.08);
-  transform: scale(1.05);
+  transform: scale(1.02);
 }
 #logo-link img {
   width: 28px;
@@ -70,7 +71,7 @@ main {
   max-width: 1200px;
   display: flex;
   flex-direction: column;
-  gap: 48px;
+  gap: 20px;
 }
 
 /* ── Search ── */
@@ -133,7 +134,7 @@ main {
   background: var(--surface);
   text-decoration: none;
   color: var(--text);
-  border: 1px solid rgba(255, 255, 255, 0.07);
+  border: 2px solid rgba(255, 255, 255, 0.07);
   transition: border-color 0.2s var(--ease);
 }
 #hero-content:hover {
@@ -144,10 +145,10 @@ main {
   height: 100%;
   object-fit: cover;
   display: block;
-  transition: transform 0.4s var(--ease);
+  transition: transform var(--anim-time) var(--ease);
 }
 #hero-content:hover img {
-  transform: scale(1.01);
+  transform: scale(1.02);
 }
 
 .hero-info {
@@ -167,13 +168,13 @@ main {
   gap: 10px;
 }
 #hero-title {
-  font-size: 28px;
+  font-size: 2rem;
   font-weight: 600;
   line-height: 1.2;
   text-shadow: 0 2px 8px rgba(0, 0, 0, 0.6);
 }
 #hero-desc {
-  font-size: 14px;
+  font-size: 1.1rem;
   line-height: 1.5;
   color: rgba(255, 255, 255, 0.75);
   max-width: 640px;
@@ -181,7 +182,7 @@ main {
 }
 .hero-meta {
   display: flex;
-  font-size: 12px;
+  font-size: 1rem;
   color: rgba(255, 255, 255, 0.55);
   font-family: var(--mono);
 }
@@ -268,7 +269,7 @@ main {
 #videos-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-  gap: 24px;
+  gap: 20px;
 }
 
 .video-card {
@@ -279,13 +280,15 @@ main {
   background: var(--surface);
   border: 1px solid rgba(255, 255, 255, 0.07);
   transition:
-    transform 0.15s var(--ease),
-    border-color 0.15s var(--ease);
+    transform var(--anim-time) var(--ease),
+    border-color var(--anim-time) var(--ease),
+    background var(--anim-time) var(--ease);
   text-decoration: none;
   color: var(--text);
 }
 .video-card:hover {
   border-color: rgba(232, 255, 71, 0.2);
+  background: rgba(232, 255, 71, 0.2);
 }
 
 .video-card-thumbnail {
@@ -298,41 +301,10 @@ main {
   width: 100%;
   height: 100%;
   object-fit: cover;
-  transition: transform 0.25s var(--ease);
+  transition: transform var(--anim-time) var(--ease);
 }
 .video-card:hover .video-card-thumbnail img {
-  transform: scale(1.05);
-}
-
-.video-card-overlay {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: rgba(0, 0, 0, 0);
-  transition: background 0.25s var(--ease);
-}
-.video-card:hover .video-card-overlay {
-  background: rgba(0, 0, 0, 0.3);
-}
-.video-card-play {
-  width: 48px;
-  height: 48px;
-  opacity: 0;
-  transform: scale(0.7);
-  transition:
-    opacity 0.25s var(--ease),
-    transform 0.25s var(--ease);
-}
-.video-card:hover .video-card-play {
-  opacity: 1;
-  transform: scale(1);
-}
-.video-card-play svg {
-  width: 100%;
-  height: 100%;
-  filter: drop-shadow(0 2px 8px rgba(0, 0, 0, 0.6));
+  transform: scale(1.02);
 }
 
 .video-card-content {
@@ -344,7 +316,7 @@ main {
 }
 
 .video-card-title {
-  font-size: 14px;
+  font-size: 1rem;
   font-weight: 500;
   line-height: 1.4;
   display: -webkit-box;
@@ -357,7 +329,7 @@ main {
 .video-card-meta {
   display: flex;
   gap: 8px;
-  font-size: 11px;
+  font-size: 0.8rem;
   color: var(--text-dim);
   font-family: var(--mono);
 }

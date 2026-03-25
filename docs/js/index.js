@@ -24,8 +24,8 @@ async function load() {
       return;
     }
 
-    // Sort chronologically (newest first)
-    allVideos.sort((a, b) => new Date(b.date) - new Date(a.date));
+    // Sort chronologically (newest first) by createdAt
+    allVideos.sort((a, b) => b.createdAt - a.createdAt);
 
     renderHero(allVideos[0]);
     renderGrid(allVideos);
@@ -38,11 +38,16 @@ async function load() {
 
 function renderHero(video) {
   heroContent.href = `/watch?v=${video.id}`;
-  document.getElementById("hero-img").src = `${CDN_BASE}/${video.id}/thumbnail.png`;
-  document.getElementById("hero-img").alt = video.title;
+
+  const heroImg = document.getElementById("hero-img");
+  const file = video.hdr ? "thumbnail_hdr.avif" : "thumbnail_sdr.webp";
+  const alt = `${escapeHtml(video.title)} thumbnail`;
+  heroImg.innerHTML = `<img src="${CDN_BASE}/${video.id}/${file}" alt="${alt}">`;
+
   document.getElementById("hero-title").textContent = video.title;
   document.getElementById("hero-desc").textContent = video.description || "";
   document.getElementById("hero-date").textContent = formatDate(video.createdAt);
+
   const dur = formatDuration(video.duration);
   const heroDur = document.getElementById("hero-duration");
   heroDur.textContent = dur;
@@ -64,7 +69,7 @@ function createCardHTML(video) {
   return `
     <a href="/watch?v=${video.id}" class="video-card">
       <div class="video-card-thumbnail">
-        <img src="${CDN_BASE}/${video.id}/thumb.jpg" alt="${escapeHtml(video.title)}" loading="lazy" />
+        <img src="${CDN_BASE}/${video.id}/${video.hdr ? "thumbnail_hdr_720p.avif" : "thumbnail_sdr_720p.webp"}" alt="${escapeHtml(video.title)} thumbnail" loading="lazy" />
       </div>
       <div class="video-card-content">
         <div class="video-card-title">${escapeHtml(video.title)}</div>
