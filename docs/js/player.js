@@ -223,12 +223,19 @@ async function init(meta, base) {
   if (isMobile) document.getElementById("vol-cluster").style.display = "none";
 
   player.configure({
-    streaming: { bufferingGoal: 12, rebufferingGoal: 2, bufferBehind: 30, safeSeekOffset: 2 },
+    streaming: {
+      bufferingGoal: 20,
+      rebufferingGoal: 3,
+      bufferBehind: 20,
+      safeSeekOffset: 2,
+      lowLatencyMode: false,
+    },
     abr: {
       enabled: true,
-      defaultBandwidthEstimate: 50000000,
+      defaultBandwidthEstimate: 20_000_000,
       bandwidthUpgradeTarget: 0.85,
       bandwidthDowngradeTarget: 0.95,
+      switchInterval: 4,
     },
   });
 
