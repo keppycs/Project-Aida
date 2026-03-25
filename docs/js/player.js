@@ -84,7 +84,6 @@ let player,
   isDragging = false,
   selectedQuality = -1, // -1 = auto, or Shaka track ID (current stream only)
   selectedHeight = null, // persists across codec/protocol switches; null = auto
-  selectedIsMax = false, // whether the selected rung is the Max variant
   currentMeta = null,
   currentBase = null,
   currentCodec = null, // "AV1" | "H265"
@@ -198,8 +197,6 @@ async function loadSource(meta, base, preferCodec, preferProtocol) {
   codecBadge.classList.add("show");
   protocolBadge.classList.add("show");
 
-  // Don't reset selectedQuality here — buildQualityMenu will restore it from
-  // selectedHeight/selectedIsMax after trackschanged fires.
   try {
     await player.load(chosen.src, null, chosen.mime);
   } catch (e) {
@@ -577,12 +574,6 @@ function buildQualityMenu() {
   autoItem.addEventListener("click", () => selectQuality(-1));
   qualMenu.appendChild(autoItem);
 
-  const heightCount = {};
-  tracks.forEach((t) => {
-    heightCount[t.height] = (heightCount[t.height] || 0) + 1;
-  });
-  const heightSeen = {};
-
   tracks.forEach((track) => {
     const item = document.createElement("button");
     item.className = "menu-item";
@@ -592,11 +583,7 @@ function buildQualityMenu() {
     // Fall back to meta.frameRate — HLS manifests lack FRAME-RATE attributes
     // so Shaka only populates track.frameRate for some tracks.
     const fps = Math.round(track.frameRate || currentMeta?.frameRate || 0) || "";
-
-    heightSeen[track.height] = (heightSeen[track.height] || 0) + 1;
-    const isDupe = heightCount[track.height] > 1;
-    const isFirst = heightSeen[track.height] === 1;
-    const label = `${String(track.height).padStart(4, "\u00A0")}p${fps}${isDupe && isFirst ? " Max" : ""}`;
+    const label = `${String(track.height).padStart(4, "\u00A0")}p${fps}`;
 
     item.innerHTML = `
       <svg class="check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
@@ -608,17 +595,10 @@ function buildQualityMenu() {
     qualMenu.appendChild(item);
   });
 
-  // Restore previously selected quality by matching height + Max status.
+  // Restore previously selected quality by height.
   // Falls back to auto if no match found in the new track list.
   if (selectedHeight !== null) {
-    const all = tracks.filter((t) => t.height === selectedHeight);
-    let target = null;
-    if (all.length > 1) {
-      // There are two rungs at this height (e.g. 2160p Max and 2160p)
-      target = selectedIsMax ? all[0] : all[1];
-    } else if (all.length === 1) {
-      target = all[0];
-    }
+    const target = tracks.find((t) => t.height === selectedHeight);
     if (target) {
       selectedQuality = target.id;
       player.configure("abr.enabled", false);
@@ -631,7 +611,6 @@ function buildQualityMenu() {
     }
     // Height no longer exists in this stream — fall back to auto
     selectedHeight = null;
-    selectedIsMax = false;
   }
 
   selectedQuality = -1;
@@ -641,21 +620,13 @@ function buildQualityMenu() {
 
 function trackLabel(track) {
   const fps = Math.round(track.frameRate || currentMeta?.frameRate || 0);
-  const all = player.getVariantTracks().filter((t) => t.height === track.height);
-  const isMax = all.length > 1 && all[0].id === track.id;
-  return `${track.height}p${fps || ""}${isMax ? " Max" : ""}`;
-}
-
-function isMaxTrack(track) {
-  const all = player.getVariantTracks().filter((t) => t.height === track.height);
-  return all.length > 1 && all[0].id === track.id;
+  return `${track.height}p${fps || ""}`;
 }
 
 function selectQuality(id) {
   selectedQuality = id;
   if (id === -1) {
     selectedHeight = null;
-    selectedIsMax = false;
     player.configure("abr.enabled", true);
     qualLabel.textContent = "Auto";
   } else {
@@ -663,7 +634,6 @@ function selectQuality(id) {
     const track = player.getVariantTracks().find((t) => t.id === id);
     if (track) {
       selectedHeight = track.height;
-      selectedIsMax = isMaxTrack(track);
       player.selectVariantTrack(track, true);
       qualLabel.textContent = trackLabel(track);
     }
