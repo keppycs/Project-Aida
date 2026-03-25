@@ -44,8 +44,8 @@ ENCODE_SETTINGS_PRODUCTION = {
     "b_ref_mode":        "middle",
     "sc_threshold":      0,
     "strict_gop":        1,
-    # Filter graph
-    "scale_algo":        "lanczos",
+    # Filter graph (zscale filter name)
+    "scale_algo":        "spline36",
     # Audio
     "audio_codec":       "aac",
     "audio_bitrate":     "320k",
@@ -65,8 +65,8 @@ ENCODE_SETTINGS_FAST = {
     "b_ref_mode":        "disabled",
     "sc_threshold":      0,
     "strict_gop":        1,
-    # Filter graph
-    "scale_algo":        "lanczos",
+    # Filter graph (zscale filter name)
+    "scale_algo":        "spline36",
     # Audio
     "audio_codec":       "aac",
     "audio_bitrate":     "128k",
