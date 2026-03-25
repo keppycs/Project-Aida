@@ -75,7 +75,7 @@ ENCODE_SETTINGS_FAST = {
 # ── Ladder ─────────────────────────────────────────────────────────────────────
 # Each entry: (label, resolution, cq, maxrate_mbps)
 # maxrate is enforced as a ceiling — CQ drives quality, maxrate caps segment size.
-# bufsize is always 2× maxrate (2-second window, aligned to seg duration).
+# bufsize is always SEG_DURATION × maxrate (aligned to seg duration).
 
 
 VARIANTS_AV1_PRODUCTION = [
@@ -119,7 +119,7 @@ CUDA_DECODERS = {
 
 HDR_TRANSFERS    = {"smpte2084", "arib-std-b67", "smpte428", "bt2020-10", "bt2020-12"}
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".mkv", ".mxf", ".mts", ".m2ts"}
-SEG_DURATION     = 2
+SEG_DURATION     = 4
 
 # config_local.py is gitignored — override any flag defined above this line.
 try:

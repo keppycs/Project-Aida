@@ -144,8 +144,8 @@ def build_cmd(
     is_hevc = encoder == "hevc_nvenc"
 
     for i, (_, _, cq, maxrate_mbps) in enumerate(variants):
-        maxrate_k = maxrate_mbps * 1000  # kbps for ffmpeg
-        bufsize_k = maxrate_k * 2        # 2× maxrate = 2s buffer window
+        maxrate_k = maxrate_mbps * 1000      # kbps for ffmpeg
+        bufsize_k = maxrate_k * SEG_DURATION # 1s per Mbps, aligned to seg duration
 
         cmd += [
             # Codec + quality
