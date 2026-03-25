@@ -21,6 +21,9 @@ B2_ENDPOINT = _require_env("B2_ENDPOINT")  # region is embedded in the endpoint 
 # Disable when testing locally to skip the upload step entirely.
 UPLOAD_TO_B2 = False
 
+# Set to True to generate thumbnails (HDR AVIF + SDR WebP, full-res and 720p) alongside each encode.
+GENERATE_THUMBNAILS = True
+
 # Set to True to delete local transcode files after a successful upload.
 # The source video and log are always kept locally regardless.
 DELETE_TRANSCODES_AFTER_UPLOAD = False

@@ -11,8 +11,9 @@ import time
 from config import (
     CODECS, CUDA_DECODERS, HDR_TRANSFERS, VIDEO_EXTENSIONS,
     SEG_DURATION, B2_BUCKET,
-    UPLOAD_TO_B2, DELETE_TRANSCODES_AFTER_UPLOAD,
+    UPLOAD_TO_B2, DELETE_TRANSCODES_AFTER_UPLOAD, GENERATE_THUMBNAILS,
 )
+from thumbnail import generate_thumbnails
 from transcode import setup_logging, probe_video, parse_framerate, is_already_encoded, build_cmd, run_ffmpeg
 from manifest import build_hevc_codec_strings, patch_hls_video_range, patch_hls_hdr, patch_dash_hdr
 from upload import make_b2_client, is_already_uploaded, upload_folder, upload_index
@@ -126,6 +127,19 @@ def main() -> None:
         log.warning(
             f"No CUDA decoder for '{source_codec}'. "
             "Falling back to software decode — GPU encode still active."
+        )
+
+    if GENERATE_THUMBNAILS:
+        thumb_dir = root / "docs" / "debug" / video_id
+        thumb_dir.mkdir(parents=True, exist_ok=True)
+        generate_thumbnails(
+            input_path=video_file,
+            out_dir=thumb_dir,
+            duration=duration,
+            color_primaries=color_primaries,
+            color_trc=color_trc,
+            colorspace=colorspace,
+            log=log,
         )
 
     b2           = make_b2_client() if UPLOAD_TO_B2 else None
