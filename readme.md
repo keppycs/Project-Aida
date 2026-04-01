@@ -138,11 +138,14 @@ Actively⁷ working on it! Built for experimentation, optimization, and real-wor
 
 ## Additional notes
 
-¹ Hopefully :grin:
-² Should be robust :shrug:
-³ Nvidia's scaling looks ass man :sob:
-⁴ This is for the nerds, really xd
-⁵ In my oh so humble opinion :innocent:
-⁶ This is mostly⁸ a lie.
-⁷ Whenever I feel like it
-⁸ I meant partially
+###### This readme was originally written by ChatGPT, and perfected⁸ by me :innocent:
+
+- ¹ Hopefully :grin:
+- ² Should be robust :shrug:
+- ³ Nvidia's scaling looks ass man :sob:
+- ⁴ This is for the nerds, really xd
+- ⁵ In my oh so humble opinion :innocent:
+- ⁶ This is mostly⁹ a lie.
+- ⁷ Whenever I feel like it
+- ⁸ Perfect in my eyes ;-;
+- ⁹ I meant partially
