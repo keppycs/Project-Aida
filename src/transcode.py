@@ -120,10 +120,10 @@ def build_cmd(
     filter_parts = [f"[0:v]split={split_count}{split_outputs}"]
     for i, (_, res, _, _) in enumerate(variants):
         filter_parts.append(
-            f"[v{i}]hwdownload,format=p010le,"
+            f"[v{i}]hwdownload,format={pix_fmt},"
             f"zscale={res}:filter={settings['scale_algo']}:dither=error_diffusion"
             f":transfer=input:primaries=input:matrix=input:range=input,"
-            f"format=p010le,hwupload_cuda[s{i}]"
+            f"format={pix_fmt},hwupload_cuda[s{i}]"
         )
 
     filter_graph = ";".join(filter_parts)
