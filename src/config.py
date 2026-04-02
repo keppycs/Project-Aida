@@ -44,7 +44,6 @@ ENCODE_SETTINGS_PRODUCTION = {
     "rc_lookahead":      32,
     "lookahead_level":   3,
     "b_ref_mode":        "middle",
-    "sc_threshold":      0,
     "strict_gop":        1,
     # Filter graph (zscale filter name)
     "scale_algo":        "spline36",
@@ -65,7 +64,6 @@ ENCODE_SETTINGS_FAST = {
     "rc_lookahead":      0,
     "lookahead_level":   0,
     "b_ref_mode":        "disabled",
-    "sc_threshold":      0,
     "strict_gop":        1,
     # Filter graph (zscale filter name)
     "scale_algo":        "spline36",

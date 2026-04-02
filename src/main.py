@@ -14,7 +14,15 @@ from config import (
     UPLOAD_TO_B2, DELETE_TRANSCODES_AFTER_UPLOAD, GENERATE_THUMBNAILS,
 )
 from thumbnail import generate_thumbnails
-from transcode import setup_logging, probe_video, parse_framerate, is_already_encoded, build_cmd, run_ffmpeg
+from transcode import (
+    setup_logging,
+    probe_video,
+    parse_framerate,
+    infer_audio_channel_layout,
+    is_already_encoded,
+    build_cmd,
+    run_ffmpeg,
+)
 from manifest import patch_hls_stream_inf, patch_bandwidth
 from upload import make_b2_client, is_already_uploaded, upload_folder, upload_index
 
@@ -120,6 +128,20 @@ def main() -> None:
     log.info(f"Pixel format    : {pix_fmt} ({source_bits}-bit source)")
     log.info(f"HDR             : {is_hdr}")
 
+    audio_stream = next(
+        (s for s in probe["streams"] if s["codec_type"] == "audio"), None
+    )
+    audio_channel_layout = (
+        infer_audio_channel_layout(audio_stream) if audio_stream else None
+    )
+    if audio_stream:
+        _layout = audio_channel_layout or audio_stream.get("channel_layout") or "unknown"
+        log.info(
+            f"Audio           : {audio_stream.get('codec_name', '?')}  "
+            f"channels={audio_stream.get('channels', '?')}  "
+            f"layout={_layout}"
+        )
+
     cuda_decoder = CUDA_DECODERS.get(source_codec)
     if cuda_decoder:
         log.info(f"CUDA decoder    : {cuda_decoder}")
@@ -177,6 +199,7 @@ def main() -> None:
                 colorspace=colorspace,
                 gop_size=gop_size,
                 pix_fmt=pix_fmt,
+                audio_channel_layout=audio_channel_layout,
             )
 
             log.debug("CMD: " + " ".join(cmd))

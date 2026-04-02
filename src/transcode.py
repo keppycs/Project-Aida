@@ -47,6 +47,33 @@ def parse_framerate(r_frame_rate: str) -> float:
         return 30.0
 
 
+def infer_audio_channel_layout(stream: dict) -> Optional[str]:
+    """Return an FFmpeg channel_layout name for a probed audio stream.
+
+    PCM and some codecs omit channel_layout in the container; ffprobe may then
+    log a guessed layout. Prefer the probe field when present, else map channel
+    count to a standard layout.
+    """
+    layout = stream.get("channel_layout") or ""
+    if layout and layout != "unknown":
+        return layout
+    ch = stream.get("channels")
+    if ch is None:
+        return None
+    n = int(ch)
+    if n == 1:
+        return "mono"
+    if n == 2:
+        return "stereo"
+    if n == 4:
+        return "quad"
+    if n == 6:
+        return "5.1"
+    if n == 8:
+        return "7.1"
+    return None
+
+
 def is_already_encoded(out_dir: Path) -> bool:
     return (out_dir / "manifest.mpd").exists() and any(out_dir.glob("*.fmp4"))
 
@@ -112,6 +139,7 @@ def build_cmd(
     gop_size: int,
     pix_fmt: str,
     settings: dict = ENCODE_SETTINGS,
+    audio_channel_layout: Optional[str] = None,
 ) -> list:
     split_count   = len(variants)
     split_outputs = "".join(f"[v{i}]" for i in range(split_count))
@@ -162,10 +190,11 @@ def build_cmd(
             f"-maxrate:v:{i}",           f"{maxrate_k}k",
             f"-bufsize:v:{i}",           f"{bufsize_k}k",
 
-            # GOP / keyframe alignment
+            # GOP / keyframe alignment (fixed interval for CMAF segments; no
+            # scene-based keyframes — sc_threshold would be ineffective here
+            # while keyint_min equals g and strict_gop is on.)
             f"-g:v:{i}",                 str(gop_size),
             f"-keyint_min:v:{i}",        str(gop_size),
-            f"-sc_threshold:v:{i}",      str(settings["sc_threshold"]),
             f"-strict_gop:v:{i}",        str(settings["strict_gop"]),
 
             # Quality enhancement
@@ -190,7 +219,10 @@ def build_cmd(
         ]
 
     # ── Audio ───────────────────────────────────────────────────────────────────
-    cmd += ["-c:a", settings["audio_codec"], "-b:a", settings["audio_bitrate"]]
+    cmd += ["-c:a", settings["audio_codec"]]
+    if audio_channel_layout:
+        cmd += ["-channel_layout:a", audio_channel_layout]
+    cmd += ["-b:a", settings["audio_bitrate"]]
 
     # ── CMAF DASH + HLS output ──────────────────────────────────────────────────
     cmd += [
