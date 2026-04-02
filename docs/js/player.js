@@ -89,6 +89,42 @@ let player,
   currentCodec = null, // "AV1" | "H265"
   currentProtocol = null; // "DASH" | "HLS"
 
+const PLAYER_PREFS_KEY = "aida-player-prefs";
+const PREFS_CODECS = new Set(["AV1", "H265"]);
+const PREFS_PROTOCOLS = new Set(["DASH", "HLS"]);
+
+/** @returns {{ codec?: string, protocol?: string, quality?: "auto" | number } | null} */
+function loadPlayerPrefs() {
+  try {
+    const raw = localStorage.getItem(PLAYER_PREFS_KEY);
+    if (!raw) return null;
+    const o = JSON.parse(raw);
+    if (!o || typeof o !== "object") return null;
+    const prefs = {};
+    if (typeof o.codec === "string" && PREFS_CODECS.has(o.codec)) prefs.codec = o.codec;
+    if (typeof o.protocol === "string" && PREFS_PROTOCOLS.has(o.protocol))
+      prefs.protocol = o.protocol;
+    if (o.quality === "auto") prefs.quality = "auto";
+    else if (typeof o.quality === "number" && Number.isFinite(o.quality) && o.quality > 0)
+      prefs.quality = Math.round(o.quality);
+    return Object.keys(prefs).length ? prefs : null;
+  } catch {
+    return null;
+  }
+}
+
+function persistPlayerPrefs() {
+  if (!currentCodec || !currentProtocol) return;
+  const payload = {
+    codec: currentCodec,
+    protocol: currentProtocol,
+    quality: selectedHeight === null ? "auto" : selectedHeight,
+  };
+  try {
+    localStorage.setItem(PLAYER_PREFS_KEY, JSON.stringify(payload));
+  } catch {}
+}
+
 // ── Display HDR detection ─────────────────────────────────────────────────────
 // Detects whether the *display* is HDR-capable, not the content.
 async function detectHDR() {
@@ -264,7 +300,17 @@ async function init(meta, base) {
     }
   }
 
-  await loadSource(meta, base, null, null);
+  const prefs = loadPlayerPrefs();
+  if (prefs) {
+    if (prefs.quality === "auto") {
+      selectedHeight = null;
+      selectedQuality = -1;
+    } else if (typeof prefs.quality === "number") {
+      selectedHeight = prefs.quality;
+    }
+  }
+
+  await loadSource(meta, base, prefs?.codec ?? null, prefs?.protocol ?? null);
 }
 
 // ── Tonemapping ────────────────────────────────────────────────────────────────
@@ -607,6 +653,7 @@ function buildQualityMenu() {
       qualMenu.querySelectorAll(".menu-item").forEach((item) => {
         item.classList.toggle("active", parseInt(item.dataset.id) === target.id);
       });
+      persistPlayerPrefs();
       return;
     }
     // Height no longer exists in this stream — fall back to auto
@@ -616,6 +663,7 @@ function buildQualityMenu() {
   selectedQuality = -1;
   player.configure("abr.enabled", true);
   updateQualityLabel();
+  persistPlayerPrefs();
 }
 
 function trackLabel(track) {
@@ -641,6 +689,7 @@ function selectQuality(id) {
   qualMenu.querySelectorAll(".menu-item").forEach((item) => {
     item.classList.toggle("active", parseInt(item.dataset.id) === id);
   });
+  persistPlayerPrefs();
 }
 
 function updateQualityLabel() {
