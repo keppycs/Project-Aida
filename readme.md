@@ -51,10 +51,10 @@ The Python backend manages the full encoding flow:
   - Skips already encoded media
   - Reads source metadata via probing
 - **Parallelization-Ready**
-  - Cuda accelerated decoding and encoding
+  - CUDA-accelerated decoding and encoding
   - Scaling is done on CPU using zscale³
 
-**Core Modules:**
+**Core Modules** (under `src/`):
 
 - `main.py` → Entry point
 - `config.py` → Configuration settings
@@ -85,8 +85,8 @@ Hosted through GitHub Pages.
 
 ## ⚙️ Configuration
 
-- Central config in `config.py`
-- Local overrides via `config_local.py`
+- Central config in `src/config.py`
+- Local overrides via `src/config_local.py`
 - Tunable parameters:
   - Uploading to bucket
   - Delete local transcodes after upload
@@ -99,29 +99,20 @@ Hosted through GitHub Pages.
 ## 📦 Tech Stack
 
 - **Python 3.12**
-- **FFmpeg 8.1**
-- **Shaka Packager 5.0.7**
+- **FFmpeg 8.1** (DASH + HLS packaging via the built-in muxer)
+- **Shaka Player 5.0.7** (browser playback)
 - Vanilla JS frontend
 
 ---
 
 ## 💡 Not a usage tutorial
 
-Run: `py main.py -i "path to video" -id "video id" -desc "description" -tags "i,like,soft,cookies"` → get fully streamable output, which looks like:
+From the repo root, run: `py src/main.py -i "path to video" -id "video id" -desc "description" -tags "i,like,soft,cookies"` → get fully streamable output, which looks like:
 
-- docs/debug/video id/
-  - 📂 AV1
-    - chunks_i_j.fmp4
-    - init_i.mp4
-    - manifest.mpd
-    - master.m3u8
-    - media_i.m3u8
-  - 📂 H265
-    - chunks_i_j.fmp4
-    - init_i.mp4
-    - manifest.mpd
-    - master.m3u8
-    - media_i.m3u8
+- docs/debug/{video_id}/
+  - 📂 AV1 and 📂 H265 — each folder has the same layout:
+    - Segments `chunk_<rep>_<n>.fmp4`, init segments `init_<rep>.mp4`
+    - `manifest.mpd`, `master.m3u8`, `media_<rep>.m3u8` (one media playlist per ladder rung)
   - 📄 metadata.json
   - 🌐 thumbnail_hdr.avif
   - 🌐 thumbnail_hdr_720p.avif
