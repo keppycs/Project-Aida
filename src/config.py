@@ -1,6 +1,5 @@
 from dotenv import load_dotenv
 from pathlib import Path
-from typing import Optional
 import os
 
 load_dotenv(Path(__file__).parent.parent / ".env")
@@ -84,9 +83,9 @@ VARIANTS_AV1_PRODUCTION = [
     ("2160p",     "3840:2160", 24, 40),
     ("1440p",     "2560:1440", 26, 25),
     ("1080p",     "1920:1080", 28, 15),
-    ("720p",      "1280:720",  31, 10),
-    ("540p",      "960:540",   33,  6),
-    ("360p",      "640:360",   35,  3),
+    ("720p",      "1280:720",  30, 10),
+    ("540p",      "960:540",   30,  6),
+    ("360p",      "640:360",   30,  3),
 ]
 
 VARIANTS_H265_PRODUCTION = [
@@ -139,30 +138,3 @@ CODECS: dict[str, tuple[str, list]] = {
     "H265": ("hevc_nvenc", VARIANTS_H265),
 }
 
-# ── HEVC level/tier bitrate limits ────────────────────────────────────────────
-# Source: https://en.wikipedia.org/wiki/High_Efficiency_Video_Coding_tiers_and_levels
-# Keys are level_idc (level × 30). Values are (main_tier_max_kbps, high_tier_max_kbps).
-# High tier is only defined from Level 4.0 (idc=120) onwards.
-HEVC_LEVEL_BITRATES: dict[int, tuple[int, Optional[int]]] = {
-    30:  (128,    None),
-    60:  (1_500,  None),
-    63:  (3_000,  None),
-    90:  (6_000,  None),
-    93:  (10_000, None),
-    120: (12_000, 30_000),
-    123: (20_000, 50_000),
-    150: (25_000, 100_000),
-    153: (40_000, 160_000),
-    156: (60_000, 240_000),
-    180: (60_000, 240_000),
-    183: (120_000, 480_000),
-    186: (240_000, 800_000),
-}
-
-# Map ffprobe profile name → profile_idc used in codec string
-HEVC_PROFILE_IDC: dict[str, int] = {
-    "Main":               1,
-    "Main 10":            2,
-    "Main Still Picture": 3,
-    "Rext":               4,
-}

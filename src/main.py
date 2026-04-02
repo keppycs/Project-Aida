@@ -15,7 +15,7 @@ from config import (
 )
 from thumbnail import generate_thumbnails
 from transcode import setup_logging, probe_video, parse_framerate, is_already_encoded, build_cmd, run_ffmpeg
-from manifest import build_hevc_codec_strings, patch_hls_video_range, patch_hls_hdr, patch_dash_hdr, patch_bandwidth
+from manifest import patch_hls_stream_inf, patch_bandwidth
 from upload import make_b2_client, is_already_uploaded, upload_folder, upload_index
 
 
@@ -190,14 +190,7 @@ def main() -> None:
             log.info(f"[DONE ENCODE]  {codec_name}")
 
             video_range = "PQ" if is_hdr else "SDR"
-
-            if codec_name == "AV1":
-                patch_hls_video_range(out_dir / "master.m3u8", video_range, fps, log)
-            elif codec_name == "H265":
-                codec_strings = build_hevc_codec_strings(out_dir, active_variants, log)
-                patch_hls_hdr(out_dir / "master.m3u8", codec_strings, video_range, fps, log)
-                patch_dash_hdr(out_dir / "manifest.mpd", codec_strings, log)
-
+            patch_hls_stream_inf(out_dir / "master.m3u8", video_range, fps, log)
             patch_bandwidth(out_dir, len(active_variants), SEG_DURATION, log)
 
         encoded_codecs.append(codec_name)
