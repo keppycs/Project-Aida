@@ -110,7 +110,7 @@ Hosted through GitHub Pages.
 From the repo root, run: `py src/main.py -i "path to video" -id "video id" -desc "description" -tags "i,like,soft,cookies"` → get fully streamable output, which looks like:
 
 - docs/debug/{video_id}/
-  - 📂 AV1 and 📂 H265 — each folder has the same layout:
+  - 📂 AV1 and 📂 HEVC — each folder has the same layout:
     - Segments `chunk_<rep>_<n>.fmp4`, init segments `init_<rep>.mp4`
     - `manifest.mpd`, `master.m3u8`, `media_<rep>.m3u8` (one media playlist per ladder rung)
   - 📄 metadata.json

@@ -10,7 +10,7 @@ console.warn = (...args) => {
 
 // ── Codec detection ─────────────────────────────────────────────────────────────
 const AV1_CODEC = 'video/mp4; codecs="av01.0.08H.10.0.110.09.16.09.0"';
-const H265_CODEC = 'video/mp4; codecs="hvc1.1.6.H150.B0"';
+const HEVC_CODEC = 'video/mp4; codecs="hvc1.1.6.H150.B0"';
 
 // Check supported only — smooth is reported conservatively by browsers
 // (e.g. Chrome reports smooth=false for 4K120 PQ AV1 even on capable hardware).
@@ -36,8 +36,8 @@ async function canDecode(type, contentType) {
 
 const supportsAV1Dash = () => canDecode("media-source", AV1_CODEC);
 const supportsAV1Hls = () => canDecode("file", AV1_CODEC);
-const supportsH265Dash = () => canDecode("media-source", H265_CODEC);
-const supportsH265Hls = () => canDecode("file", H265_CODEC);
+const supportsHEVCDash = () => canDecode("media-source", HEVC_CODEC);
+const supportsHEVCHls = () => canDecode("file", HEVC_CODEC);
 
 // HDR transfer functions — mirrors config.py HDR_TRANSFERS
 const HDR_TRANSFERS = new Set(["smpte2084", "arib-std-b67", "smpte428", "bt2020-10", "bt2020-12"]);
@@ -86,11 +86,11 @@ let player,
   selectedHeight = null, // persists across codec/protocol switches; null = auto
   currentMeta = null,
   currentBase = null,
-  currentCodec = null, // "AV1" | "H265"
+  currentCodec = null, // "AV1" | "HEVC"
   currentProtocol = null; // "DASH" | "HLS"
 
 const PLAYER_PREFS_KEY = "aida-player-prefs";
-const PREFS_CODECS = new Set(["AV1", "H265"]);
+const PREFS_CODECS = new Set(["AV1", "HEVC"]);
 const PREFS_PROTOCOLS = new Set(["DASH", "HLS"]);
 
 /** @returns {{ codec?: string, protocol?: string, quality?: "auto" | number } | null} */
@@ -160,7 +160,7 @@ async function detectHDR() {
 // preferCodec / preferProtocol override auto-detection when set.
 async function selectSource(meta, base, preferCodec, preferProtocol) {
   const hasAV1 = meta.codecs.includes("AV1");
-  const hasH265 = meta.codecs.includes("H265");
+  const hasHEVC = meta.codecs.includes("HEVC");
 
   const candidates = [];
 
@@ -180,19 +180,19 @@ async function selectSource(meta, base, preferCodec, preferProtocol) {
         mime: "application/x-mpegURL",
       });
   }
-  if (hasH265) {
-    if (await supportsH265Dash())
+  if (hasHEVC) {
+    if (await supportsHEVCDash())
       candidates.push({
-        codec: "H265",
+        codec: "HEVC",
         protocol: "DASH",
-        src: `${base}/H265/manifest.mpd`,
+        src: `${base}/HEVC/manifest.mpd`,
         mime: "application/dash+xml",
       });
-    if (await supportsH265Hls())
+    if (await supportsHEVCHls())
       candidates.push({
-        codec: "H265",
+        codec: "HEVC",
         protocol: "HLS",
-        src: `${base}/H265/master.m3u8`,
+        src: `${base}/HEVC/master.m3u8`,
         mime: "application/x-mpegURL",
       });
   }
@@ -228,7 +228,7 @@ async function loadSource(meta, base, preferCodec, preferProtocol) {
   currentCodec = chosen.codec;
   currentProtocol = chosen.protocol;
 
-  codecBadge.textContent = chosen.codec === "H265" ? "H.265" : chosen.codec;
+  codecBadge.textContent = chosen.codec;
   protocolBadge.textContent = chosen.protocol;
   codecBadge.classList.add("show");
   protocolBadge.classList.add("show");
@@ -558,7 +558,7 @@ function buildQualityMenu() {
   const codecs = currentMeta?.codecs || [];
   [
     ["AV1", "AV1"],
-    ["H265", "H.265"],
+    ["HEVC", "HEVC"],
   ].forEach(([value, label]) => {
     const btn = document.createElement("button");
     btn.className = "menu-toggle" + (currentCodec === value ? " active" : "");

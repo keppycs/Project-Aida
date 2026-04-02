@@ -86,7 +86,7 @@ VARIANTS_AV1_PRODUCTION = [
     ("360p",      "640:360",   30,  3),
 ]
 
-VARIANTS_H265_PRODUCTION = [
+VARIANTS_HEVC_PRODUCTION = [
     ("2160p",     "3840:2160", 20, 40),
     ("1440p",     "2560:1440", 22, 25),
     ("1080p",     "1920:1080", 25, 15),
@@ -101,7 +101,7 @@ VARIANTS_AV1_FAST = [
     ("720p",  "1280:720",  50, 1),
 ]
 
-VARIANTS_H265_FAST = [
+VARIANTS_HEVC_FAST = [
     ("2160p", "3840:2160", 50, 1),
     ("1080p", "1920:1080", 50, 1),
     ("720p",  "1280:720",  50, 1),
@@ -128,11 +128,11 @@ except ImportError:
 ENCODE_SETTINGS = ENCODE_SETTINGS_FAST if FAST_TRANSCODE else ENCODE_SETTINGS_PRODUCTION
 
 VARIANTS_AV1  = VARIANTS_AV1_FAST  if FAST_TRANSCODE else VARIANTS_AV1_PRODUCTION
-VARIANTS_H265 = VARIANTS_H265_FAST if FAST_TRANSCODE else VARIANTS_H265_PRODUCTION
+VARIANTS_HEVC = VARIANTS_HEVC_FAST if FAST_TRANSCODE else VARIANTS_HEVC_PRODUCTION
 
 CODECS: dict[str, tuple[str, list]] = {
     #          encoder         variant ladder
     "AV1":  ("av1_nvenc",  VARIANTS_AV1),
-    "H265": ("hevc_nvenc", VARIANTS_H265),
+    "HEVC": ("hevc_nvenc", VARIANTS_HEVC),
 }
 
