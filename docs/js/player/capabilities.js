@@ -1,8 +1,11 @@
 /** Layout and chrome hints: one source of truth for responsive player behavior. */
 export function getPlayerProfile() {
   const w = window.innerWidth;
+  const h = window.innerHeight;
+  const minDim = Math.min(w, h);
   const coarse = window.matchMedia("(pointer: coarse)").matches;
-  const compact = w <= 560 || (coarse && w <= 720);
+  /* Use shorter viewport edge so phone landscape (wide but short) still gets compact chrome */
+  const compact = minDim <= 560 || (coarse && minDim <= 720);
   const hideVolumeChrome = coarse || w < 640;
   return {
     layout: compact ? "compact" : "standard",

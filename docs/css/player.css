@@ -43,7 +43,6 @@ body {
   width: min(100vw, 177.78vh); /* 16:9 */
   aspect-ratio: 16/9;
   background: #000;
-  /*border-radius: var(--radius);*/
   overflow: hidden;
   box-shadow: var(--shadow);
   cursor: none;
@@ -873,6 +872,13 @@ video {
   display: none;
 }
 
+/* Center #big-play is the only play/pause control on compact; bar duplicates hidden */
+#player-wrap.layout-compact #play-btn,
+#player-wrap.layout-compact #back-btn,
+#player-wrap.layout-compact #fwd-btn {
+  display: none;
+}
+
 #player-wrap.layout-compact .ctrl-btn {
   width: 32px;
   height: 32px;
@@ -900,9 +906,23 @@ video {
   padding: 0 5px;
 }
 
+/*
+ * Compact big-play: above the fixed bottom sheet (z-index 20).
+ * Container is inset:0 for centering; pointer-events:none so only the SVG receives taps.
+ */
+#player-wrap.layout-compact #big-play {
+  pointer-events: none;
+  z-index: 25;
+}
+
 #player-wrap.layout-compact #big-play svg {
-  width: 56px;
-  height: 56px;
+  width: 64px;
+  height: 64px;
+}
+
+#player-wrap.layout-compact #big-play.show > svg {
+  pointer-events: auto;
+  cursor: pointer;
 }
 
 #player-wrap.layout-compact .menu-popup.open {

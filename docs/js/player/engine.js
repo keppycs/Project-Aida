@@ -28,7 +28,7 @@ const supportsAV1Hls = () => canDecode("file", AV1_CODEC);
 const supportsHEVCDash = () => canDecode("media-source", HEVC_CODEC);
 const supportsHEVCHls = () => canDecode("file", HEVC_CODEC);
 
-export const HDR_TRANSFERS = new Set([
+const HDR_TRANSFERS = new Set([
   "smpte2084",
   "arib-std-b67",
   "smpte428",
@@ -48,7 +48,7 @@ const PLAYER_PREFS_KEY = "aida-player-prefs";
 const PREFS_CODECS = new Set(["AV1", "HEVC"]);
 const PREFS_PROTOCOLS = new Set(["DASH", "HLS"]);
 
-export function loadPlayerPrefs() {
+function loadPlayerPrefs() {
   try {
     const raw = localStorage.getItem(PLAYER_PREFS_KEY);
     if (!raw) return null;
@@ -67,7 +67,7 @@ export function loadPlayerPrefs() {
   }
 }
 
-export function persistPlayerPrefs() {
+function persistPlayerPrefs() {
   if (!currentCodec || !currentProtocol) return;
   const payload = {
     codec: currentCodec,
@@ -127,17 +127,13 @@ function persistColorCorrection() {
   } catch {}
 }
 
-export function formatCcParam(n) {
+function formatCcParam(n) {
   const t = Number(n);
   if (!Number.isFinite(t)) return "—";
   return (Math.round(t * 100) / 100).toFixed(2);
 }
 
-export function getCcState() {
-  return ccState;
-}
-
-export function applyColorCorrection(video) {
+function applyColorCorrection(video) {
   if (!ccState.enabled) {
     video.style.filter = "";
     return;
@@ -146,7 +142,7 @@ export function applyColorCorrection(video) {
   video.style.filter = `brightness(${brightness}) contrast(${contrast}) saturate(${saturation})`;
 }
 
-export function syncCcUiFromState(ctx) {
+function syncCcUiFromState(ctx) {
   const {
     ccOff,
     ccOn,
@@ -200,7 +196,7 @@ function clearCcBannerTimer() {
   }
 }
 
-export function markCcBannerDismissed(wrap) {
+function markCcBannerDismissed(wrap) {
   try {
     localStorage.setItem(CC_BANNER_DISMISSED_KEY, "1");
   } catch {}
@@ -216,7 +212,7 @@ export function markCcBannerMenuUsed(wrap) {
   wrap.querySelector("#cc-notice")?.remove();
 }
 
-export function showColorCorrectionNotice(wrap) {
+function showColorCorrectionNotice(wrap) {
   clearCcBannerTimer();
   const notice = document.createElement("div");
   notice.id = "cc-notice";
@@ -323,7 +319,7 @@ async function selectSource(meta, base, preferCodec, preferProtocol) {
   return filtered[0];
 }
 
-export async function loadSource(meta, base, preferCodec, preferProtocol, ctx) {
+async function loadSource(meta, base, preferCodec, preferProtocol, ctx) {
   const chosen = await selectSource(meta, base, preferCodec, preferProtocol);
   if (!chosen) {
     showUnsupportedNotice(ctx.wrap);
@@ -358,14 +354,6 @@ function showUnsupportedNotice(wrap) {
   `;
   wrap.appendChild(notice);
   notice.querySelector(".player-notice-close").addEventListener("click", () => notice.remove());
-}
-
-export function getShakaPlayer() {
-  return player;
-}
-
-export function getCurrentMeta() {
-  return currentMeta;
 }
 
 export async function initPlayback(meta, base, ctx, profile) {
@@ -451,7 +439,7 @@ export async function initPlayback(meta, base, ctx, profile) {
   await loadSource(meta, base, prefs?.codec ?? null, prefs?.protocol ?? null, ctx);
 }
 
-export function buildQualityMenu(ctx) {
+function buildQualityMenu(ctx) {
   if (!player) return;
 
   const { qualMenu } = ctx;
@@ -574,7 +562,7 @@ function trackLabel(track) {
   return `${track.height}p${fps || ""}`;
 }
 
-export function selectQuality(id, ctx) {
+function selectQuality(id, ctx) {
   selectedQuality = id;
   if (id === -1) {
     selectedHeight = null;
@@ -595,7 +583,7 @@ export function selectQuality(id, ctx) {
   persistPlayerPrefs();
 }
 
-export function updateQualityLabel(ctx) {
+function updateQualityLabel(ctx) {
   if (selectedQuality !== -1 || !player) return;
   const active = player.getVariantTracks().find((t) => t.active);
   const label = active ? trackLabel(active) : null;

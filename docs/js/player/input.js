@@ -1,7 +1,9 @@
 /**
- * Pointer / touch input for scrubbing and video surface (compact vs standard).
- * Desktop: unchanged — click video toggles play; mouse scrubs.
- * Compact / coarse: touch scrub; tap-to-show-UI then tap-to-play on video.
+ * Desktop: click video toggles play; mouse drags scrub the seek bar.
+ * Mobile (compact layout or coarse pointer): tap the video surface toggles chrome
+ * (show/hide controls); only the center #big-play control toggles playback. Drag on the
+ * seek bar scrubs. Touch `click` on the video is ignored so we do not double-fire after
+ * touchend.
  */
 
 export function bindProgressInteractions({
@@ -91,45 +93,47 @@ export function bindProgressInteractions({
   });
 }
 
+function isMobileProfile(p) {
+  return p.layout === "compact" || p.coarsePointer;
+}
+
+/** Keep in sync with `shouldIgnoreMenuDismissClick` in shell.js */
+function shouldIgnoreMenuDismissTouch(e) {
+  return e.target.closest(
+    ".menu-item, .menu-toggle, .cc-slider, .menu-popup input, .menu-popup label, .menu-wrap",
+  );
+}
+
 export function bindVideoSurfaceInteractions({
   ctx,
   getProfile,
   togglePlay,
   showUI,
+  hideUI,
   closeAllMenus,
   isAnyMenuOpen,
-  video,
-  flashSeek,
-  showToast,
 }) {
-  const { wrap } = ctx;
+  const { wrap, video } = ctx;
 
-  video.addEventListener("click", (e) => {
-    const p = getProfile();
-    if (p.layout === "compact" || p.coarsePointer) return;
+  video.addEventListener("click", () => {
+    if (isMobileProfile(getProfile())) return;
     togglePlay();
   });
 
-  const SWIPE_THRESHOLD = 10;
-  let touchStartX = 0;
-  let touchStartY = 0;
-  let touchMoved = false;
-  let swipeActive = false;
-  let swipeStartVol = 0;
-  let swipeStartTime = 0;
+  const MOVE_PX = 14;
+  let sx = 0;
+  let sy = 0;
+  let moved = false;
 
   wrap.addEventListener(
     "touchstart",
     (e) => {
-      const p = getProfile();
-      if (p.layout !== "compact" && !p.coarsePointer) return;
-      if (e.target.closest("#controls, .menu-popup, #menu-backdrop")) return;
-      touchStartX = e.touches[0].clientX;
-      touchStartY = e.touches[0].clientY;
-      touchMoved = false;
-      swipeActive = false;
-      swipeStartVol = video.volume;
-      swipeStartTime = video.currentTime;
+      if (!isMobileProfile(getProfile())) return;
+      if (e.target.closest("#controls, #autoplay-gate")) return;
+      if (e.target.closest(".menu-popup") && shouldIgnoreMenuDismissTouch(e)) return;
+      sx = e.touches[0].clientX;
+      sy = e.touches[0].clientY;
+      moved = false;
     },
     { passive: true },
   );
@@ -137,67 +141,15 @@ export function bindVideoSurfaceInteractions({
   wrap.addEventListener(
     "touchmove",
     (e) => {
-      const p = getProfile();
-      if (p.layout !== "compact" && !p.coarsePointer) return;
-      if (e.target.closest("#controls, .menu-popup, #progress-wrap, .cc-slider, #menu-backdrop"))
-        return;
-      const dx = e.touches[0].clientX - touchStartX;
-      const dy = e.touches[0].clientY - touchStartY;
-      const adx = Math.abs(dx);
-      const ady = Math.abs(dy);
-
-      if (adx > SWIPE_THRESHOLD || ady > SWIPE_THRESHOLD) touchMoved = true;
-
-      if (ady > SWIPE_THRESHOLD && ady > adx * 1.5) {
-        e.preventDefault();
-        swipeActive = true;
-        const rect = wrap.getBoundingClientRect();
-        const rightHalf = touchStartX > rect.left + rect.width / 2;
-
-        if (rightHalf) {
-          const newVol = Math.max(0, Math.min(1, swipeStartVol + -dy / 200));
-          video.volume = newVol;
-          showToast(`Volume ${Math.round(newVol * 100)}%`);
-        } else {
-          const delta = (-dy / 150) * 30;
-          const newTime = Math.max(0, Math.min(video.duration, swipeStartTime + delta));
-          video.currentTime = newTime;
-          const secs = Math.round(Math.abs(delta));
-          flashSeek(delta >= 0 ? `+${secs}s` : `−${secs}s`);
-        }
-        showUI();
-      }
-    },
-    { passive: false },
-  );
-
-  wrap.addEventListener(
-    "touchend",
-    (e) => {
-      const p = getProfile();
-      if (p.layout !== "compact" && !p.coarsePointer) return;
-      if (e.target.closest("#controls, .menu-popup, #progress-wrap, .cc-slider, #menu-backdrop"))
-        return;
-      if (swipeActive) {
-        swipeActive = false;
-        showUI();
+      if (!isMobileProfile(getProfile())) return;
+      if (
+        e.target.closest("#controls, .menu-popup, #progress-wrap, .cc-slider, #menu-backdrop")
+      ) {
         return;
       }
-      if (touchMoved) {
-        showUI();
-        return;
-      }
-
-      const uiVisible = wrap.classList.contains("ui-visible");
-      if (!uiVisible) {
-        showUI();
-      } else if (isAnyMenuOpen()) {
-        closeAllMenus();
-        showUI();
-      } else {
-        togglePlay();
-        showUI();
-      }
+      const dx = e.touches[0].clientX - sx;
+      const dy = e.touches[0].clientY - sy;
+      if (Math.abs(dx) > MOVE_PX || Math.abs(dy) > MOVE_PX) moved = true;
     },
     { passive: true },
   );
@@ -205,8 +157,40 @@ export function bindVideoSurfaceInteractions({
   wrap.addEventListener(
     "touchend",
     (e) => {
-      const p = getProfile();
-      if (p.layout !== "compact" && !p.coarsePointer) return;
+      if (!isMobileProfile(getProfile())) return;
+      if (e.target.closest("#autoplay-gate")) return;
+
+      if (isAnyMenuOpen()) {
+        if (shouldIgnoreMenuDismissTouch(e)) return;
+        closeAllMenus();
+        showUI();
+        return;
+      }
+
+      if (
+        e.target.closest(
+          "#controls, .menu-popup, #progress-wrap, .cc-slider, #autoplay-gate",
+        )
+      ) {
+        return;
+      }
+      if (e.target.closest("#big-play")) return;
+
+      if (moved) {
+        showUI();
+        return;
+      }
+
+      if (wrap.classList.contains("ui-visible")) hideUI();
+      else showUI();
+    },
+    { passive: true },
+  );
+
+  wrap.addEventListener(
+    "touchend",
+    (e) => {
+      if (!isMobileProfile(getProfile())) return;
       if (e.target.closest(".ctrl-btn, .menu-toggle, .menu-item, .cc-slider")) showUI();
     },
     { passive: true },

@@ -69,6 +69,11 @@ const PLAY_SVG = '<polygon points="5,3 19,12 5,21"/>';
 const PAUSE_SVG =
   '<rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/>';
 
+const BIG_PLAY_SVG_CIRCLE =
+  '<circle cx="36" cy="36" r="35" fill="rgba(0,0,0,.55)" stroke="rgba(255,255,255,.25)" stroke-width="1"/>';
+const BIG_PLAY_SVG_PLAY = `${BIG_PLAY_SVG_CIRCLE}<path d="M29 21.5 L55 36 L29 50.5 Z" fill="rgba(255,255,255,0.88)" stroke="rgba(255,255,255,0.14)" stroke-width="0.75" stroke-linejoin="round"/>`;
+const BIG_PLAY_SVG_PAUSE = `${BIG_PLAY_SVG_CIRCLE}<rect x="24" y="22" width="9" height="28" rx="2.5" fill="rgba(255,255,255,0.88)"/><rect x="39" y="22" width="9" height="28" rx="2.5" fill="rgba(255,255,255,0.88)"/>`;
+
 const VOL_FULL = `<polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>
   <path d="M19.07 4.93a10 10 0 0 1 0 14.14"/>
   <path d="M15.54 8.46a5 5 0 0 1 0 7.07"/>`;
@@ -155,7 +160,24 @@ export async function mountPlayer(meta, base) {
     if (!isOpen) {
       menu.classList.add("open");
       if (getProfile().layout === "compact") menuBackdrop?.classList.add("open");
+      requestAnimationFrame(() => {
+        menu.scrollTop = 0;
+      });
       showUI();
+    }
+  }
+
+  function syncBigPlayOverlay() {
+    const compact = getProfile().layout === "compact";
+    const svg = bigPlay.querySelector("svg");
+    if (!svg) return;
+    if (compact) {
+      const show = video.paused || wrap.classList.contains("ui-visible");
+      bigPlay.classList.toggle("show", show);
+      svg.innerHTML = video.paused ? BIG_PLAY_SVG_PLAY : BIG_PLAY_SVG_PAUSE;
+    } else {
+      bigPlay.classList.toggle("show", video.paused);
+      svg.innerHTML = BIG_PLAY_SVG_PLAY;
     }
   }
 
@@ -164,11 +186,14 @@ export async function mountPlayer(meta, base) {
     clearTimeout(uiTimer);
     const delay = getProfile().layout === "compact" ? 2000 : 3000;
     if (!video.paused) uiTimer = setTimeout(hideUI, delay);
+    syncBigPlayOverlay();
   }
 
   function hideUI() {
+    clearTimeout(uiTimer);
     if (isAnyMenuOpen()) return;
     wrap.classList.remove("ui-visible", "cursor-visible");
+    syncBigPlayOverlay();
   }
 
   function showToast(msg) {
@@ -190,13 +215,8 @@ export async function mountPlayer(meta, base) {
   }
 
   function togglePlay() {
-    if (video.paused) {
-      video.play();
-      bigPlay.classList.remove("show");
-    } else {
-      video.pause();
-      bigPlay.classList.add("show");
-    }
+    if (video.paused) void video.play();
+    else video.pause();
   }
 
   function skip(sec) {
@@ -220,9 +240,12 @@ export async function mountPlayer(meta, base) {
 
   await initPlayback(meta, base, ctx, profile);
 
+  syncBigPlayOverlay();
+
   watchProfile((next) => {
     profile = next;
     applyLayoutClass(wrap, profile);
+    syncBigPlayOverlay();
     if (profile.hideVolumeChrome) {
       ctx.volCluster.style.display = "none";
       video.volume = 1;
@@ -237,6 +260,7 @@ export async function mountPlayer(meta, base) {
     clearTimeout(uiTimer);
     const delay = getProfile().layout === "compact" ? 2000 : 3000;
     uiTimer = setTimeout(hideUI, delay);
+    syncBigPlayOverlay();
   });
   video.addEventListener("pause", () => {
     setPlayIcon(false);
@@ -244,11 +268,16 @@ export async function mountPlayer(meta, base) {
   });
   video.addEventListener("ended", () => {
     setPlayIcon(false);
-    bigPlay.classList.add("show");
+    showUI();
   });
 
-  playBtn.addEventListener("click", togglePlay);
-  bigPlay.addEventListener("click", togglePlay);
+  playBtn.addEventListener("click", () => {
+    togglePlay();
+  });
+  bigPlay.addEventListener("click", (e) => {
+    e.stopPropagation();
+    togglePlay();
+  });
 
   muteBtn.addEventListener("click", () => {
     video.muted = !video.muted;
@@ -298,11 +327,9 @@ export async function mountPlayer(meta, base) {
     getProfile,
     togglePlay,
     showUI,
+    hideUI,
     closeAllMenus,
     isAnyMenuOpen,
-    video,
-    flashSeek,
-    showToast,
   });
 
   backBtn.addEventListener("click", () => skip(-10));
@@ -322,13 +349,29 @@ export async function mountPlayer(meta, base) {
     toggleMenu(speedMenu);
   });
 
+  function shouldIgnoreMenuDismissClick(e) {
+    return e.target.closest(
+      ".menu-item, .menu-toggle, .cc-slider, .menu-popup input, .menu-popup label, .menu-wrap",
+    );
+  }
+
   document.addEventListener("click", (e) => {
-    if (e.target.closest("#menu-backdrop")) {
-      closeAllMenus();
-      return;
-    }
-    if (!e.target.closest(".menu-wrap, .menu-popup")) closeAllMenus();
+    if (!isAnyMenuOpen()) return;
+    if (shouldIgnoreMenuDismissClick(e)) return;
+    closeAllMenus();
   });
+
+  document.addEventListener(
+    "touchend",
+    (e) => {
+      if (!isAnyMenuOpen()) return;
+      if (shouldIgnoreMenuDismissClick(e)) return;
+      if (!e.target.closest("#player-wrap")) return;
+      closeAllMenus();
+      showUI();
+    },
+    { passive: true },
+  );
 
   qualMenu.addEventListener("click", (e) => e.stopPropagation());
   speedMenu.addEventListener("click", (e) => e.stopPropagation());
