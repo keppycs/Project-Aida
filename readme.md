@@ -1,6 +1,6 @@
 # 🎬 Project Aida
 
-#### A modern, automated video transcoding + streaming pipeline with a lightweight web frontend.
+#### My personal, semi-automated video transcoding + streaming pipeline with a lightweight web frontend.
 
 Built with **Python 3.12**, **FFmpeg 8.1 Hoare**, and **Shaka Player 5.0.7**, Project Aida turns master videos into efficient, adaptive streaming formats and serves them on **[keppy.dev](https://keppy.dev "😳")** where I exclusively upload my 120 fps videos!
 
