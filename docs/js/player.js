@@ -76,7 +76,17 @@ const hdrBadge = document.getElementById("hdr-badge");
 const codecBadge = document.getElementById("codec-badge");
 const protocolBadge = document.getElementById("protocol-badge");
 const titleText = document.getElementById("title-text");
-const tmBtn = document.getElementById("tm-btn");
+const ccWrap = document.getElementById("cc-wrap");
+const ccBtn = document.getElementById("cc-btn");
+const ccMenu = document.getElementById("cc-menu");
+const ccOff = document.getElementById("cc-off");
+const ccOn = document.getElementById("cc-on");
+const ccBrightness = document.getElementById("cc-brightness");
+const ccContrast = document.getElementById("cc-contrast");
+const ccSaturation = document.getElementById("cc-saturation");
+const ccBrightnessVal = document.getElementById("cc-brightness-val");
+const ccContrastVal = document.getElementById("cc-contrast-val");
+const ccSaturationVal = document.getElementById("cc-saturation-val");
 
 // ── State ──────────────────────────────────────────────────────────────────────
 let player,
@@ -123,6 +133,150 @@ function persistPlayerPrefs() {
   try {
     localStorage.setItem(PLAYER_PREFS_KEY, JSON.stringify(payload));
   } catch {}
+}
+
+// ── Color correction (HDR content on SDR displays only) ───────────────────
+// CSS filter on the <video> element; persisted in localStorage. Hidden entirely on
+// HDR-capable displays. On SDR, defaults to On so PQ HDR does not look washed out.
+const CC_STORAGE_KEY = "aida-color-correction";
+/** User dismissed the SDR banner with ✕ — do not show again on future loads. */
+const CC_BANNER_DISMISSED_KEY = "aida-cc-banner-dismissed";
+/** User opened the Color menu at least once — do not show the banner again. */
+const CC_BANNER_MENU_USED_KEY = "aida-cc-banner-menu-used";
+const CC_BANNER_AUTO_MS = 30000;
+
+/** Defaults: on at first visit (SDR). */
+const CC_DEFAULTS = Object.freeze({
+  enabled: true,
+  brightness: 1,
+  contrast: 1.7,
+  saturation: 1.3,
+});
+
+let ccState = { ...CC_DEFAULTS };
+/** Auto-dismiss timer for the SDR color-correction banner (30s; does not persist). */
+let ccBannerTimer = null;
+
+function clampCc(n, min, max) {
+  return Math.min(max, Math.max(min, n));
+}
+
+function normalizeColorCorrection(o) {
+  const b = Number(o.brightness);
+  const c = Number(o.contrast);
+  const s = Number(o.saturation);
+  return {
+    enabled: Boolean(o.enabled),
+    brightness: Number.isFinite(b) ? clampCc(b, 0.5, 2) : CC_DEFAULTS.brightness,
+    contrast: Number.isFinite(c) ? clampCc(c, 0.5, 2.5) : CC_DEFAULTS.contrast,
+    saturation: Number.isFinite(s) ? clampCc(s, 0, 2) : CC_DEFAULTS.saturation,
+  };
+}
+
+function loadColorCorrectionState() {
+  try {
+    const raw = localStorage.getItem(CC_STORAGE_KEY);
+    if (raw) {
+      const o = JSON.parse(raw);
+      if (o && typeof o === "object") return normalizeColorCorrection(o);
+    }
+  } catch {}
+  return { ...CC_DEFAULTS };
+}
+
+function persistColorCorrection() {
+  try {
+    localStorage.setItem(CC_STORAGE_KEY, JSON.stringify(ccState));
+  } catch {}
+}
+
+function formatCcParam(n) {
+  const t = Number(n);
+  if (!Number.isFinite(t)) return "—";
+  return (Math.round(t * 100) / 100).toFixed(2);
+}
+
+function applyColorCorrection() {
+  if (!ccState.enabled) {
+    video.style.filter = "";
+    return;
+  }
+  const { brightness, contrast, saturation } = ccState;
+  video.style.filter = `brightness(${brightness}) contrast(${contrast}) saturate(${saturation})`;
+}
+
+function syncCcUiFromState() {
+  ccOff.classList.toggle("active", !ccState.enabled);
+  ccOn.classList.toggle("active", ccState.enabled);
+  ccBrightness.value = String(ccState.brightness);
+  ccContrast.value = String(ccState.contrast);
+  ccSaturation.value = String(ccState.saturation);
+  ccBrightnessVal.textContent = formatCcParam(ccState.brightness);
+  ccContrastVal.textContent = formatCcParam(ccState.contrast);
+  ccSaturationVal.textContent = formatCcParam(ccState.saturation);
+  ccBtn.classList.toggle("active", ccState.enabled);
+  ccBtn.title = ccState.enabled ? "Color correction: On" : "Color correction: Off";
+}
+
+function setCcEnabled(on) {
+  ccState.enabled = on;
+  applyColorCorrection();
+  syncCcUiFromState();
+  persistColorCorrection();
+}
+
+function shouldShowCcBanner() {
+  return (
+    !localStorage.getItem(CC_BANNER_DISMISSED_KEY) && !localStorage.getItem(CC_BANNER_MENU_USED_KEY)
+  );
+}
+
+function clearCcBannerTimer() {
+  if (ccBannerTimer != null) {
+    clearTimeout(ccBannerTimer);
+    ccBannerTimer = null;
+  }
+}
+
+function markCcBannerDismissed() {
+  try {
+    localStorage.setItem(CC_BANNER_DISMISSED_KEY, "1");
+  } catch {}
+  clearCcBannerTimer();
+  document.getElementById("cc-notice")?.remove();
+}
+
+function markCcBannerMenuUsed() {
+  try {
+    localStorage.setItem(CC_BANNER_MENU_USED_KEY, "1");
+  } catch {}
+  clearCcBannerTimer();
+  document.getElementById("cc-notice")?.remove();
+}
+
+function showColorCorrectionNotice() {
+  clearCcBannerTimer();
+  const notice = document.createElement("div");
+  notice.id = "cc-notice";
+  notice.className = "player-notice player-notice-timed";
+  notice.style.setProperty("--cc-banner-duration", `${CC_BANNER_AUTO_MS}ms`);
+  notice.innerHTML = `
+    <div class="player-notice-body">
+      <span><strong>Color correction</strong> is enabled to compensate for the HDR video on your non-HDR compatible setup. Please adjust the brightness, contrast, and saturation to taste in the Color menu.</span>
+      <button type="button" class="player-notice-close" aria-label="Dismiss">✕</button>
+    </div>
+    <div class="player-notice-progress" aria-hidden="true">
+      <div class="player-notice-progress-bar"></div>
+    </div>
+  `;
+  wrap.appendChild(notice);
+  notice
+    .querySelector(".player-notice-close")
+    .addEventListener("click", () => markCcBannerDismissed());
+  ccBannerTimer = setTimeout(() => {
+    ccBannerTimer = null;
+    notice.remove();
+  }, CC_BANNER_AUTO_MS);
 }
 
 // ── Display HDR detection ─────────────────────────────────────────────────────
@@ -287,16 +441,16 @@ async function init(meta, base) {
   hdrBadge.classList.add("show");
   if (isHdr) {
     const hdrCapable = await detectHDR();
-    if (!hdrCapable) {
-      const saved = localStorage.getItem("tm-filter");
-      const on = saved === "enabled"; // default OFF
-      tmBtn.style.display = "";
-      applyTonemapping(on);
-      updateTmBtn(on);
-      if (!localStorage.getItem("tm-filter-noticed")) {
-        showTmNotice();
-        localStorage.setItem("tm-filter-noticed", "1");
-      }
+    if (hdrCapable) {
+      // HDR display: no color correction UI — native HDR tone mapping.
+      ccWrap.style.display = "none";
+      video.style.filter = "";
+    } else {
+      ccState = loadColorCorrectionState();
+      syncCcUiFromState();
+      applyColorCorrection();
+      ccWrap.style.display = "";
+      if (shouldShowCcBanner()) showColorCorrectionNotice();
     }
   }
 
@@ -313,45 +467,17 @@ async function init(meta, base) {
   await loadSource(meta, base, prefs?.codec ?? null, prefs?.protocol ?? null);
 }
 
-// ── Tonemapping ────────────────────────────────────────────────────────────────
-function applyTonemapping(on) {
-  video.style.filter = on ? "brightness(1) contrast(1.7) saturate(1.3)" : "";
-}
-
-function updateTmBtn(on) {
-  tmBtn.classList.toggle("active", on);
-  tmBtn.title = on ? "Tonemapping: ON" : "Tonemapping: OFF";
-}
-
-function showTmNotice() {
-  const notice = document.createElement("div");
-  notice.id = "tm-notice";
-  notice.innerHTML = `
-    <span>HDR display not detected. If colours look washed out, use the <strong>Tonemapping</strong> button to enable it.</span>
-    <button id="tm-notice-close">✕</button>
-  `;
-  wrap.appendChild(notice);
-  document.getElementById("tm-notice-close").addEventListener("click", () => notice.remove());
-  setTimeout(() => notice?.remove(), 10000);
-}
-
 function showUnsupportedNotice() {
   const notice = document.createElement("div");
-  notice.id = "tm-notice";
+  notice.id = "unsupported-notice";
+  notice.className = "player-notice";
   notice.innerHTML = `
     <span>Your browser or device does not support any available video codec. Try a different browser.</span>
-    <button id="tm-notice-close">✕</button>
+    <button type="button" class="player-notice-close" aria-label="Dismiss">✕</button>
   `;
   wrap.appendChild(notice);
-  document.getElementById("tm-notice-close").addEventListener("click", () => notice.remove());
+  notice.querySelector(".player-notice-close").addEventListener("click", () => notice.remove());
 }
-
-tmBtn.addEventListener("click", () => {
-  const on = video.style.filter === "";
-  applyTonemapping(on);
-  updateTmBtn(on);
-  localStorage.setItem("tm-filter", on ? "enabled" : "disabled");
-});
 
 // ── Formatting ─────────────────────────────────────────────────────────────────
 function fmt(s) {
@@ -500,7 +626,11 @@ function hideUI() {
 }
 
 function isAnyMenuOpen() {
-  return qualMenu.classList.contains("open") || speedMenu.classList.contains("open");
+  return (
+    qualMenu.classList.contains("open") ||
+    speedMenu.classList.contains("open") ||
+    ccMenu.classList.contains("open")
+  );
 }
 
 wrap.addEventListener("mousemove", showUI);
@@ -526,6 +656,7 @@ function toggleMenu(menu) {
 function closeAllMenus() {
   qualMenu.classList.remove("open");
   speedMenu.classList.remove("open");
+  ccMenu.classList.remove("open");
 }
 
 qualBtn.addEventListener("click", (e) => {
@@ -539,6 +670,32 @@ speedBtn.addEventListener("click", (e) => {
 document.addEventListener("click", closeAllMenus);
 qualMenu.addEventListener("click", (e) => e.stopPropagation());
 speedMenu.addEventListener("click", (e) => e.stopPropagation());
+
+ccBtn.addEventListener("click", (e) => {
+  e.stopPropagation();
+  const wasOpen = ccMenu.classList.contains("open");
+  toggleMenu(ccMenu);
+  if (!wasOpen && ccMenu.classList.contains("open")) markCcBannerMenuUsed();
+});
+ccMenu.addEventListener("click", (e) => e.stopPropagation());
+
+ccOff.addEventListener("click", () => setCcEnabled(false));
+ccOn.addEventListener("click", () => setCcEnabled(true));
+
+function wireCcSlider(slider, key) {
+  slider.addEventListener("input", () => {
+    const v = parseFloat(slider.value);
+    if (!Number.isFinite(v)) return;
+    ccState[key] = v;
+    if (!ccState.enabled) ccState.enabled = true;
+    applyColorCorrection();
+    syncCcUiFromState();
+    persistColorCorrection();
+  });
+}
+wireCcSlider(ccBrightness, "brightness");
+wireCcSlider(ccContrast, "contrast");
+wireCcSlider(ccSaturation, "saturation");
 
 // ── Quality menu ───────────────────────────────────────────────────────────────
 function buildQualityMenu() {
@@ -864,7 +1021,7 @@ if (isMobile) {
   wrap.addEventListener(
     "touchmove",
     (e) => {
-      if (e.target.closest("#controls, .menu-popup, #progress-wrap")) return;
+      if (e.target.closest("#controls, .menu-popup, #progress-wrap, .cc-slider")) return;
       const dx = e.touches[0].clientX - touchStartX;
       const dy = e.touches[0].clientY - touchStartY;
       const adx = Math.abs(dx);
@@ -901,7 +1058,7 @@ if (isMobile) {
   wrap.addEventListener(
     "touchend",
     (e) => {
-      if (e.target.closest("#controls, .menu-popup, #progress-wrap")) return;
+      if (e.target.closest("#controls, .menu-popup, #progress-wrap, .cc-slider")) return;
       if (swipeActive) {
         swipeActive = false;
         showUI();
@@ -934,7 +1091,7 @@ if (isMobile) {
   wrap.addEventListener(
     "touchend",
     (e) => {
-      if (e.target.closest(".ctrl-btn, .menu-toggle, .menu-item")) showUI();
+      if (e.target.closest(".ctrl-btn, .menu-toggle, .menu-item, .cc-slider")) showUI();
     },
     { passive: true },
   );

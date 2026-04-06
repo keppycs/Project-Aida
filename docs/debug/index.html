@@ -174,9 +174,59 @@
             </div>
           </div>
 
-          <button class="ctrl-btn" id="tm-btn" title="Tonemapping" style="display: none">
-            Tonemapping
-          </button>
+          <div class="menu-wrap" id="cc-wrap" style="display: none">
+            <button class="ctrl-btn" id="cc-btn" title="Color correction" type="button">
+              Color
+            </button>
+            <div class="menu-popup" id="cc-menu">
+              <div class="menu-header">Color correction</div>
+              <div class="cc-toggle-row menu-toggle-row">
+                <button type="button" class="menu-toggle" id="cc-off" data-cc-enable="0">Off</button>
+                <button type="button" class="menu-toggle" id="cc-on" data-cc-enable="1">On</button>
+              </div>
+              <div class="cc-sliders">
+                <div class="cc-slider-row">
+                  <label class="cc-label" for="cc-brightness">Brightness</label>
+                  <input
+                    type="range"
+                    class="cc-slider"
+                    id="cc-brightness"
+                    min="0.5"
+                    max="2"
+                    step="0.01"
+                    value="1"
+                  />
+                  <span class="cc-val" id="cc-brightness-val">1.00</span>
+                </div>
+                <div class="cc-slider-row">
+                  <label class="cc-label" for="cc-contrast">Contrast</label>
+                  <input
+                    type="range"
+                    class="cc-slider"
+                    id="cc-contrast"
+                    min="0.5"
+                    max="2.5"
+                    step="0.01"
+                    value="1.7"
+                  />
+                  <span class="cc-val" id="cc-contrast-val">1.70</span>
+                </div>
+                <div class="cc-slider-row">
+                  <label class="cc-label" for="cc-saturation">Saturation</label>
+                  <input
+                    type="range"
+                    class="cc-slider"
+                    id="cc-saturation"
+                    min="0"
+                    max="2"
+                    step="0.01"
+                    value="1.3"
+                  />
+                  <span class="cc-val" id="cc-saturation-val">1.30</span>
+                </div>
+              </div>
+            </div>
+          </div>
 
           <div class="menu-wrap">
             <button class="ctrl-btn" id="quality-btn" title="Quality">
