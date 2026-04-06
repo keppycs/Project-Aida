@@ -123,18 +123,6 @@ function createCardHTML(video) {
   `;
 }
 
-function createSkeletonCardHTML() {
-  return `
-    <div class="skeleton-card">
-      <div class="skeleton-card-thumb"></div>
-      <div class="skeleton-card-content">
-        <div class="skeleton-card-line"></div>
-        <div class="skeleton-card-line"></div>
-      </div>
-    </div>
-  `;
-}
-
 // ── Search ──
 searchInput.addEventListener("input", (e) => {
   const query = e.target.value.toLowerCase();
