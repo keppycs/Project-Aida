@@ -2,9 +2,12 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, viewport-fit=cover"
+    />
     <title>Project Aida</title>
-    <link rel="icon" type="image/x-icon" href="assets/favicons/index.svg" />
+    <link rel="icon" href="assets/favicons/flushed.svg" type="image/svg+xml" />
 
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link
@@ -16,8 +19,9 @@
 
     <link rel="stylesheet" href="css/watch.css" />
     <link rel="stylesheet" href="css/player.css" />
-    <script defer src="js/player.js"></script>
+    <script type="module" src="js/player/index.js"></script>
     <script defer src="js/loader.js"></script>
+    <script defer src="js/site-env.js"></script>
     <script defer src="js/watch.js"></script>
   </head>
   <body>
@@ -34,6 +38,7 @@
         <div class="badge-accent" id="hdr-badge">—</div>
         <div class="badge-accent" id="codec-badge">—</div>
         <div class="badge-accent" id="protocol-badge">—</div>
+        <div class="badge-accent" id="local-badge">LOCAL</div>
       </div>
 
       <!-- Big play -->
@@ -285,6 +290,8 @@
           </button>
         </div>
       </div>
+
+      <div id="menu-backdrop" class="menu-backdrop" aria-hidden="true"></div>
     </div>
   </body>
 </html>

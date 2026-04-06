@@ -3,7 +3,7 @@ const CDN_BASE = "https://cdn.keppy.dev/file/ProjectAida";
 const DEFAULT_ID = "0"; // fallback when no ?v= param in URL
 
 // Fetches metadata.json from base and passes it to init().
-// Called by each page's own main.js with the appropriate base URL.
+// Called from js/watch.js after CDN_BASE / DEFAULT_ID are defined.
 function load(base) {
   fetch(`${base}/metadata.json`)
     .then((r) => {

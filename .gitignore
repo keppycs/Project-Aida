@@ -31,3 +31,6 @@ logs/
 
 # Todo
 todo.md
+
+# Local CMAF output (see readme — not committed)
+docs/local/

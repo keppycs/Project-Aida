@@ -152,7 +152,7 @@ def main() -> None:
         )
 
     if GENERATE_THUMBNAILS:
-        thumb_dir = root / "docs" / "debug" / video_id
+        thumb_dir = root / "docs" / "local" / video_id
         thumb_dir.mkdir(parents=True, exist_ok=True)
         generate_thumbnails(
             input_path=video_file,
@@ -170,7 +170,7 @@ def main() -> None:
     encoded_codecs:   list[str] = []
 
     for codec_name, (encoder, variants) in CODECS.items():
-        out_dir = root / "docs" / "debug" / video_id / codec_name
+        out_dir = root / "docs" / "local" / video_id / codec_name
 
         out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -237,7 +237,7 @@ def main() -> None:
         "codecs":         encoded_codecs,
     }
 
-    meta_local = root / "docs" / "debug" / video_id / "metadata.json"
+    meta_local = root / "docs" / "local" / video_id / "metadata.json"
     meta_local.write_text(json.dumps(meta, indent=2), encoding="utf-8")
     log.info(f"[METADATA]     Written {meta_local}")
 
@@ -270,7 +270,7 @@ def main() -> None:
 
     if UPLOAD_TO_B2:
         assert b2 is not None
-        video_dir = root / "docs" / "debug" / video_id
+        video_dir = root / "docs" / "local" / video_id
         if is_already_uploaded(b2, B2_BUCKET, video_id, log):
             log.info(f"[SKIP UPLOAD]  {video_id} — already exists in B2.")
         else:

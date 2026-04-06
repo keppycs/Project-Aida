@@ -38,33 +38,6 @@ body {
   padding: 20px;
 }
 
-/* ── Logo ── */
-#logo-link {
-  position: absolute;
-  top: 20px;
-  left: 20px;
-  z-index: 10;
-}
-#logo-link a {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 48px;
-  height: 48px;
-  border-radius: var(--radius);
-  transition:
-    background var(--anim-time),
-    transform var(--anim-time);
-}
-#logo-link a:hover {
-  background: rgba(255, 255, 255, 0.08);
-  transform: scale(1.02);
-}
-#logo-link img {
-  width: 28px;
-  height: 28px;
-}
-
 /* ── Main ── */
 main {
   width: 100%;
@@ -403,11 +376,6 @@ main {
 @media (max-width: 480px) {
   body {
     padding: 16px;
-  }
-
-  #logo-link {
-    top: 16px;
-    left: 16px;
   }
 
   #search-wrap {

@@ -94,7 +94,8 @@ video {
   top: 0;
   left: 0;
   right: 0;
-  padding: 16px 20px;
+  padding: max(16px, env(safe-area-inset-top)) max(20px, env(safe-area-inset-right)) 16px
+    max(20px, env(safe-area-inset-left));
   display: flex;
   align-items: center;
   gap: 12px;
@@ -216,7 +217,8 @@ video {
   bottom: 0;
   left: 0;
   right: 0;
-  padding: 0 16px 14px;
+  padding: 0 max(16px, env(safe-area-inset-right)) max(14px, env(safe-area-inset-bottom))
+    max(16px, env(safe-area-inset-left));
   opacity: 0;
   transform: translateY(6px);
   transition:
@@ -272,18 +274,20 @@ video {
 #progress-thumb {
   position: absolute;
   top: 50%;
-  right: 0;
+  left: 0;
+  right: auto;
   width: 13px;
   height: 13px;
   background: var(--accent);
   border-radius: 50%;
-  transform: translate(50%, -50%) scale(0);
+  /* Center dot on left% (JS sets left); do not use right:0 — it fights left% and skews the knob */
+  transform: translate(-50%, -50%) scale(0);
   transition: transform 0.15s var(--ease);
   pointer-events: none;
   box-shadow: 0 0 6px rgba(232, 255, 71, 0.5);
 }
 #progress-wrap:hover #progress-thumb {
-  transform: translate(50%, -50%) scale(1);
+  transform: translate(-50%, -50%) scale(1);
 }
 
 /* Time tooltip on hover */
@@ -571,11 +575,11 @@ video {
   border-color: rgba(255, 255, 255, 0.2);
 }
 
-/* ── Debug badge ── */
-#debug-badge.show {
+/* ── Local playback badge (./local/{id} CMAF, see readme) ── */
+#local-badge.show {
   display: block;
-  color: rgba(255, 0, 0, 0.8);
-  border: 1px solid rgba(255, 0, 0, 0.8);
+  color: rgba(120, 210, 255, 0.95);
+  border: 1px solid rgba(120, 210, 255, 0.55);
 }
 
 /* ── Keyboard shortcut toast ── */
@@ -807,5 +811,121 @@ video {
   to {
     opacity: 1;
     transform: translateX(-50%) translateY(0);
+  }
+}
+
+/* ── Responsive shell (compact layout) ── */
+.menu-backdrop {
+  display: none;
+  position: absolute;
+  inset: 0;
+  z-index: 12;
+  background: rgba(0, 0, 0, 0.5);
+  pointer-events: auto;
+}
+
+.menu-backdrop.open {
+  display: block;
+}
+
+#player-wrap.layout-compact {
+  overflow: visible;
+  --ctrl-h: 38px;
+  --bar-h: 3px;
+}
+
+#player-wrap.layout-compact #controls {
+  padding: 0 max(10px, env(safe-area-inset-right)) max(8px, env(safe-area-inset-bottom))
+    max(10px, env(safe-area-inset-left));
+}
+
+#player-wrap.layout-compact #progress-wrap {
+  height: 14px;
+  margin-bottom: 2px;
+}
+
+#player-wrap.layout-compact #title-bar {
+  padding: max(8px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-right)) 8px
+    max(12px, env(safe-area-inset-left));
+  gap: 6px;
+}
+
+#player-wrap.layout-compact #title-text {
+  font-size: 13px;
+}
+
+#player-wrap.layout-compact .badge-accent {
+  font-size: 9px;
+  padding: 1px 4px;
+}
+
+#player-wrap.layout-compact #ctrl-row {
+  overflow-x: auto;
+  overflow-y: hidden;
+  flex-wrap: nowrap;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+  gap: 2px;
+  height: var(--ctrl-h);
+}
+
+#player-wrap.layout-compact #ctrl-row::-webkit-scrollbar {
+  display: none;
+}
+
+#player-wrap.layout-compact .ctrl-btn {
+  width: 32px;
+  height: 32px;
+  min-width: 32px;
+  min-height: 32px;
+  border-radius: 6px;
+}
+
+#player-wrap.layout-compact #time-display {
+  font-size: 11px;
+  letter-spacing: -0.02em;
+}
+
+#player-wrap.layout-compact #quality-btn {
+  padding: 0 4px;
+  gap: 4px;
+}
+
+#player-wrap.layout-compact #quality-label {
+  font-size: 10px;
+}
+
+#player-wrap.layout-compact #cc-btn {
+  font-size: 10px;
+  padding: 0 5px;
+}
+
+#player-wrap.layout-compact #big-play svg {
+  width: 56px;
+  height: 56px;
+}
+
+#player-wrap.layout-compact .menu-popup.open {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  top: auto;
+  width: 100%;
+  min-width: 0;
+  max-height: min(72vh, 520px);
+  overflow-y: auto;
+  border-radius: 12px 12px 0 0;
+  transform: none;
+  padding-left: max(12px, env(safe-area-inset-left));
+  padding-right: max(12px, env(safe-area-inset-right));
+  padding-bottom: max(12px, env(safe-area-inset-bottom));
+  z-index: 20;
+  box-sizing: border-box;
+}
+
+@media (pointer: coarse) {
+  #player-wrap.layout-compact #progress-track {
+    height: 4px;
   }
 }

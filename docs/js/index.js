@@ -1,6 +1,6 @@
 // js/index.js
-const INDEX_URL = "https://cdn.keppy.dev/file/ProjectAida/index.json";
 const CDN_BASE = "https://cdn.keppy.dev/file/ProjectAida";
+const INDEX_URL = "https://cdn.keppy.dev/file/ProjectAida/index.json";
 
 const searchInput = document.getElementById("search-input");
 const heroSkeleton = document.getElementById("hero-skeleton");
@@ -11,9 +11,50 @@ const noResults = document.getElementById("no-results");
 let allVideos = [];
 let filteredVideos = [];
 
+/** HDR thumbnail assets only when the *display* can show HDR; mirrors player/engine detectHDR. */
+let displayHdrCapable = false;
+
+async function detectDisplayHdr() {
+  const dynamicRange = window.matchMedia("(dynamic-range: high)").matches;
+  const wideGamut =
+    window.matchMedia("(color-gamut: p3)").matches ||
+    window.matchMedia("(color-gamut: rec2020)").matches;
+  let mediaCapabilities = false;
+  try {
+    const r = await navigator.mediaCapabilities?.decodingInfo({
+      type: "media-source",
+      video: {
+        contentType: 'video/mp4; codecs="hvc1"',
+        width: 1920,
+        height: 1080,
+        bitrate: 10000000,
+        framerate: 60,
+        transferFunction: "pq",
+        colorGamut: "rec2020",
+      },
+    });
+    mediaCapabilities = r?.supported ?? false;
+  } catch {}
+  return dynamicRange || (mediaCapabilities && wideGamut);
+}
+
+function heroThumbnailFile(video) {
+  return video.hdr && displayHdrCapable ? "thumbnail_hdr.avif" : "thumbnail_sdr.webp";
+}
+
+function cardThumbnailFile(video) {
+  return video.hdr && displayHdrCapable ? "thumbnail_hdr_720p.avif" : "thumbnail_sdr_720p.webp";
+}
+
 // ── Fetch and render ──
 async function load() {
   try {
+    try {
+      displayHdrCapable = await detectDisplayHdr();
+    } catch {
+      displayHdrCapable = false;
+    }
+
     const res = await fetch(INDEX_URL);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     allVideos = await res.json();
@@ -37,10 +78,10 @@ async function load() {
 }
 
 function renderHero(video) {
-  heroContent.href = `/watch?v=${video.id}`;
+  heroContent.href = `watch.html?v=${encodeURIComponent(video.id)}`;
 
   const heroImg = document.getElementById("hero-img");
-  const file = video.hdr ? "thumbnail_hdr.avif" : "thumbnail_sdr.webp";
+  const file = heroThumbnailFile(video);
   const alt = `${escapeHtml(video.title)} thumbnail`;
   heroImg.innerHTML = `<img src="${CDN_BASE}/${video.id}/${file}" alt="${alt}">`;
 
@@ -67,9 +108,9 @@ function renderGrid(videos) {
 
 function createCardHTML(video) {
   return `
-    <a href="/watch?v=${video.id}" class="video-card">
+    <a href="watch.html?v=${encodeURIComponent(video.id)}" class="video-card">
       <div class="video-card-thumbnail">
-        <img src="${CDN_BASE}/${video.id}/${video.hdr ? "thumbnail_hdr_720p.avif" : "thumbnail_sdr_720p.webp"}" alt="${escapeHtml(video.title)} thumbnail" loading="lazy" />
+        <img src="${CDN_BASE}/${video.id}/${cardThumbnailFile(video)}" alt="${escapeHtml(video.title)} thumbnail" loading="lazy" />
       </div>
       <div class="video-card-content">
         <div class="video-card-title">${escapeHtml(video.title)}</div>

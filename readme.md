@@ -79,6 +79,12 @@ Located in `/docs`, the frontend is minimal and fast:
 - 🎨 **Styling**
   - Vanilla CSS with a clean, modern look⁵
 
+**Local CMAF playback (not in git):** Encode output goes under `docs/local/{video_id}/` (ignored by `.gitignore`). Open **`watch.html`** over HTTP (e.g. Live Server). Links use explicit **`watch.html?v=…`** in markup/JS; if you use Cloudflare or another reverse proxy, you can rewrite to a clean URL such as `/watch` while the repo stays file-based.
+
+On the **production** host (`keppy.dev` / `www.keppy.dev` in `docs/js/site-env.js`), playback always uses the **CDN**; `?local=` is ignored.
+
+On **any other host** (localhost, LAN, preview), add **`&local=1`** to the watch URL (e.g. `watch.html?v=0&local=1`) to load **`./local/{id}`** CMAF instead of the CDN. A **LOCAL** badge appears when that folder is used. Favicons: **flushed** on the live site, **bug** off-live (`site-env.js`).
+
 Hosted through GitHub Pages.
 
 ---
@@ -109,7 +115,7 @@ Hosted through GitHub Pages.
 
 From the repo root, run: `py src/main.py -i "path to video" -id "video id" -desc "description" -tags "i,like,soft,cookies"` → get fully streamable output, which looks like:
 
-- docs/debug/{video_id}/
+- docs/local/{video_id}/
   - 📂 AV1 and 📂 HEVC — each folder has the same layout:
     - Segments `chunk_<rep>_<n>.fmp4`, init segments `init_<rep>.mp4`
     - `manifest.mpd`, `master.m3u8`, `media_<rep>.m3u8` (one media playlist per ladder rung)
