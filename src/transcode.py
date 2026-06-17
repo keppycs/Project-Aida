@@ -1,7 +1,7 @@
 from pathlib import Path
 from datetime import datetime
 from fractions import Fraction
-from typing import Optional
+from typing import Callable, Optional
 import logging
 import re
 import subprocess
@@ -84,6 +84,7 @@ def run_ffmpeg(
     total_frames: int,
     codec_name: str,
     log: logging.Logger,
+    on_progress: Callable[[str, int, int], None] | None = None,
 ) -> int:
     """Run an ffmpeg command, streaming a live progress line to the terminal.
 
@@ -112,16 +113,19 @@ def run_ffmpeg(
         if m:
             last_frame = int(m.group(1))
             pct = min(100, round(last_frame / total_frames * 100)) if total_frames else 0
-            ts  = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            sys.stdout.write(f"\r{ts}  INFO      [ENCODE]       {codec_name}  {last_frame}/{total_frames} frames  {pct}%")
-            sys.stdout.flush()
+            if on_progress:
+                on_progress(codec_name, last_frame, total_frames)
+            else:
+                ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                sys.stdout.write(f"\r{ts}  INFO      [ENCODE]       {codec_name}  {last_frame}/{total_frames} frames  {pct}%")
+                sys.stdout.flush()
 
     proc.wait()
-    sys.stdout.write("\n")  # newline after progress line
-    sys.stdout.flush()
+    if not on_progress:
+        sys.stdout.write("\n")
+        sys.stdout.flush()
 
     if proc.returncode != 0:
-        # Surface last 3000 chars of stderr for the error log
         tail = "\n".join(stderr_lines)[-3000:]
         log.error(f"[FAIL ENCODE]  {codec_name}\n{tail}")
 

@@ -1,20 +1,75 @@
-from dotenv import load_dotenv
 from pathlib import Path
 import os
 
-load_dotenv(Path(__file__).parent.parent / ".env")
-
 # ── B2 Config ──────────────────────────────────────────────────────────────────
-def _require_env(key: str) -> str:
-    val = os.getenv(key)
-    if not val:
-        raise RuntimeError(f"Missing required environment variable: {key}")
-    return val
+# Credentials lazy-load from keyring first, .env fallback.
+# No import-time crash when B2 is not configured.
 
-B2_KEY_ID   = _require_env("B2_KEY_ID")
-B2_APP_KEY  = _require_env("B2_APP_KEY")
-B2_BUCKET   = _require_env("B2_BUCKET")
-B2_ENDPOINT = _require_env("B2_ENDPOINT")  # region is embedded in the endpoint URL
+_B2_KEYS = ("B2_KEY_ID", "B2_APP_KEY", "B2_BUCKET", "B2_ENDPOINT")
+_b2_cache: dict[str, str] | None = None
+
+
+def _load_b2_config() -> dict[str, str]:
+    global _b2_cache
+    if _b2_cache is not None:
+        return _b2_cache
+
+    config: dict[str, str] = {}
+
+    try:
+        import keyring
+        for key in _B2_KEYS:
+            val = keyring.get_password("project-aida", key)
+            if val:
+                config[key] = val
+    except Exception:
+        pass
+
+    if len(config) < len(_B2_KEYS):
+        try:
+            from dotenv import load_dotenv
+            load_dotenv(Path(__file__).parent.parent / ".env")
+        except Exception:
+            pass
+        for key in _B2_KEYS:
+            if key not in config:
+                val = os.getenv(key)
+                if val:
+                    config[key] = val.strip()
+
+    _b2_cache = config
+    return config
+
+
+def get_b2_config() -> dict[str, str]:
+    """Return whatever B2 credentials are available (may be incomplete)."""
+    return dict(_load_b2_config())
+
+
+def get_b2_credentials() -> tuple[str, str, str, str]:
+    """Return (key_id, app_key, bucket, endpoint). Raises if incomplete."""
+    config = _load_b2_config()
+    missing = [k for k in _B2_KEYS if k not in config]
+    if missing:
+        raise RuntimeError(
+            f"Missing B2 credentials: {', '.join(missing)}. "
+            "Configure them in the GUI settings or in a .env file."
+        )
+    return config["B2_KEY_ID"], config["B2_APP_KEY"], config["B2_BUCKET"], config["B2_ENDPOINT"]
+
+
+def save_b2_credentials(key_id: str, app_key: str, bucket: str, endpoint: str) -> None:
+    """Persist B2 credentials to the OS keyring."""
+    import keyring
+    for key, val in zip(_B2_KEYS, (key_id, app_key, bucket, endpoint)):
+        keyring.set_password("project-aida", key, val)
+    global _b2_cache
+    _b2_cache = None
+
+
+def b2_configured() -> bool:
+    """True when all four B2 credentials are available."""
+    return all(k in _load_b2_config() for k in _B2_KEYS)
 
 # Set to True to upload encoded segments to B2 after encoding.
 # Disable when testing locally to skip the upload step entirely.

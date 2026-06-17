@@ -2,14 +2,14 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
 from threading import Lock
-from typing import Any
+from typing import Any, Callable
 import argparse
 import logging
 import sys
 import boto3
 from botocore.config import Config
 
-from config import B2_KEY_ID, B2_APP_KEY, B2_BUCKET, B2_ENDPOINT
+from config import get_b2_credentials
 
 
 MIME_MAP = {
@@ -21,14 +21,17 @@ MIME_MAP = {
 }
 
 
-def make_b2_client() -> Any:
-    return boto3.client(
+def make_b2_client() -> tuple[Any, str]:
+    """Create a B2/S3 client. Returns (client, bucket_name)."""
+    key_id, app_key, bucket, endpoint = get_b2_credentials()
+    client = boto3.client(
         "s3",
-        endpoint_url=B2_ENDPOINT,
-        aws_access_key_id=B2_KEY_ID,
-        aws_secret_access_key=B2_APP_KEY,
+        endpoint_url=endpoint,
+        aws_access_key_id=key_id,
+        aws_secret_access_key=app_key,
         config=Config(signature_version="s3v4"),
     )
+    return client, bucket
 
 
 def is_already_uploaded(b2: Any, bucket: str, video_id: str, log: logging.Logger) -> bool:
@@ -43,7 +46,15 @@ def is_already_uploaded(b2: Any, bucket: str, video_id: str, log: logging.Logger
         return False
 
 
-def upload_folder(b2: Any, local_dir: Path, b2_prefix: str, log: logging.Logger, max_workers: int = 20) -> bool:
+def upload_folder(
+    b2: Any,
+    bucket: str,
+    local_dir: Path,
+    b2_prefix: str,
+    log: logging.Logger,
+    max_workers: int = 20,
+    on_progress: Callable[[int, int], None] | None = None,
+) -> bool:
     """Upload all files in local_dir recursively to B2 under b2_prefix, concurrently.
 
     Returns True if all uploads succeeded.
@@ -60,7 +71,7 @@ def upload_folder(b2: Any, local_dir: Path, b2_prefix: str, log: logging.Logger,
         key          = f"{b2_prefix}/{relative.as_posix()}"
         content_type = MIME_MAP.get(f.suffix.lower(), "application/octet-stream")
         try:
-            b2.upload_file(str(f), B2_BUCKET, key, ExtraArgs={"ContentType": content_type})
+            b2.upload_file(str(f), bucket, key, ExtraArgs={"ContentType": content_type})
             log.debug(f"  OK  {key}")
             result = None
         except Exception as e:
@@ -68,10 +79,12 @@ def upload_folder(b2: Any, local_dir: Path, b2_prefix: str, log: logging.Logger,
             result = str(relative)
         with lock:
             done += 1
-            # \r overwrites the line in the terminal; debug log gets full detail
-            ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            sys.stdout.write(f"\r{ts}  INFO      [UPLOAD]       {done}/{total} files")
-            sys.stdout.flush()
+            if on_progress:
+                on_progress(done, total)
+            else:
+                ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                sys.stdout.write(f"\r{ts}  INFO      [UPLOAD]       {done}/{total} files")
+                sys.stdout.flush()
         return result
 
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
@@ -81,25 +94,26 @@ def upload_folder(b2: Any, local_dir: Path, b2_prefix: str, log: logging.Logger,
             if result:
                 failed.append(result)
 
-    sys.stdout.write("\n")  # newline after the progress line
-    sys.stdout.flush()
+    if not on_progress:
+        sys.stdout.write("\n")
+        sys.stdout.flush()
 
     if failed:
         log.error(f"  {len(failed)} file(s) failed: {', '.join(failed)}")
         return False
 
-    log.info(f"  Upload complete → b2://{B2_BUCKET}/{b2_prefix}/")
+    log.info(f"  Upload complete → b2://{bucket}/{b2_prefix}/")
     return True
 
 
-def upload_index(b2: Any, index_path: Path, log: logging.Logger) -> None:
+def upload_index(b2: Any, bucket: str, index_path: Path, log: logging.Logger) -> None:
     """Upload index.json to the bucket root for the public homepage."""
     try:
         b2.upload_file(
-            str(index_path), B2_BUCKET, "index.json",
+            str(index_path), bucket, "index.json",
             ExtraArgs={"ContentType": "application/json"},
         )
-        log.info(f"[INDEX]        Uploaded index.json → b2://{B2_BUCKET}/index.json")
+        log.info(f"[INDEX]        Uploaded index.json → b2://{bucket}/index.json")
     except Exception as e:
         log.error(f"[INDEX]        Failed to upload index.json: {e}")
 
@@ -121,15 +135,16 @@ if __name__ == "__main__":
     log = logging.getLogger("upload")
     log.setLevel(logging.DEBUG)
     handler = logging.StreamHandler(sys.stdout)
-    handler.setLevel(logging.INFO)  # console: INFO+ only, per-file detail is DEBUG
+    handler.setLevel(logging.INFO)
     handler.setFormatter(logging.Formatter("%(asctime)s  %(levelname)-8s  %(message)s", "%Y-%m-%d %H:%M:%S"))
     log.addHandler(handler)
     log.propagate = False
 
+    b2, bucket = make_b2_client()
+
     log.info(f"Folder : {folder}")
     log.info(f"Prefix : {prefix}")
-    log.info(f"Bucket : {B2_BUCKET}")
+    log.info(f"Bucket : {bucket}")
 
-    b2 = make_b2_client()
-    ok = upload_folder(b2, folder, prefix, log)
+    ok = upload_folder(b2, bucket, folder, prefix, log)
     sys.exit(0 if ok else 1)

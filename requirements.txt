@@ -1,0 +1,5 @@
+nicegui
+pywebview
+keyring
+python-dotenv
+boto3

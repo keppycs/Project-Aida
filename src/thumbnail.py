@@ -1,6 +1,11 @@
+import argparse
+import logging
 import subprocess
+import sys
 from pathlib import Path
 from logging import Logger
+
+from transcode import probe_video, parse_framerate
 
 
 # ffprobe → zscale name mappings (pass-through for matching names, fallback to raw value)
@@ -32,13 +37,14 @@ def generate_thumbnails(
     color_trc: str,
     colorspace: str,
     log: Logger,
+    seek_override: float | None = None,
 ) -> None:
     """Generate four thumbnails for a video: full-res and 720p, HDR (AVIF) and SDR (WebP).
 
     All colorspace metadata is derived from probe data rather than hardcoded,
     so the output accurately reflects the source. Thumbnails are written to out_dir.
     """
-    seek = max(1.0, duration * 0.1)
+    seek = seek_override if seek_override is not None else max(1.0, duration * 0.1)
     seek_str = f"{seek:.3f}"
 
     z_primaries = _PRIMARIES_MAP.get(color_primaries, color_primaries)
@@ -126,3 +132,71 @@ def generate_thumbnails(
                 f"{e.stderr.decode(errors='replace')}\n"
                 f"CMD: {' '.join(cmd)}"
             )
+
+
+def _parse_seek(value: str) -> float:
+    """Parse a seek value — accepts seconds (e.g. '368.742') or HH:MM:SS.ms (e.g. '00:06:08.742')."""
+    if ":" in value:
+        parts = value.split(":")
+        if len(parts) == 3:
+            return int(parts[0]) * 3600 + int(parts[1]) * 60 + float(parts[2])
+        if len(parts) == 2:
+            return int(parts[0]) * 60 + float(parts[1])
+    return float(value)
+
+
+if __name__ == "__main__":
+    from config import HDR_TRANSFERS
+
+    parser = argparse.ArgumentParser(description="Generate thumbnails for a video at a specific timestamp.")
+    parser.add_argument("source", help="Path to the source video file.")
+    parser.add_argument("--id", dest="video_id", required=True, help="Video ID (used as output folder name under docs/local/).")
+    parser.add_argument("--seek", default=None, help="Timestamp to capture (seconds or HH:MM:SS.ms). Default: 10%% of duration.")
+    args = parser.parse_args()
+
+    video_file = Path(args.source).resolve()
+    if not video_file.is_file():
+        print(f"Error: '{video_file}' is not a file.", file=sys.stderr)
+        sys.exit(1)
+
+    log = logging.getLogger("thumbnail")
+    log.setLevel(logging.DEBUG)
+    handler = logging.StreamHandler(sys.stdout)
+    handler.setFormatter(logging.Formatter("%(asctime)s  %(levelname)-8s  %(message)s", "%Y-%m-%d %H:%M:%S"))
+    log.addHandler(handler)
+
+    probe = probe_video(video_file)
+    vs = next((s for s in probe["streams"] if s["codec_type"] == "video"), None)
+    if vs is None:
+        print("Error: no video stream found.", file=sys.stderr)
+        sys.exit(1)
+
+    duration = float(probe.get("format", {}).get("duration", 0))
+    color_primaries = vs.get("color_primaries", "bt709")
+    color_trc = vs.get("color_transfer", "bt709")
+    colorspace = vs.get("color_space", "bt709")
+
+    seek = _parse_seek(args.seek) if args.seek else None
+    if seek is not None and seek > duration:
+        print(f"Warning: seek {seek:.3f}s exceeds duration {duration:.3f}s, clamping.", file=sys.stderr)
+        seek = max(0, duration - 1.0)
+
+    root = Path(__file__).parent.parent
+    out_dir = root / "docs" / "local" / args.video_id
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    log.info(f"Source     : {video_file}")
+    log.info(f"Output     : {out_dir}")
+    log.info(f"Duration   : {duration:.3f}s")
+    log.info(f"Seek       : {seek if seek is not None else 'auto (10%)'}")
+
+    generate_thumbnails(
+        input_path=video_file,
+        out_dir=out_dir,
+        duration=duration,
+        color_primaries=color_primaries,
+        color_trc=color_trc,
+        colorspace=colorspace,
+        log=log,
+        seek_override=seek,
+    )
