@@ -1,73 +1,29 @@
 /**
- * Desktop: click video toggles play; mouse drags scrub the seek bar.
- * Mobile (compact layout or coarse pointer): tap the video surface toggles chrome
- * (show/hide controls); double-tap left/right halves seek ±5s with a ripple overlay.
- * Only the center #big-play control toggles playback. Drag on the seek bar scrubs.
- * Touch `click` on the video is ignored so we do not double-fire after touchend.
+ * Mobile-only player input: touch-drag scrubbing on the seek bar, tap-to-toggle chrome
+ * on the video surface, and double-tap left/right to seek ±5s with a ripple overlay.
+ * Only the center #big-play control toggles playback on mobile — see desktop-input.js
+ * for the click-to-play equivalent. Touch `click` on the video is ignored so we do not
+ * double-fire after touchend.
  */
+import { isTouchInput } from "./capabilities.js";
 
-export function bindProgressInteractions({
+export function bindMobileProgressInput({
   ctx,
   getProfile,
   video,
   fmt,
-  getProgressFrac,
   applyProgress,
-  setHoverPreview,
-  clearHoverPreview,
   setDragging,
   isDragging,
-  setHovering,
   onScrubTo,
   showUI,
 }) {
   const { progWrap, timeTip, curTime } = ctx;
 
-  progWrap.addEventListener("mouseenter", () => setHovering(true));
-
-  progWrap.addEventListener("mouseleave", () => {
-    setHovering(false);
-    clearHoverPreview();
-    if (!isDragging() && video.duration) {
-      applyProgress(video.currentTime / video.duration);
-    }
-  });
-
-  progWrap.addEventListener("mousemove", (e) => {
-    const frac = getProgressFrac(e);
-    const x = e.clientX - progWrap.getBoundingClientRect().left;
-    timeTip.textContent = fmt(frac * (video.duration || 0));
-    timeTip.style.left = x + "px";
-    if (!isDragging()) setHoverPreview(frac);
-  });
-
-  progWrap.addEventListener("mousedown", (e) => {
-    setDragging(true);
-    clearHoverPreview();
-    applyProgress(getProgressFrac(e));
-  });
-
-  document.addEventListener("mousemove", (e) => {
-    if (!isDragging()) return;
-    applyProgress(getProgressFrac(e));
-    curTime.textContent = fmt(getProgressFrac(e) * (video.duration || 0));
-  });
-
-  document.addEventListener("mouseup", (e) => {
-    if (!isDragging()) return;
-    setDragging(false);
-    onScrubTo(getProgressFrac(e));
-  });
-
-  const useTouchScrub = () => {
-    const p = getProfile();
-    return p.layout === "compact" || p.coarsePointer;
-  };
-
   progWrap.addEventListener(
     "touchstart",
     (e) => {
-      if (!useTouchScrub()) return;
+      if (!isTouchInput(getProfile())) return;
       e.preventDefault();
       setDragging(true);
       const rect = progWrap.getBoundingClientRect();
@@ -81,7 +37,7 @@ export function bindProgressInteractions({
   progWrap.addEventListener(
     "touchmove",
     (e) => {
-      if (!useTouchScrub()) return;
+      if (!isTouchInput(getProfile())) return;
       e.preventDefault();
       if (!isDragging()) return;
       const rect = progWrap.getBoundingClientRect();
@@ -95,7 +51,7 @@ export function bindProgressInteractions({
   );
 
   progWrap.addEventListener("touchend", (e) => {
-    if (!useTouchScrub()) return;
+    if (!isTouchInput(getProfile())) return;
     if (!isDragging()) return;
     setDragging(false);
     const rect = progWrap.getBoundingClientRect();
@@ -105,13 +61,9 @@ export function bindProgressInteractions({
   });
 
   progWrap.addEventListener("touchcancel", () => {
-    if (!useTouchScrub()) return;
+    if (!isTouchInput(getProfile())) return;
     setDragging(false);
   });
-}
-
-function isMobileProfile(p) {
-  return p.layout === "compact" || p.coarsePointer;
 }
 
 /** Keep in sync with `shouldIgnoreMenuDismissClick` in shell.js */
@@ -121,22 +73,16 @@ function shouldIgnoreMenuDismissTouch(e) {
   );
 }
 
-export function bindVideoSurfaceInteractions({
+export function bindMobileVideoInput({
   ctx,
   getProfile,
-  togglePlay,
   skip,
   showUI,
   hideUI,
   closeAllMenus,
   isAnyMenuOpen,
 }) {
-  const { wrap, video, seekRippleLeft, seekRippleRight } = ctx;
-
-  video.addEventListener("click", () => {
-    if (isMobileProfile(getProfile())) return;
-    togglePlay();
-  });
+  const { wrap, seekRippleLeft, seekRippleRight } = ctx;
 
   const MOVE_PX = 14;
   const DOUBLE_TAP_MS = 300;
@@ -179,7 +125,7 @@ export function bindVideoSurfaceInteractions({
   wrap.addEventListener(
     "touchstart",
     (e) => {
-      if (!isMobileProfile(getProfile())) return;
+      if (!isTouchInput(getProfile())) return;
       if (e.target.closest("#controls, #autoplay-gate")) return;
       if (e.target.closest(".menu-popup") && shouldIgnoreMenuDismissTouch(e)) return;
       sx = e.touches[0].clientX;
@@ -192,7 +138,7 @@ export function bindVideoSurfaceInteractions({
   wrap.addEventListener(
     "touchmove",
     (e) => {
-      if (!isMobileProfile(getProfile())) return;
+      if (!isTouchInput(getProfile())) return;
       if (e.target.closest("#controls, .menu-popup, #progress-wrap, .cc-slider, #menu-backdrop")) {
         return;
       }
@@ -206,7 +152,7 @@ export function bindVideoSurfaceInteractions({
   wrap.addEventListener(
     "touchend",
     (e) => {
-      if (!isMobileProfile(getProfile())) return;
+      if (!isTouchInput(getProfile())) return;
       if (e.target.closest("#autoplay-gate")) return;
 
       if (isAnyMenuOpen()) {
@@ -251,7 +197,7 @@ export function bindVideoSurfaceInteractions({
   wrap.addEventListener(
     "touchend",
     (e) => {
-      if (!isMobileProfile(getProfile())) return;
+      if (!isTouchInput(getProfile())) return;
       if (e.target.closest(".ctrl-btn, .menu-toggle, .menu-item, .cc-slider")) showUI();
     },
     { passive: true },

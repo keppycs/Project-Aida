@@ -1,6 +1,8 @@
-import { getPlayerProfile, watchProfile } from "./capabilities.js";
+import { getPlayerProfile, watchProfile, isMobileLayout } from "./capabilities.js";
 import { initPlayback, applyCcSliderChange, setCcEnabled, markCcBannerMenuUsed } from "./engine.js";
-import { bindProgressInteractions, bindVideoSurfaceInteractions } from "./input.js";
+import { getAutoHideDelayMs, getBigPlayState, shouldShowMenuBackdrop } from "./chrome.js";
+import { bindDesktopProgressInput, bindDesktopVideoInput } from "./desktop-input.js";
+import { bindMobileProgressInput, bindMobileVideoInput } from "./mobile-input.js";
 
 function collectContext() {
   const wrap = document.getElementById("player-wrap");
@@ -86,7 +88,7 @@ const FS_EXIT = `<polyline points="4 14 10 14 10 20"/><polyline points="20 4 14 
   <line x1="10" y1="14" x2="3" y2="21"/><line x1="21" y1="3" x2="14" y2="10"/>`;
 
 function applyLayoutClass(wrap, profile) {
-  wrap.classList.toggle("layout-compact", profile.layout === "compact");
+  wrap.classList.toggle("is-mobile", isMobileLayout(profile));
   wrap.dataset.layout = profile.layout;
 }
 
@@ -171,7 +173,7 @@ export async function mountPlayer(meta, base) {
     closeAllMenus();
     if (!isOpen) {
       menu.classList.add("open");
-      if (getProfile().layout === "compact") menuBackdrop?.classList.add("open");
+      if (shouldShowMenuBackdrop(getProfile())) menuBackdrop?.classList.add("open");
       requestAnimationFrame(() => {
         menu.scrollTop = 0;
       });
@@ -180,24 +182,21 @@ export async function mountPlayer(meta, base) {
   }
 
   function syncBigPlayOverlay() {
-    const compact = getProfile().layout === "compact";
     const svg = bigPlay.querySelector("svg");
     if (!svg) return;
-    if (compact) {
-      const show = video.paused || wrap.classList.contains("ui-visible");
-      bigPlay.classList.toggle("show", show);
-      svg.innerHTML = video.paused ? BIG_PLAY_SVG_PLAY : BIG_PLAY_SVG_PAUSE;
-    } else {
-      bigPlay.classList.toggle("show", video.paused);
-      svg.innerHTML = BIG_PLAY_SVG_PLAY;
-    }
+    const { show, showPause } = getBigPlayState(
+      getProfile(),
+      video,
+      wrap.classList.contains("ui-visible"),
+    );
+    bigPlay.classList.toggle("show", show);
+    svg.innerHTML = showPause ? BIG_PLAY_SVG_PAUSE : BIG_PLAY_SVG_PLAY;
   }
 
   function showUI() {
     wrap.classList.add("ui-visible", "cursor-visible");
     clearTimeout(uiTimer);
-    const delay = getProfile().layout === "compact" ? 2000 : 3000;
-    if (!video.paused) uiTimer = setTimeout(hideUI, delay);
+    if (!video.paused) uiTimer = setTimeout(hideUI, getAutoHideDelayMs(getProfile()));
     syncBigPlayOverlay();
   }
 
@@ -270,8 +269,7 @@ export async function mountPlayer(meta, base) {
   video.addEventListener("play", () => {
     setPlayIcon(true);
     clearTimeout(uiTimer);
-    const delay = getProfile().layout === "compact" ? 2000 : 3000;
-    uiTimer = setTimeout(hideUI, delay);
+    uiTimer = setTimeout(hideUI, getAutoHideDelayMs(getProfile()));
     syncBigPlayOverlay();
   });
   video.addEventListener("pause", () => {
@@ -319,9 +317,12 @@ export async function mountPlayer(meta, base) {
     durTime.textContent = fmt(video.duration);
   });
 
-  bindProgressInteractions({
+  const onScrubTo = (frac) => {
+    video.currentTime = frac * video.duration;
+  };
+
+  bindDesktopProgressInput({
     ctx,
-    getProfile,
     video,
     fmt,
     getProgressFrac,
@@ -331,16 +332,24 @@ export async function mountPlayer(meta, base) {
     setDragging,
     isDragging: getDragging,
     setHovering,
-    onScrubTo: (frac) => {
-      video.currentTime = frac * video.duration;
-    },
-    showUI,
+    onScrubTo,
   });
+  bindDesktopVideoInput({ ctx, getProfile, togglePlay });
 
-  bindVideoSurfaceInteractions({
+  bindMobileProgressInput({
     ctx,
     getProfile,
-    togglePlay,
+    video,
+    fmt,
+    applyProgress,
+    setDragging,
+    isDragging: getDragging,
+    onScrubTo,
+    showUI,
+  });
+  bindMobileVideoInput({
+    ctx,
+    getProfile,
     skip,
     showUI,
     hideUI,

@@ -4,14 +4,31 @@ export function getPlayerProfile() {
   const h = window.innerHeight;
   const minDim = Math.min(w, h);
   const coarse = window.matchMedia("(pointer: coarse)").matches;
-  /* Use shorter viewport edge so phone landscape (wide but short) still gets compact chrome */
-  const compact = minDim <= 560 || (coarse && minDim <= 720);
+  /* Use shorter viewport edge so phone landscape (wide but short) still gets mobile chrome */
+  const isMobile = minDim <= 560 || (coarse && minDim <= 720);
   const hideVolumeChrome = coarse || w < 640;
   return {
-    layout: compact ? "compact" : "standard",
+    layout: isMobile ? "mobile" : "desktop",
     hideVolumeChrome,
     coarsePointer: coarse,
   };
+}
+
+/**
+ * Structural check: does the small-screen layout apply (hidden bar buttons, bottom-sheet
+ * menus, etc.)? Drives the `is-mobile` class and player-mobile.css.
+ */
+export function isMobileLayout(profile) {
+  return profile.layout === "mobile";
+}
+
+/**
+ * Input-behavior check: should touch-style interaction win over mouse-style (double-tap
+ * seek, touch scrubbing)? Broader than isMobileLayout — also true for a touch-capable
+ * desktop/tablet that hasn't dropped into the mobile layout yet.
+ */
+export function isTouchInput(profile) {
+  return profile.layout === "mobile" || profile.coarsePointer;
 }
 
 /** Recompute profile on resize / breakpoint changes (classList + volume chrome). */

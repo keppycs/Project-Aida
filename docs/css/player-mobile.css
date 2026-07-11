@@ -1,0 +1,193 @@
+/*
+ * Mobile-only player styling, scoped entirely under #player-wrap.is-mobile
+ * (see capabilities.js / chrome.js for how that class gets applied).
+ * Loaded after player.css so these rules win. Keep desktop-default styling
+ * out of this file — it belongs in player.css.
+ */
+
+/* ── Double-tap seek ripple ── */
+.seek-ripple {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 50%;
+  pointer-events: none;
+  z-index: 6;
+  overflow: hidden;
+}
+#seek-ripple-left {
+  left: 0;
+}
+#seek-ripple-right {
+  right: 0;
+}
+.seek-ripple::before {
+  content: "";
+  position: absolute;
+  top: 50%;
+  width: 140px;
+  height: 140px;
+  margin-top: -70px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.22);
+  transform: scale(0);
+  opacity: 0;
+}
+#seek-ripple-left::before {
+  left: 30%;
+  margin-left: -70px;
+}
+#seek-ripple-right::before {
+  right: 30%;
+  margin-right: -70px;
+}
+.seek-ripple.flash::before {
+  animation: seek-ripple-pulse 0.5s var(--ease) forwards;
+}
+@keyframes seek-ripple-pulse {
+  0% {
+    transform: scale(0);
+    opacity: 0.65;
+  }
+  100% {
+    transform: scale(2.8);
+    opacity: 0;
+  }
+}
+
+/* ── Bottom-sheet menu backdrop ── */
+.menu-backdrop {
+  display: none;
+  position: absolute;
+  inset: 0;
+  z-index: 12;
+  background: rgba(0, 0, 0, 0.5);
+  pointer-events: auto;
+}
+
+.menu-backdrop.open {
+  display: block;
+}
+
+#player-wrap.is-mobile {
+  overflow: visible;
+  --ctrl-h: 38px;
+  --bar-h: 3px;
+}
+
+#player-wrap.is-mobile #controls {
+  padding: 0 max(10px, env(safe-area-inset-right)) max(8px, env(safe-area-inset-bottom))
+    max(10px, env(safe-area-inset-left));
+}
+
+#player-wrap.is-mobile #progress-wrap {
+  height: 14px;
+  margin-bottom: 2px;
+}
+
+#player-wrap.is-mobile #title-bar {
+  padding: max(8px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-right)) 8px
+    max(12px, env(safe-area-inset-left));
+  gap: 6px;
+}
+
+#player-wrap.is-mobile #title-text {
+  font-size: 13px;
+}
+
+#player-wrap.is-mobile .badge-accent {
+  font-size: 9px;
+  padding: 1px 4px;
+}
+
+#player-wrap.is-mobile #ctrl-row {
+  overflow-x: auto;
+  overflow-y: hidden;
+  flex-wrap: nowrap;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+  gap: 2px;
+  height: var(--ctrl-h);
+}
+
+#player-wrap.is-mobile #ctrl-row::-webkit-scrollbar {
+  display: none;
+}
+
+/* Center #big-play is the only play/pause control on mobile; bar duplicates hidden */
+#player-wrap.is-mobile #play-btn,
+#player-wrap.is-mobile #back-btn,
+#player-wrap.is-mobile #fwd-btn {
+  display: none;
+}
+
+#player-wrap.is-mobile .ctrl-btn {
+  width: 32px;
+  height: 32px;
+  min-width: 32px;
+  min-height: 32px;
+  border-radius: 6px;
+}
+
+#player-wrap.is-mobile #time-display {
+  font-size: 11px;
+  letter-spacing: -0.02em;
+}
+
+#player-wrap.is-mobile #quality-btn {
+  padding: 0 4px;
+  gap: 4px;
+}
+
+#player-wrap.is-mobile #quality-label {
+  font-size: 10px;
+}
+
+#player-wrap.is-mobile #cc-btn {
+  font-size: 10px;
+  padding: 0 5px;
+}
+
+/*
+ * Mobile big-play: above the fixed bottom sheet (z-index 20).
+ * Container is inset:0 for centering; pointer-events:none so only the SVG receives taps.
+ */
+#player-wrap.is-mobile #big-play {
+  pointer-events: none;
+  z-index: 25;
+}
+
+#player-wrap.is-mobile #big-play svg {
+  width: 64px;
+  height: 64px;
+}
+
+#player-wrap.is-mobile #big-play.show > svg {
+  pointer-events: auto;
+  cursor: pointer;
+}
+
+#player-wrap.is-mobile .menu-popup.open {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  top: auto;
+  width: 100%;
+  min-width: 0;
+  max-height: min(72vh, 520px);
+  overflow-y: auto;
+  border-radius: 12px 12px 0 0;
+  transform: none;
+  padding-left: max(12px, env(safe-area-inset-left));
+  padding-right: max(12px, env(safe-area-inset-right));
+  padding-bottom: max(12px, env(safe-area-inset-bottom));
+  z-index: 20;
+  box-sizing: border-box;
+}
+
+@media (pointer: coarse) {
+  #player-wrap.is-mobile #progress-track {
+    height: 4px;
+  }
+}
