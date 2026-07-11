@@ -4,12 +4,13 @@ from pathlib import Path
 from threading import Lock
 from typing import Any, Callable
 import argparse
+import json
 import logging
 import sys
 import boto3
 from botocore.config import Config
 
-from config import get_b2_credentials
+from config import get_b2_credentials, normalize_visibility
 
 
 MIME_MAP = {
@@ -32,6 +33,74 @@ def make_b2_client() -> tuple[Any, str]:
         config=Config(signature_version="s3v4"),
     )
     return client, bucket
+
+
+def _not_found(exc: Exception) -> bool:
+    msg = str(exc).lower()
+    return "404" in msg or "nosuchkey" in msg or "not found" in msg
+
+
+def delete_object_versions(
+    b2: Any,
+    bucket: str,
+    key: str,
+    log: logging.Logger | None = None,
+) -> int:
+    """Delete every version and delete-marker for a key (versioned buckets)."""
+    removed = 0
+    try:
+        paginator = b2.get_paginator("list_object_versions")
+        for page in paginator.paginate(Bucket=bucket, Prefix=key):
+            for item in page.get("Versions", []):
+                if item["Key"] != key:
+                    continue
+                b2.delete_object(Bucket=bucket, Key=key, VersionId=item["VersionId"])
+                removed += 1
+            for item in page.get("DeleteMarkers", []):
+                if item["Key"] != key:
+                    continue
+                b2.delete_object(Bucket=bucket, Key=key, VersionId=item["VersionId"])
+                removed += 1
+    except Exception as exc:
+        if log:
+            log.debug(f"  list_object_versions failed for {key}, falling back: {exc}")
+        try:
+            b2.delete_object(Bucket=bucket, Key=key)
+            removed += 1
+        except Exception as exc2:
+            if not _not_found(exc2) and log:
+                log.warning(f"  Could not delete {key}: {exc2}")
+    return removed
+
+
+def replace_file(
+    b2: Any,
+    bucket: str,
+    key: str,
+    local_path: Path,
+    content_type: str,
+    log: logging.Logger | None = None,
+) -> None:
+    """Delete all existing versions of key, then upload local_path."""
+    removed = delete_object_versions(b2, bucket, key, log)
+    if log and removed:
+        log.info(f"  DEL  b2://{bucket}/{key} ({removed} old version(s))")
+    b2.upload_file(str(local_path), bucket, key, ExtraArgs={"ContentType": content_type})
+
+
+def replace_object(
+    b2: Any,
+    bucket: str,
+    key: str,
+    body: bytes,
+    content_type: str,
+    log: logging.Logger | None = None,
+) -> None:
+    """Delete all existing versions of key, then put body."""
+    removed = delete_object_versions(b2, bucket, key, log)
+    if log and removed:
+        log.info(f"  DEL  b2://{bucket}/{key} ({removed} old version(s))")
+    b2.put_object(Bucket=bucket, Key=key, Body=body, ContentType=content_type)
 
 
 def is_already_uploaded(b2: Any, bucket: str, video_id: str, log: logging.Logger) -> bool:
@@ -71,7 +140,7 @@ def upload_folder(
         key          = f"{b2_prefix}/{relative.as_posix()}"
         content_type = MIME_MAP.get(f.suffix.lower(), "application/octet-stream")
         try:
-            b2.upload_file(str(f), bucket, key, ExtraArgs={"ContentType": content_type})
+            replace_file(b2, bucket, key, f, content_type, log)
             log.debug(f"  OK  {key}")
             result = None
         except Exception as e:
@@ -102,18 +171,21 @@ def upload_folder(
         log.error(f"  {len(failed)} file(s) failed: {', '.join(failed)}")
         return False
 
-    log.info(f"  Upload complete → b2://{bucket}/{b2_prefix}/")
+    log.info(f"  Upload complete -> b2://{bucket}/{b2_prefix}/")
     return True
 
 
 def upload_index(b2: Any, bucket: str, index_path: Path, log: logging.Logger) -> None:
     """Upload index.json to the bucket root for the public homepage."""
     try:
-        b2.upload_file(
-            str(index_path), bucket, "index.json",
-            ExtraArgs={"ContentType": "application/json"},
+        raw = json.loads(index_path.read_text(encoding="utf-8"))
+        public = [e for e in raw if normalize_visibility(e) == "public"]
+        body = json.dumps(public, indent=2).encode("utf-8")
+        replace_object(b2, bucket, "index.json", body, "application/json", log)
+        log.info(
+            f"[INDEX]        Uploaded index.json -> b2://{bucket}/index.json "
+            f"({len(public)}/{len(raw)} public entries)"
         )
-        log.info(f"[INDEX]        Uploaded index.json → b2://{bucket}/index.json")
     except Exception as e:
         log.error(f"[INDEX]        Failed to upload index.json: {e}")
 
