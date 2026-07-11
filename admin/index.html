@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Project Aida</title>
+  <link rel="stylesheet" href="/static/admin.css">
+</head>
+<body>
+  <main>
+    <header>
+      <h1>Project Aida</h1>
+      <p class="subtitle">Local encode &amp; maintenance panel</p>
+    </header>
+
+    <nav class="tabs" role="tablist">
+      <button class="tab active" data-tab="encode" role="tab" aria-selected="true">Encode</button>
+      <button class="tab" data-tab="maint" role="tab" aria-selected="false">Maintenance</button>
+      <button class="tab" data-tab="creds" role="tab" aria-selected="false">Credentials</button>
+    </nav>
+
+    <!-- Encode -->
+    <section id="panel-encode" class="panel active" role="tabpanel">
+      <div class="card">
+        <h2>Source</h2>
+        <label class="field">
+          <span>Video file path</span>
+          <div class="input-wrap">
+            <input id="source-path" type="text" placeholder="C:\path\to\video.mp4" autocomplete="off">
+            <button type="button" id="browse-source" class="icon-btn">Browse</button>
+          </div>
+        </label>
+        <p id="source-info" class="hint"></p>
+      </div>
+
+      <div class="card">
+        <h2>Metadata</h2>
+        <label class="field">
+          <span>Title</span>
+          <input id="title" type="text" placeholder="defaults to filename">
+        </label>
+        <label class="field">
+          <span>Video ID</span>
+          <input id="video-id" type="text" placeholder="auto-generated if empty">
+        </label>
+        <label class="field">
+          <span>Description</span>
+          <input id="description" type="text">
+        </label>
+        <label class="field">
+          <span>Tags</span>
+          <input id="tags" type="text" placeholder="comma-separated">
+        </label>
+        <label class="field">
+          <span>Visibility</span>
+          <select id="visibility"></select>
+        </label>
+      </div>
+
+      <div class="card">
+        <h2>Options</h2>
+        <label class="check"><input id="opt-thumbnails" type="checkbox"> Generate thumbnails</label>
+        <label class="field thumb-field" id="thumb-frame-wrap">
+          <span>Thumbnail frame</span>
+          <input id="thumb-frame" type="number" min="1" step="1" placeholder="auto (10% into video)">
+        </label>
+        <label class="check"><input id="opt-upload" type="checkbox"> Upload to B2</label>
+        <label class="check"><input id="opt-delete" type="checkbox"> Delete after upload</label>
+        <label class="check"><input id="opt-fast" type="checkbox"> Fast transcode</label>
+      </div>
+
+      <button id="start-pipeline" class="btn primary">Start Pipeline</button>
+      <p id="encode-status" class="status"></p>
+
+      <div id="encode-progress" class="card hidden">
+        <h2>Progress</h2>
+        <div class="progress-row" data-stage="Thumbnails"><span>Thumbnails</span><progress max="1" value="0"></progress></div>
+        <div class="progress-row" data-stage="AV1"><span>AV1</span><progress max="1" value="0"></progress></div>
+        <div class="progress-row" data-stage="HEVC"><span>HEVC</span><progress max="1" value="0"></progress></div>
+        <div class="progress-row" data-stage="Upload"><span>Upload</span><progress max="1" value="0"></progress></div>
+      </div>
+
+      <div id="encode-log" class="card hidden">
+        <h2>Log</h2>
+        <pre id="encode-log-body" class="log"></pre>
+      </div>
+    </section>
+
+    <!-- Maintenance -->
+    <section id="panel-maint" class="panel" role="tabpanel" hidden>
+      <div class="card">
+        <h2>Bucket cleanup</h2>
+        <p class="hint">
+          B2 keeps every re-upload as a separate version of the same file.
+          Scan the bucket to find duplicates, then delete older versions
+          and keep only the newest copy per path.
+        </p>
+        <label class="field">
+          <span>Prefix (optional)</span>
+          <input id="dedupe-prefix" type="text" placeholder="e.g. video ID folder — leave empty for entire bucket">
+        </label>
+        <div class="row">
+          <button id="scan-bucket" class="btn">Scan bucket</button>
+          <button id="apply-dedupe" class="btn danger outline" disabled>Delete old versions</button>
+        </div>
+        <p id="dedupe-summary" class="status"></p>
+      </div>
+
+      <div class="card">
+        <h2>Catalog sync</h2>
+        <p class="hint">
+          Copy title, visibility, and other catalogue fields from
+          <code>docs/local/index.json</code> into each video's
+          <code>metadata.json</code>. Use this after editing titles in the index
+          so the watch page stays in sync with the homepage.
+        </p>
+        <div class="row">
+          <button id="sync-preview" class="btn">Preview changes</button>
+          <button id="sync-apply" class="btn">Apply locally</button>
+          <button id="sync-upload" class="btn primary">Apply &amp; upload to B2</button>
+        </div>
+        <p id="sync-summary" class="status"></p>
+      </div>
+
+      <div id="maint-progress" class="card hidden">
+        <p id="maint-status" class="status"></p>
+        <progress id="maint-bar" max="1" value="0"></progress>
+      </div>
+
+      <div id="maint-log" class="card hidden">
+        <h2>Log</h2>
+        <pre id="maint-log-body" class="log"></pre>
+      </div>
+
+      <dialog id="confirm-dialog">
+        <form method="dialog" class="dialog-card">
+          <h2>Delete old bucket versions?</h2>
+          <p id="confirm-text"></p>
+          <div class="row end">
+            <button value="cancel" class="btn outline">Cancel</button>
+            <button id="confirm-delete" value="confirm" class="btn danger">Delete</button>
+          </div>
+        </form>
+      </dialog>
+    </section>
+
+    <!-- Credentials -->
+    <section id="panel-creds" class="panel" role="tabpanel" hidden>
+      <div class="card">
+        <h2>B2 Credentials</h2>
+        <p class="hint">Stored in your OS keyring. Used for uploads and bucket maintenance.</p>
+        <label class="field">
+          <span>Key ID</span>
+          <input id="cr-key" type="text" autocomplete="off">
+        </label>
+        <label class="field">
+          <span>Application Key</span>
+          <div class="input-wrap">
+            <input id="cr-secret" type="password" autocomplete="off">
+            <button type="button" id="toggle-secret" class="icon-btn" aria-label="Show application key" title="Show">Show</button>
+          </div>
+        </label>
+        <label class="field">
+          <span>Bucket</span>
+          <input id="cr-bucket" type="text" autocomplete="off">
+        </label>
+        <label class="field">
+          <span>Endpoint</span>
+          <input id="cr-endpoint" type="text" autocomplete="off">
+        </label>
+        <button id="save-creds" class="btn">Save Credentials</button>
+        <p id="creds-status" class="status"></p>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    (function () {
+      var key = "aida-admin-tab";
+      var saved = localStorage.getItem(key);
+      if (saved && /^(encode|maint|creds)$/.test(saved)) {
+        document.querySelectorAll(".tab").forEach(function (tab) {
+          var active = tab.dataset.tab === saved;
+          tab.classList.toggle("active", active);
+          tab.setAttribute("aria-selected", String(active));
+        });
+        document.querySelectorAll(".panel").forEach(function (panel) {
+          var active = panel.id === "panel-" + saved;
+          panel.classList.toggle("active", active);
+          panel.hidden = !active;
+        });
+      }
+      document.body.classList.add("tab-ready");
+    })();
+  </script>
+  <script src="/static/admin.js"></script>
+</body>
+</html>

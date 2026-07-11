@@ -1,5 +1,5 @@
-nicegui
-pywebview
+fastapi
+uvicorn[standard]
 keyring
 python-dotenv
 boto3
