@@ -1,5 +1,6 @@
 import argparse
 import logging
+import math
 import subprocess
 import sys
 from pathlib import Path
@@ -27,6 +28,19 @@ _MATRIX_MAP = {
     "bt2020c":  "bt2020c",
     "bt709":    "bt709",
 }
+
+
+def frame_to_seek(frame: int, fps: float, duration: float) -> float:
+    """Convert a 1-based frame number to a seek time in seconds."""
+    if frame < 1:
+        raise ValueError(f"frame must be >= 1, got {frame}")
+
+    total_frames = max(1, math.ceil(duration * fps))
+    clamped = min(frame, total_frames)
+    seek = (clamped - 1) / fps
+    if seek >= duration:
+        seek = max(0.0, duration - (1.0 / fps))
+    return seek
 
 
 def generate_thumbnails(

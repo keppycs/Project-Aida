@@ -14,12 +14,14 @@ from config import (
     CUDA_DECODERS, HDR_TRANSFERS, VIDEO_EXTENSIONS,
     SEG_DURATION,
     UPLOAD_TO_B2, DELETE_TRANSCODES_AFTER_UPLOAD, GENERATE_THUMBNAILS, FAST_TRANSCODE,
+    VISIBILITY, VALID_VISIBILITIES, normalize_visibility,
+    LOCAL_DIR, INDEX_PATH,
     ENCODE_SETTINGS_PRODUCTION, ENCODE_SETTINGS_FAST,
     VARIANTS_AV1_PRODUCTION, VARIANTS_AV1_FAST,
     VARIANTS_HEVC_PRODUCTION, VARIANTS_HEVC_FAST,
     get_b2_credentials,
 )
-from thumbnail import generate_thumbnails as _gen_thumbs
+from thumbnail import generate_thumbnails as _gen_thumbs, frame_to_seek
 from transcode import (
     setup_logging,
     probe_video,
@@ -69,17 +71,23 @@ def probe_source(video_file: Path) -> dict:
 
 def run_pipeline(
     video_file: Path,
+    title: str = "",
     video_id: str | None = None,
     description: str = "",
     tags: str = "",
+    visibility: str = VISIBILITY,
     upload_to_b2: bool = UPLOAD_TO_B2,
     gen_thumbnails: bool = GENERATE_THUMBNAILS,
     delete_after_upload: bool = DELETE_TRANSCODES_AFTER_UPLOAD,
     fast_transcode: bool = FAST_TRANSCODE,
+    thumbnail_frame: int | None = None,
     on_progress: Optional[Callable[[str, int, int], None]] = None,
     extra_log_handler: Optional[logging.Handler] = None,
 ) -> None:
     """Run the full transcode -> package -> upload pipeline."""
+
+    if visibility not in VALID_VISIBILITIES:
+        raise ValueError(f"visibility must be one of {VALID_VISIBILITIES}, got {visibility!r}")
 
     # Validate B2 credentials early so a missing config doesn't surprise
     # you after a multi-hour encode.
@@ -87,6 +95,7 @@ def run_pipeline(
         get_b2_credentials()
 
     video_id = video_id or f"0{int(time.time())}"
+    title = title.strip() or video_file.stem
     created_at = int(time.time())
     ams = ZoneInfo("Europe/Amsterdam")
 
@@ -99,6 +108,7 @@ def run_pipeline(
 
     log.info(f"Source          : {video_file}")
     log.info(f"Video ID        : {video_id}")
+    log.info(f"Title           : {title}")
 
     probe = probe_video(video_file)
     video_stream = next(
@@ -163,8 +173,15 @@ def run_pipeline(
     if gen_thumbnails:
         if on_progress:
             on_progress("Thumbnails", 0, 1)
-        thumb_dir = ROOT / "docs" / "local" / video_id
+        thumb_dir = LOCAL_DIR / video_id
         thumb_dir.mkdir(parents=True, exist_ok=True)
+        seek_override = None
+        if thumbnail_frame is not None:
+            seek_override = frame_to_seek(thumbnail_frame, fps, duration)
+            log.info(
+                f"Thumbnail frame : {thumbnail_frame} "
+                f"(seek {seek_override:.3f}s @ {fps:.3f} fps)"
+            )
         _gen_thumbs(
             input_path=video_file,
             out_dir=thumb_dir,
@@ -173,6 +190,7 @@ def run_pipeline(
             color_trc=color_trc,
             colorspace=colorspace,
             log=log,
+            seek_override=seek_override,
         )
         if on_progress:
             on_progress("Thumbnails", 1, 1)
@@ -196,7 +214,7 @@ def run_pipeline(
     encoded_codecs:   list[str] = []
 
     for codec_name, (encoder, variants) in codecs.items():
-        out_dir = ROOT / "docs" / "local" / video_id / codec_name
+        out_dir = LOCAL_DIR / video_id / codec_name
         out_dir.mkdir(parents=True, exist_ok=True)
 
         active_variants = [
@@ -252,7 +270,7 @@ def run_pipeline(
     # ── metadata.json ──────────────────────────────────────────────────────────
     meta = {
         "id":             video_id,
-        "title":          video_file.stem,
+        "title":          title,
         "createdAt":      created_at,
         "duration":       round(duration, 3),
         "frameRate":      round(fps, 3),
@@ -262,18 +280,19 @@ def run_pipeline(
         "colorTransfer":  color_trc,
         "colorSpace":     colorspace,
         "codecs":         encoded_codecs,
+        "visibility":     visibility,
     }
 
-    meta_local = ROOT / "docs" / "local" / video_id / "metadata.json"
+    meta_local = LOCAL_DIR / video_id / "metadata.json"
     meta_local.write_text(json.dumps(meta, indent=2), encoding="utf-8")
     log.info(f"[METADATA]     Written {meta_local}")
 
-    # Update local index.json always, so you have a catalogue regardless of upload
+    # Update docs/local/index.json — full local catalogue regardless of upload
     date_str    = datetime.fromtimestamp(created_at, tz=ams).strftime("%d-%m-%Y %H:%M:%S %Z")
     tags_list   = [t.strip() for t in tags.split(",") if t.strip()]
     entry = {
         "id":          video_id,
-        "title":       video_file.stem,
+        "title":       title,
         "description": description,
         "tags":        tags_list,
         "date":        date_str,
@@ -284,21 +303,22 @@ def run_pipeline(
         "frameRate":   round(fps, 3),
         "hdr":         is_hdr,
         "codecs":      encoded_codecs,
+        "visibility":  visibility,
     }
-    index_path = ROOT / "logs" / "index.json"
+    LOCAL_DIR.mkdir(parents=True, exist_ok=True)
     try:
-        index = json.loads(index_path.read_text(encoding="utf-8")) if index_path.exists() else []
+        index = json.loads(INDEX_PATH.read_text(encoding="utf-8")) if INDEX_PATH.exists() else []
     except Exception:
         index = []
     index = [e for e in index if e.get("id") != video_id]
     index.insert(0, entry)
-    index_path.write_text(json.dumps(index, indent=2), encoding="utf-8")
-    log.info(f"[INDEX]        Updated logs/index.json ({len(index)} entries)")
+    INDEX_PATH.write_text(json.dumps(index, indent=2), encoding="utf-8")
+    log.info(f"[INDEX]        Updated {INDEX_PATH.relative_to(ROOT)} ({len(index)} entries)")
 
     # ── Upload ─────────────────────────────────────────────────────────────────
     if upload_to_b2:
         b2, bucket = make_b2_client()
-        video_dir = ROOT / "docs" / "local" / video_id
+        video_dir = LOCAL_DIR / video_id
         if is_already_uploaded(b2, bucket, video_id, log):
             log.info(f"[SKIP UPLOAD]  {video_id} — already exists in B2.")
         else:
@@ -306,7 +326,7 @@ def run_pipeline(
             upload_cb = (lambda d, t: on_progress("Upload", d, t)) if on_progress else None
             ok = upload_folder(b2, bucket, video_dir, video_id, log, on_progress=upload_cb)
             if ok:
-                upload_index(b2, bucket, index_path, log)
+                upload_index(b2, bucket, INDEX_PATH, log)
                 if delete_after_upload:
                     log.info("[CLEAN]  Removing local segments")
                     for cn in encoded_codecs:
@@ -339,12 +359,25 @@ def main() -> None:
         help="YouTube video ID (named alternative to positional).",
     )
     parser.add_argument(
+        "--title", dest="title", default="", metavar="TEXT",
+        help="Display title for the video. Defaults to the source filename.",
+    )
+    parser.add_argument(
         "-desc", "--description", dest="description", default="", metavar="TEXT",
         help="Short description shown on the homepage.",
     )
     parser.add_argument(
         "-tags", "--tags", dest="tags", default="", metavar="TAG1,TAG2",
         help="Comma-separated tags for filtering on the homepage.",
+    )
+    parser.add_argument(
+        "--visibility", dest="visibility", default=VISIBILITY,
+        choices=VALID_VISIBILITIES,
+        help="public: listed on homepage; unlisted: direct URL only; private: blocked on live site.",
+    )
+    parser.add_argument(
+        "--thumb-frame", dest="thumbnail_frame", type=int, default=None, metavar="N",
+        help="1-based frame number for thumbnail capture. Default: 10%% into the video.",
     )
     args = parser.parse_args()
 
@@ -367,9 +400,12 @@ def main() -> None:
     try:
         run_pipeline(
             video_file=video_file,
+            title=args.title,
             video_id=yt_id,
             description=args.description,
             tags=args.tags,
+            visibility=args.visibility,
+            thumbnail_frame=args.thumbnail_frame,
         )
     except RuntimeError:
         sys.exit(1)

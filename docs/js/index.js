@@ -1,6 +1,17 @@
 // js/index.js
 const CDN_BASE = "https://cdn.keppy.dev/file/ProjectAida";
-const INDEX_URL = "https://cdn.keppy.dev/file/ProjectAida/index.json";
+
+function indexUrl() {
+  return typeof isAidaLiveSite === "function" && isAidaLiveSite()
+    ? `${CDN_BASE}/index.json`
+    : "./local/index.json";
+}
+
+function mediaBase(videoId) {
+  return typeof isAidaLiveSite === "function" && isAidaLiveSite()
+    ? `${CDN_BASE}/${videoId}`
+    : `./local/${videoId}`;
+}
 
 const searchInput = document.getElementById("search-input");
 const heroSkeleton = document.getElementById("hero-skeleton");
@@ -10,6 +21,18 @@ const noResults = document.getElementById("no-results");
 
 let allVideos = [];
 let filteredVideos = [];
+
+function videoVisibility(video) {
+  if (video.visibility === "public" || video.visibility === "unlisted" || video.visibility === "private") {
+    return video.visibility;
+  }
+  if (video.unlisted) return "unlisted";
+  return "public";
+}
+
+function isPublicVideo(video) {
+  return videoVisibility(video) === "public";
+}
 
 /** HDR thumbnail assets only when the *display* can show HDR; mirrors player/engine detectHDR. */
 let displayHdrCapable = false;
@@ -55,9 +78,10 @@ async function load() {
       displayHdrCapable = false;
     }
 
-    const res = await fetch(INDEX_URL);
+    const res = await fetch(indexUrl());
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     allVideos = await res.json();
+    allVideos = allVideos.filter(isPublicVideo);
 
     if (!allVideos.length) {
       heroSkeleton.style.display = "none";
@@ -83,7 +107,7 @@ function renderHero(video) {
   const heroImg = document.getElementById("hero-img");
   const file = heroThumbnailFile(video);
   const alt = `${escapeHtml(video.title)} thumbnail`;
-  heroImg.innerHTML = `<img src="${CDN_BASE}/${video.id}/${file}" alt="${alt}">`;
+  heroImg.innerHTML = `<img src="${mediaBase(video.id)}/${file}" alt="${alt}">`;
 
   document.getElementById("hero-title").textContent = video.title;
   document.getElementById("hero-desc").textContent = video.description || "";
@@ -110,7 +134,7 @@ function createCardHTML(video) {
   return `
     <a href="watch.html?v=${encodeURIComponent(video.id)}" class="video-card">
       <div class="video-card-thumbnail">
-        <img src="${CDN_BASE}/${video.id}/${cardThumbnailFile(video)}" alt="${escapeHtml(video.title)} thumbnail" loading="lazy" />
+        <img src="${mediaBase(video.id)}/${cardThumbnailFile(video)}" alt="${escapeHtml(video.title)} thumbnail" loading="lazy" />
       </div>
       <div class="video-card-content">
         <div class="video-card-title">${escapeHtml(video.title)}</div>

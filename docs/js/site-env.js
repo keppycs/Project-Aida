@@ -51,6 +51,7 @@ function loadErudaForLocalDev() {
   document.head.appendChild(script);
 }
 
+window.isAidaLiveSite = isAidaLiveSite;
 window.shouldUseLocalCmaf = shouldUseLocalCmaf;
 
 function applySiteEnv() {

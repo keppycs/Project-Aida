@@ -1,6 +1,10 @@
 from pathlib import Path
 import os
 
+ROOT = Path(__file__).parent.parent
+LOCAL_DIR = ROOT / "docs" / "local"
+INDEX_PATH = LOCAL_DIR / "index.json"
+
 # ── B2 Config ──────────────────────────────────────────────────────────────────
 # Credentials lazy-load from keyring first, .env fallback.
 # No import-time crash when B2 is not configured.
@@ -53,7 +57,7 @@ def get_b2_credentials() -> tuple[str, str, str, str]:
     if missing:
         raise RuntimeError(
             f"Missing B2 credentials: {', '.join(missing)}. "
-            "Configure them in the GUI settings or in a .env file."
+            "Configure them in the admin panel or in a .env file."
         )
     return config["B2_KEY_ID"], config["B2_APP_KEY"], config["B2_BUCKET"], config["B2_ENDPOINT"]
 
@@ -81,6 +85,23 @@ GENERATE_THUMBNAILS = True
 # Set to True to delete local transcode files after a successful upload.
 # The source video and log are always kept locally regardless.
 DELETE_TRANSCODES_AFTER_UPLOAD = False
+
+# Video visibility for the public site:
+#   public   — listed on the homepage and index.json
+#   unlisted — hidden from homepage/index; still playable via direct URL
+#   private  — hidden from homepage/index; blocked on the live watch page
+VISIBILITY = "private"
+VALID_VISIBILITIES = ("public", "unlisted", "private")
+
+
+def normalize_visibility(entry: dict) -> str:
+    """Resolve visibility from a new or legacy index entry."""
+    vis = entry.get("visibility")
+    if vis in VALID_VISIBILITIES:
+        return vis
+    if entry.get("unlisted"):
+        return "unlisted"
+    return "public"
 
 # ── Encoder settings ──────────────────────────────────────────────────────────
 # Flip FAST_TRANSCODE to True for quick test encodes.
