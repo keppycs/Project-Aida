@@ -1,9 +1,9 @@
 /**
  * Desktop: click video toggles play; mouse drags scrub the seek bar.
  * Mobile (compact layout or coarse pointer): tap the video surface toggles chrome
- * (show/hide controls); only the center #big-play control toggles playback. Drag on the
- * seek bar scrubs. Touch `click` on the video is ignored so we do not double-fire after
- * touchend.
+ * (show/hide controls); double-tap left/right halves seek ±5s with a ripple overlay.
+ * Only the center #big-play control toggles playback. Drag on the seek bar scrubs.
+ * Touch `click` on the video is ignored so we do not double-fire after touchend.
  */
 
 export function bindProgressInteractions({
@@ -125,12 +125,13 @@ export function bindVideoSurfaceInteractions({
   ctx,
   getProfile,
   togglePlay,
+  skip,
   showUI,
   hideUI,
   closeAllMenus,
   isAnyMenuOpen,
 }) {
-  const { wrap, video } = ctx;
+  const { wrap, video, seekRippleLeft, seekRippleRight } = ctx;
 
   video.addEventListener("click", () => {
     if (isMobileProfile(getProfile())) return;
@@ -138,9 +139,42 @@ export function bindVideoSurfaceInteractions({
   });
 
   const MOVE_PX = 14;
+  const DOUBLE_TAP_MS = 300;
   let sx = 0;
   let sy = 0;
   let moved = false;
+  let lastTapTime = 0;
+  let lastTapSide = null;
+  let singleTapTimer = null;
+
+  function getTapSide(clientX) {
+    const rect = wrap.getBoundingClientRect();
+    const x = clientX - rect.left;
+    return x < rect.width / 2 ? "left" : "right";
+  }
+
+  function flashRipple(side) {
+    const el = side === "left" ? seekRippleLeft : seekRippleRight;
+    if (!el) return;
+    el.classList.remove("flash");
+    void el.offsetWidth;
+    el.classList.add("flash");
+  }
+
+  function clearSingleTapTimer() {
+    if (!singleTapTimer) return;
+    clearTimeout(singleTapTimer);
+    singleTapTimer = null;
+  }
+
+  function scheduleChromeToggle() {
+    clearSingleTapTimer();
+    singleTapTimer = setTimeout(() => {
+      singleTapTimer = null;
+      if (wrap.classList.contains("ui-visible")) hideUI();
+      else showUI();
+    }, DOUBLE_TAP_MS);
+  }
 
   wrap.addEventListener(
     "touchstart",
@@ -188,12 +222,28 @@ export function bindVideoSurfaceInteractions({
       if (e.target.closest("#big-play")) return;
 
       if (moved) {
+        clearSingleTapTimer();
         showUI();
         return;
       }
 
-      if (wrap.classList.contains("ui-visible")) hideUI();
-      else showUI();
+      const touch = e.changedTouches[0];
+      const side = getTapSide(touch.clientX);
+      const now = Date.now();
+
+      if (now - lastTapTime < DOUBLE_TAP_MS && side === lastTapSide) {
+        clearSingleTapTimer();
+        lastTapTime = 0;
+        lastTapSide = null;
+        skip(side === "left" ? -5 : 5);
+        flashRipple(side);
+        showUI();
+        return;
+      }
+
+      lastTapTime = now;
+      lastTapSide = side;
+      scheduleChromeToggle();
     },
     { passive: true },
   );

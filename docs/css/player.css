@@ -210,6 +210,56 @@ video {
   }
 }
 
+/* ── Double-tap seek ripple (mobile) ── */
+.seek-ripple {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 50%;
+  pointer-events: none;
+  z-index: 6;
+  overflow: hidden;
+}
+#seek-ripple-left {
+  left: 0;
+}
+#seek-ripple-right {
+  right: 0;
+}
+.seek-ripple::before {
+  content: "";
+  position: absolute;
+  top: 50%;
+  width: 140px;
+  height: 140px;
+  margin-top: -70px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.22);
+  transform: scale(0);
+  opacity: 0;
+}
+#seek-ripple-left::before {
+  left: 30%;
+  margin-left: -70px;
+}
+#seek-ripple-right::before {
+  right: 30%;
+  margin-right: -70px;
+}
+.seek-ripple.flash::before {
+  animation: seek-ripple-pulse 0.5s var(--ease) forwards;
+}
+@keyframes seek-ripple-pulse {
+  0% {
+    transform: scale(0);
+    opacity: 0.65;
+  }
+  100% {
+    transform: scale(2.8);
+    opacity: 0;
+  }
+}
+
 /* ── Controls ── */
 #controls {
   position: absolute;
