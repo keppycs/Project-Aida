@@ -13,20 +13,37 @@ export function bindProgressInteractions({
   fmt,
   getProgressFrac,
   applyProgress,
+  setHoverPreview,
+  clearHoverPreview,
   setDragging,
   isDragging,
+  setHovering,
   onScrubTo,
   showUI,
 }) {
   const { progWrap, timeTip, curTime } = ctx;
 
+  progWrap.addEventListener("mouseenter", () => setHovering(true));
+
+  progWrap.addEventListener("mouseleave", () => {
+    setHovering(false);
+    clearHoverPreview();
+    if (!isDragging() && video.duration) {
+      applyProgress(video.currentTime / video.duration);
+    }
+  });
+
   progWrap.addEventListener("mousemove", (e) => {
-    timeTip.textContent = fmt(getProgressFrac(e) * (video.duration || 0));
-    timeTip.style.left = e.clientX - progWrap.getBoundingClientRect().left + "px";
+    const frac = getProgressFrac(e);
+    const x = e.clientX - progWrap.getBoundingClientRect().left;
+    timeTip.textContent = fmt(frac * (video.duration || 0));
+    timeTip.style.left = x + "px";
+    if (!isDragging()) setHoverPreview(frac);
   });
 
   progWrap.addEventListener("mousedown", (e) => {
     setDragging(true);
+    clearHoverPreview();
     applyProgress(getProgressFrac(e));
   });
 
@@ -142,9 +159,7 @@ export function bindVideoSurfaceInteractions({
     "touchmove",
     (e) => {
       if (!isMobileProfile(getProfile())) return;
-      if (
-        e.target.closest("#controls, .menu-popup, #progress-wrap, .cc-slider, #menu-backdrop")
-      ) {
+      if (e.target.closest("#controls, .menu-popup, #progress-wrap, .cc-slider, #menu-backdrop")) {
         return;
       }
       const dx = e.touches[0].clientX - sx;
@@ -167,11 +182,7 @@ export function bindVideoSurfaceInteractions({
         return;
       }
 
-      if (
-        e.target.closest(
-          "#controls, .menu-popup, #progress-wrap, .cc-slider, #autoplay-gate",
-        )
-      ) {
+      if (e.target.closest("#controls, .menu-popup, #progress-wrap, .cc-slider, #autoplay-gate")) {
         return;
       }
       if (e.target.closest("#big-play")) return;

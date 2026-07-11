@@ -261,6 +261,21 @@ video {
   border-radius: 99px;
   pointer-events: none;
 }
+#progress-hover {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 0;
+  background: rgba(232, 255, 71, 0.28);
+  border-radius: 99px;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.1s var(--ease);
+}
+#progress-wrap:hover #progress-hover {
+  opacity: 1;
+}
 #progress-fill {
   position: absolute;
   left: 0;
@@ -279,7 +294,7 @@ video {
   height: 13px;
   background: var(--accent);
   border-radius: 50%;
-  /* Center dot on left% (JS sets left); do not use right:0 — it fights left% and skews the knob */
+  /* Center on JS pixel left (same coordinate space as #time-tooltip) */
   transform: translate(-50%, -50%) scale(0);
   transition: transform 0.15s var(--ease);
   pointer-events: none;

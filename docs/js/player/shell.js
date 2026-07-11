@@ -1,10 +1,5 @@
 import { getPlayerProfile, watchProfile } from "./capabilities.js";
-import {
-  initPlayback,
-  applyCcSliderChange,
-  setCcEnabled,
-  markCcBannerMenuUsed,
-} from "./engine.js";
+import { initPlayback, applyCcSliderChange, setCcEnabled, markCcBannerMenuUsed } from "./engine.js";
 import { bindProgressInteractions, bindVideoSurfaceInteractions } from "./input.js";
 
 function collectContext() {
@@ -29,6 +24,7 @@ function collectContext() {
     fsIcon: document.getElementById("fs-icon"),
     progWrap: document.getElementById("progress-wrap"),
     progFill: document.getElementById("progress-fill"),
+    progHover: document.getElementById("progress-hover"),
     progBuf: document.getElementById("progress-buffer"),
     progThumb: document.getElementById("progress-thumb"),
     timeTip: document.getElementById("time-tooltip"),
@@ -100,6 +96,7 @@ export async function mountPlayer(meta, base) {
 
   let uiTimer;
   let isDragging = false;
+  let isHovering = false;
 
   const { wrap, video, bigPlay, seekFlash, kbToast, playBtn, playIcon } = ctx;
   const {
@@ -113,6 +110,7 @@ export async function mountPlayer(meta, base) {
     fsIcon,
     progWrap,
     progFill,
+    progHover,
     progBuf,
     progThumb,
     qualMenu,
@@ -127,6 +125,9 @@ export async function mountPlayer(meta, base) {
   function getDragging() {
     return isDragging;
   }
+  function setHovering(v) {
+    isHovering = v;
+  }
 
   function getProgressFrac(e) {
     const rect = progWrap.getBoundingClientRect();
@@ -134,9 +135,18 @@ export async function mountPlayer(meta, base) {
   }
 
   function applyProgress(frac) {
+    const w = progWrap.getBoundingClientRect().width;
     progFill.style.width = frac * 100 + "%";
-    progThumb.style.left = frac * 100 + "%";
+    progThumb.style.left = frac * w + "px";
     progThumb.style.right = "auto";
+  }
+
+  function setHoverPreview(frac) {
+    progHover.style.width = frac * 100 + "%";
+  }
+
+  function clearHoverPreview() {
+    progHover.style.width = "0%";
   }
 
   function isAnyMenuOpen() {
@@ -294,7 +304,7 @@ export async function mountPlayer(meta, base) {
   });
 
   video.addEventListener("timeupdate", () => {
-    if (isDragging || !video.duration) return;
+    if (isDragging || isHovering || !video.duration) return;
     applyProgress(video.currentTime / video.duration);
     curTime.textContent = fmt(video.currentTime);
     if (video.buffered.length) {
@@ -314,8 +324,11 @@ export async function mountPlayer(meta, base) {
     fmt,
     getProgressFrac,
     applyProgress,
+    setHoverPreview,
+    clearHoverPreview,
     setDragging,
     isDragging: getDragging,
+    setHovering,
     onScrubTo: (frac) => {
       video.currentTime = frac * video.duration;
     },
