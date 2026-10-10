@@ -6,6 +6,18 @@ Built with **Python 3.12**, **FFmpeg 8.1 Hoare**, and **Shaka Player 5.0.7**, Pr
 
 ---
 
+## 🎯 Core requirement: 120 fps
+
+**120 fps is the point of Project Aida. Anything below 120 fps is not an acceptable video rendition or fallback.** This applies to VOD, future live streams, every resolution and bitrate tier, and both HDR and SDR versions.
+
+- Resolution and bitrate may decrease to fit bandwidth or processing capacity; the 120 fps target stays fixed.
+- 4K and HDR are desirable additions. They are secondary to preserving 120 fps.
+- HDR-to-SDR tone-mapped versions must also remain at 120 fps.
+- Codec, protocol, browser, or device limitations do not justify introducing 30 or 60 fps compatibility versions. Report a limitation when a client cannot sustain 120 fps.
+- Preserve genuine source motion at 120 fps; duplicating lower-frame-rate frames or changing metadata does not satisfy this requirement.
+
+---
+
 ## ✨ Overview
 
 Project Aida handles the full video workflow:
@@ -73,7 +85,7 @@ Located in `/docs`, the frontend is minimal and fast:
   - Hero section to showcase the latest video
   - Grid of other videos in chronological order from new → old
 - 📺 **Watch Page**
-  - DASH or HLS playback on all modern browsers
+  - 120 fps DASH or HLS playback on compatible modern browsers
   - Adaptive bitrate streaming for auto quality
   - Toggles for DASH/HLS and AV1/HEVC as fallback⁴
 - 🎨 **Styling**
