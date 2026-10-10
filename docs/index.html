@@ -3,76 +3,78 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Project Aida</title>
+    <meta name="description" content="Explore the Aida video library. High frame rates, vivid detail, and a player built for watching." />
+    <meta name="theme-color" content="#080a08" />
+    <title>Aida — Video library</title>
     <link rel="icon" href="assets/favicons/flushed.svg" type="image/svg+xml" />
-
     <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link
-      href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap"
-      rel="stylesheet"
-    />
-
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="css/site.css" />
     <link rel="stylesheet" href="css/index.css" />
     <script defer src="js/site-env.js"></script>
-    <script defer src="js/index.js"></script>
+    <script type="module" src="js/index.js"></script>
   </head>
   <body>
-    <main>
-      <!-- Search bar -->
-      <div id="search-container">
-        <div id="search-wrap">
-          <svg
-            class="search-icon"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-          >
-            <circle cx="11" cy="11" r="8" />
-            <path d="m21 21-4.35-4.35" />
-          </svg>
-          <input type="text" id="search-input" placeholder="Search videos..." autocomplete="off" />
-        </div>
-      </div>
+    <a class="skip-link" href="#main-content">Skip to content</a>
+    <header class="site-header">
+      <a class="brand" href="index.html" aria-label="Aida home">
+        <span class="brand-mark" aria-hidden="true">a</span>
+        <span class="brand-copy"><span class="brand-name">aida</span><span class="brand-byline">by keppy</span></span>
+      </a>
+      <nav class="site-nav" aria-label="Main navigation">
+        <a href="index.html" aria-current="page">Library</a>
+        <span class="site-format">120 fps</span>
+      </nav>
+    </header>
 
-      <!-- Hero section -->
-      <section id="hero">
-        <div id="hero-skeleton" class="skeleton-hero">
-          <div class="skeleton-thumbnail"></div>
-          <div class="skeleton-content">
-            <div class="skeleton-title"></div>
-            <div class="skeleton-desc"></div>
-            <div class="skeleton-desc"></div>
-            <div class="skeleton-meta"></div>
-          </div>
+    <main class="site-main library-main" id="main-content">
+      <section id="hero" class="featured-section" aria-label="Latest video" aria-busy="true">
+        <div id="hero-skeleton" class="featured-skeleton" aria-hidden="true">
+          <div class="skeleton-block featured-skeleton-image"></div>
+          <div class="featured-skeleton-copy"><div class="skeleton-block skeleton-kicker"></div><div class="skeleton-block skeleton-title"></div><div class="skeleton-block skeleton-line"></div><div class="skeleton-block skeleton-line short"></div><div class="skeleton-block skeleton-button"></div></div>
         </div>
-        <a id="hero-content" href="" style="display: none">
-          <div id="hero-img"></div>
-          <div class="hero-info">
+        <article id="hero-content" class="featured" hidden>
+          <a id="hero-image-link" class="featured-image" href="watch.html" tabindex="-1" aria-hidden="true">
+            <div id="hero-img" class="thumbnail-shell"></div>
+            <span class="featured-play" aria-hidden="true"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z" /></svg></span>
+            <span id="hero-image-duration" class="thumbnail-duration" hidden></span>
+          </a>
+          <div class="featured-copy">
+            <p class="eyebrow"><span class="eyebrow-dot" aria-hidden="true"></span>Latest video</p>
             <h1 id="hero-title"></h1>
-            <p id="hero-desc"></p>
-            <div class="hero-meta">
-              <span id="hero-date"></span>
-              <span id="hero-duration"></span>
-            </div>
+            <p id="hero-desc" class="featured-description"></p>
+            <p id="hero-date" class="featured-date"></p>
+            <a id="hero-watch" class="button button-primary" href="watch.html"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5v14l11-7z" /></svg>Watch video<span aria-hidden="true">↗</span></a>
           </div>
-        </a>
+        </article>
       </section>
 
-      <!-- Video grid -->
-      <section id="videos">
-        <div id="videos-grid"></div>
+      <section id="videos" class="library-section" aria-labelledby="library-title" aria-busy="true">
+        <div class="library-toolbar">
+          <div class="library-heading"><p class="eyebrow">The collection</p><h2 id="library-title">Video library <span id="library-count" class="library-count"></span></h2></div>
+          <form id="search-form" class="search-wrap" role="search">
+            <label class="sr-only" for="search-input">Search video titles, descriptions, and tags</label>
+            <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><circle cx="10.5" cy="10.5" r="7" /><path d="m16 16 4.5 4.5" /></svg>
+            <input type="search" id="search-input" placeholder="Search the library" autocomplete="off" spellcheck="false" disabled />
+            <button id="search-clear" class="search-clear" type="button" aria-label="Clear search" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18" /></svg></button>
+          </form>
+        </div>
+        <p id="results-summary" class="results-summary" role="status" aria-live="polite">Loading the library…</p>
+        <div id="videos-grid" class="video-grid" aria-label="Videos">
+          <div class="skeleton-card" aria-hidden="true"><div class="skeleton-block skeleton-card-thumb"></div><div class="skeleton-card-content"><div class="skeleton-block skeleton-line"></div><div class="skeleton-block skeleton-line short"></div></div></div>
+          <div class="skeleton-card" aria-hidden="true"><div class="skeleton-block skeleton-card-thumb"></div><div class="skeleton-card-content"><div class="skeleton-block skeleton-line"></div><div class="skeleton-block skeleton-line short"></div></div></div>
+          <div class="skeleton-card" aria-hidden="true"><div class="skeleton-block skeleton-card-thumb"></div><div class="skeleton-card-content"><div class="skeleton-block skeleton-line"></div><div class="skeleton-block skeleton-line short"></div></div></div>
+        </div>
+        <div id="library-status" class="status-panel" hidden>
+          <span id="status-symbol" class="status-symbol" aria-hidden="true">↗</span>
+          <h3 id="status-title"></h3>
+          <p id="status-description"></p>
+          <button id="status-action" class="button button-quiet" type="button" hidden>Try again</button>
+        </div>
       </section>
-
-      <!-- No results message -->
-      <div
-        id="no-results"
-        style="display: none; text-align: center; padding: 40px; color: var(--text-dim)"
-      >
-        <p>No videos found.</p>
-      </div>
+      <noscript><div class="status-panel"><h2>JavaScript is needed to browse</h2><p>Enable JavaScript to load the video library and player.</p></div></noscript>
     </main>
+
+    <footer class="site-footer"><span>aida <span class="footer-byline">by keppy</span></span><span>Made for watching.</span></footer>
   </body>
 </html>

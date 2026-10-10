@@ -1,201 +1,154 @@
-// js/index.js
-const CDN_BASE = "https://cdn.keppy.dev/file/ProjectAida";
-
-function indexUrl() {
-  return typeof isAidaLiveSite === "function" && isAidaLiveSite()
-    ? `${CDN_BASE}/index.json`
-    : "./local/index.json";
-}
-
-function mediaBase(videoId) {
-  return typeof isAidaLiveSite === "function" && isAidaLiveSite()
-    ? `${CDN_BASE}/${videoId}`
-    : `./local/${videoId}`;
-}
+import {
+  fetchCatalog,
+  mediaBase,
+  watchUrl,
+  formatDate,
+  formatDuration,
+  renderVideoCard,
+  detectDisplayHdr,
+  attachThumbnailFallbacks,
+} from "./catalog.js";
 
 const searchInput = document.getElementById("search-input");
+const searchClear = document.getElementById("search-clear");
+const hero = document.getElementById("hero");
 const heroSkeleton = document.getElementById("hero-skeleton");
 const heroContent = document.getElementById("hero-content");
+const library = document.getElementById("videos");
 const videosGrid = document.getElementById("videos-grid");
-const noResults = document.getElementById("no-results");
+const libraryCount = document.getElementById("library-count");
+const resultsSummary = document.getElementById("results-summary");
+const statusPanel = document.getElementById("library-status");
+const statusAction = document.getElementById("status-action");
+const skeletonCards = [...videosGrid.children].map((card) => card.cloneNode(true));
+searchInput.value = new URLSearchParams(location.search).get("q") || "";
 
 let allVideos = [];
-let filteredVideos = [];
+let hdrCapable = false;
+let loadState = "loading";
 
-function videoVisibility(video) {
-  if (video.visibility === "public" || video.visibility === "unlisted" || video.visibility === "private") {
-    return video.visibility;
-  }
-  if (video.unlisted) return "unlisted";
-  return "public";
-}
-
-function isPublicVideo(video) {
-  return videoVisibility(video) === "public";
-}
-
-/** HDR thumbnail assets only when the *display* can show HDR; mirrors player/engine detectHDR. */
-let displayHdrCapable = false;
-
-async function detectDisplayHdr() {
-  const dynamicRange = window.matchMedia("(dynamic-range: high)").matches;
-  const wideGamut =
-    window.matchMedia("(color-gamut: p3)").matches ||
-    window.matchMedia("(color-gamut: rec2020)").matches;
-  let mediaCapabilities = false;
-  try {
-    const r = await navigator.mediaCapabilities?.decodingInfo({
-      type: "media-source",
-      video: {
-        contentType: 'video/mp4; codecs="hvc1"',
-        width: 1920,
-        height: 1080,
-        bitrate: 10000000,
-        framerate: 60,
-        transferFunction: "pq",
-        colorGamut: "rec2020",
-      },
-    });
-    mediaCapabilities = r?.supported ?? false;
-  } catch {}
-  return dynamicRange || (mediaCapabilities && wideGamut);
-}
-
-function heroThumbnailFile(video) {
-  return video.hdr && displayHdrCapable ? "thumbnail_hdr.avif" : "thumbnail_sdr.webp";
-}
-
-function cardThumbnailFile(video) {
-  return video.hdr && displayHdrCapable ? "thumbnail_hdr_720p.avif" : "thumbnail_sdr_720p.webp";
-}
-
-// ── Fetch and render ──
-async function load() {
-  try {
-    try {
-      displayHdrCapable = await detectDisplayHdr();
-    } catch {
-      displayHdrCapable = false;
-    }
-
-    const res = await fetch(indexUrl());
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    allVideos = await res.json();
-    allVideos = allVideos.filter(isPublicVideo);
-
-    if (!allVideos.length) {
-      heroSkeleton.style.display = "none";
-      noResults.style.display = "block";
-      return;
-    }
-
-    // Sort chronologically (newest first) by createdAt
-    allVideos.sort((a, b) => b.createdAt - a.createdAt);
-
-    renderHero(allVideos[0]);
-    renderGrid(allVideos);
-  } catch (err) {
-    console.error("Failed to load index:", err);
-    heroSkeleton.style.display = "none";
-    noResults.style.display = "block";
-  }
+function showStatus(title, description, actionText = "", onAction = null, symbol = "↗") {
+  document.getElementById("status-title").textContent = title;
+  document.getElementById("status-description").textContent = description;
+  document.getElementById("status-symbol").textContent = symbol;
+  statusAction.textContent = actionText;
+  statusAction.hidden = !actionText;
+  statusAction.onclick = onAction;
+  statusPanel.hidden = false;
 }
 
 function renderHero(video) {
-  heroContent.href = `watch.html?v=${encodeURIComponent(video.id)}`;
-
-  const heroImg = document.getElementById("hero-img");
-  const file = heroThumbnailFile(video);
-  const alt = `${escapeHtml(video.title)} thumbnail`;
-  heroImg.innerHTML = `<img src="${mediaBase(video.id)}/${file}" alt="${alt}">`;
-
-  document.getElementById("hero-title").textContent = video.title;
-  document.getElementById("hero-desc").textContent = video.description || "";
-  document.getElementById("hero-date").textContent = formatDate(video.createdAt);
-
-  const dur = formatDuration(video.duration);
-  const heroDur = document.getElementById("hero-duration");
-  heroDur.textContent = dur;
-  heroDur.style.display = dur ? "" : "none";
-
-  heroSkeleton.style.display = "none";
-  heroContent.style.display = "block";
+  const url = watchUrl(video.id);
+  document.getElementById("hero-image-link").href = url;
+  document.getElementById("hero-watch").href = url;
+  document.getElementById("hero-watch").setAttribute("aria-label", `Watch ${video.title || "the latest video"}`);
+  const image = document.createElement("img");
+  const base = mediaBase(video.id);
+  const hdr = video.hdr && hdrCapable;
+  image.src = `${base}/${hdr ? "thumbnail_hdr.avif" : "thumbnail_sdr.webp"}`;
+  image.dataset.fallbackSources = JSON.stringify(hdr ? [`${base}/thumbnail_sdr.webp`] : []);
+  image.alt = "";
+  image.decoding = "async";
+  image.fetchPriority = "high";
+  document.getElementById("hero-img").replaceChildren(image);
+  document.getElementById("hero-title").textContent = video.title || "Untitled video";
+  const description = document.getElementById("hero-desc");
+  description.textContent = video.description || "";
+  description.hidden = !video.description;
+  const date = document.getElementById("hero-date");
+  date.textContent = formatDate(video.createdAt);
+  date.hidden = !date.textContent;
+  const duration = document.getElementById("hero-image-duration");
+  duration.textContent = formatDuration(video.duration);
+  duration.hidden = !duration.textContent;
+  heroSkeleton.hidden = true;
+  heroContent.hidden = false;
+  attachThumbnailFallbacks(heroContent);
 }
 
 function renderGrid(videos) {
-  // Skip the first entry — it's already shown in the hero
-  videosGrid.innerHTML = videos
-    .slice(1)
-    .map((v) => createCardHTML(v))
-    .join("");
+  videosGrid.replaceChildren(...videos.map((video) => renderVideoCard(video, { hdrCapable })));
+  attachThumbnailFallbacks(videosGrid);
 }
 
-function createCardHTML(video) {
-  return `
-    <a href="watch.html?v=${encodeURIComponent(video.id)}" class="video-card">
-      <div class="video-card-thumbnail">
-        <img src="${mediaBase(video.id)}/${cardThumbnailFile(video)}" alt="${escapeHtml(video.title)} thumbnail" loading="lazy" />
-      </div>
-      <div class="video-card-content">
-        <div class="video-card-title">${escapeHtml(video.title)}</div>
-        <div class="video-card-meta">
-          <span>${formatDate(video.createdAt)}</span>
-          ${video.duration ? `<span>${formatDuration(video.duration)}</span>` : ""}
-        </div>
-      </div>
-    </a>
-  `;
+function clearSearch() {
+  searchInput.value = "";
+  renderResults();
+  searchInput.focus();
 }
 
-// ── Search ──
-searchInput.addEventListener("input", (e) => {
-  const query = e.target.value.toLowerCase();
+function renderResults() {
+  if (loadState !== "ready") return;
+  const query = searchInput.value.trim().toLocaleLowerCase();
+  searchClear.hidden = !searchInput.value;
+  hero.hidden = Boolean(query) || !allVideos.length;
+  statusPanel.hidden = true;
 
-  if (!query) {
-    renderGrid(allVideos);
-    noResults.style.display = "none";
+  if (!allVideos.length) {
+    videosGrid.replaceChildren();
+    resultsSummary.textContent = "The library is empty.";
+    showStatus("The collection starts here", "There are no public videos yet. Check back for the first upload.", "Refresh library", load);
     return;
   }
 
-  filteredVideos = allVideos.filter(
-    (v) =>
-      v.title.toLowerCase().includes(query) ||
-      (v.description && v.description.toLowerCase().includes(query)) ||
-      (v.tags && v.tags.some((t) => t.toLowerCase().includes(query))),
-  );
+  const matches = query ? allVideos.filter((video) => {
+    const tags = Array.isArray(video.tags) ? video.tags.join(" ") : "";
+    return [video.title, video.description, tags].some((value) => String(value || "").toLocaleLowerCase().includes(query));
+  }) : allVideos;
 
-  if (filteredVideos.length) {
-    renderGrid(filteredVideos);
-    noResults.style.display = "none";
+  renderGrid(matches);
+  if (query) {
+    resultsSummary.textContent = `${matches.length} ${matches.length === 1 ? "video" : "videos"} found for “${searchInput.value.trim()}”`;
+    if (!matches.length) {
+      showStatus("No matches this time", "Try a different title, description, or tag, or return to the full collection.", "Clear search", clearSearch, "⌕");
+    }
   } else {
-    videosGrid.innerHTML = "";
-    noResults.style.display = "block";
+    resultsSummary.textContent = "";
+  }
+}
+
+async function load() {
+  loadState = "loading";
+  searchInput.disabled = true;
+  searchClear.hidden = true;
+  hero.hidden = false;
+  hero.setAttribute("aria-busy", "true");
+  library.setAttribute("aria-busy", "true");
+  heroSkeleton.hidden = false;
+  heroContent.hidden = true;
+  statusPanel.hidden = true;
+  libraryCount.textContent = "";
+  resultsSummary.textContent = "Loading the library…";
+  videosGrid.replaceChildren(...skeletonCards.map((card) => card.cloneNode(true)));
+
+  try {
+    [allVideos, hdrCapable] = await Promise.all([fetchCatalog(), detectDisplayHdr().catch(() => false)]);
+    loadState = "ready";
+    libraryCount.textContent = String(allVideos.length);
+    searchInput.disabled = false;
+    if (allVideos.length) renderHero(allVideos[0]);
+    renderResults();
+  } catch (error) {
+    loadState = "error";
+    allVideos = [];
+    hero.hidden = true;
+    videosGrid.replaceChildren();
+    resultsSummary.textContent = "The library couldn't be loaded.";
+    showStatus("The library is out of reach", "We couldn’t load the videos. Check your connection and try again.", "Try again", load, "!");
+    console.warn("Unable to load the Aida catalogue:", error);
+  } finally {
+    hero.setAttribute("aria-busy", "false");
+    library.setAttribute("aria-busy", "false");
+  }
+}
+
+document.getElementById("search-form").addEventListener("submit", (event) => event.preventDefault());
+searchInput.addEventListener("input", renderResults);
+searchInput.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && searchInput.value) {
+    event.preventDefault();
+    clearSearch();
   }
 });
-
-// ── Utilities ──
-function formatDate(ts) {
-  return new Date(ts * 1000).toLocaleDateString("en-US", {
-    month: "long",
-    day: "numeric",
-    year: "numeric",
-  });
-}
-
-function formatDuration(seconds) {
-  if (!seconds) return "";
-  const h = Math.floor(seconds / 3600);
-  const m = Math.floor((seconds % 3600) / 60);
-  const s = Math.floor(seconds % 60);
-  if (h) return `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
-  return `${m}:${String(s).padStart(2, "0")}`;
-}
-
-function escapeHtml(text) {
-  const div = document.createElement("div");
-  div.textContent = text;
-  return div.innerHTML;
-}
-
-// ── Init ──
+searchClear.addEventListener("click", clearSearch);
 load();
