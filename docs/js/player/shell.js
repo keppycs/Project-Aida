@@ -1,11 +1,11 @@
-import { getPlayerProfile, watchProfile, isMobileLayout } from "./capabilities.js";
+import { getPlayerProfile, watchProfile, isMobileLayout } from "./capabilities.js?v=prechat-20261016-dd37ee5";
 import {
   initPlayback, applyCcSliderChange, setCcEnabled, markCcBannerMenuUsed,
   loadPlayerPrefs, persistPlaybackPrefs,
-} from "./engine.js";
-import { getAutoHideDelayMs, getBigPlayState, shouldShowMenuBackdrop } from "./chrome.js";
-import { bindDesktopProgressInput, bindDesktopVideoInput } from "./desktop-input.js";
-import { bindMobileProgressInput, bindMobileVideoInput } from "./mobile-input.js";
+} from "./engine.js?v=prechat-20261016-dd37ee5";
+import { getAutoHideDelayMs, getBigPlayState, shouldShowMenuBackdrop } from "./chrome.js?v=prechat-20261016-dd37ee5";
+import { bindDesktopProgressInput, bindDesktopVideoInput } from "./desktop-input.js?v=prechat-20261016-dd37ee5";
+import { bindMobileProgressInput, bindMobileVideoInput } from "./mobile-input.js?v=prechat-20261016-dd37ee5";
 
 function collectContext() {
   const wrap = document.getElementById("player-wrap");

@@ -102,8 +102,12 @@ for (const path of ["/watch", "/watch.html"]) {
       assert.doesNotMatch(html, /<script>alert\(/);
       assert.doesNotMatch(html, /<img src=x>/);
       assert.equal(html.match(/<title\b/g).length, 1);
-      assert.match(html, /src="js\/watch.js"/);
-      assert.match(html, /href="css\/player.css"/);
+      assert.match(html, /src="js\/watch\.js\?v=[A-Za-z0-9_-]+"/);
+      assert.equal(html.match(/src="(js\/watch\.js\?v=[^"]+)"/)?.[1],
+        template.match(/src="(js\/watch\.js\?v=[^"]+)"/)?.[1]);
+      assert.match(html, /href="css\/player\.css\?v=[A-Za-z0-9_-]+"/);
+      assert.equal(html.match(/href="(css\/player\.css\?v=[^"]+)"/)?.[1],
+        template.match(/href="(css\/player\.css\?v=[^"]+)"/)?.[1]);
       assertSafeHeaders(response);
       assert.equal(response.headers.get("x-frame-options"), "DENY");
       assert.match(response.headers.get("content-security-policy"), /frame-ancestors 'none'/);

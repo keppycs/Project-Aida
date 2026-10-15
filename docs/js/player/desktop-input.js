@@ -13,7 +13,7 @@
  * every extra click just toggles play/pause immediately, no debounce. This lets rapid
  * mashing feel responsive instead of silently eating clicks past the 3rd.
  */
-import { isTouchInput } from "./capabilities.js";
+import { isTouchInput } from "./capabilities.js?v=prechat-20261016-dd37ee5";
 
 const CLICK_WINDOW_MS = 200;
 

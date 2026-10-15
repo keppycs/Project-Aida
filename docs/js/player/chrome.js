@@ -3,7 +3,7 @@
  * Kept as small pure functions so shell.js stays a plain orchestrator instead of
  * branching on profile.layout inline throughout its event handlers.
  */
-import { isMobileLayout } from "./capabilities.js";
+import { isMobileLayout } from "./capabilities.js?v=prechat-20261016-dd37ee5";
 
 const DESKTOP_AUTO_HIDE_MS = 3000;
 const MOBILE_AUTO_HIDE_MS = 2000;

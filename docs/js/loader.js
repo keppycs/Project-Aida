@@ -1,4 +1,4 @@
-import { videoVisibility } from "./catalog.js";
+import { videoVisibility } from "./catalog.js?v=prechat-20261016-dd37ee5";
 
 export class VideoLoadError extends Error {
   constructor(kind, message) {

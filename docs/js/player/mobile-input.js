@@ -5,7 +5,7 @@
  * for the click-to-play equivalent. Touch `click` on the video is ignored so we do not
  * double-fire after touchend.
  */
-import { isTouchInput } from "./capabilities.js";
+import { isTouchInput } from "./capabilities.js?v=prechat-20261016-dd37ee5";
 
 export function bindMobileProgressInput({
   ctx,

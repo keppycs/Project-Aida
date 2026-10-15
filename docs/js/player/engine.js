@@ -1,4 +1,4 @@
-import "./warn-shim.js";
+import "./warn-shim.js?v=prechat-20261016-dd37ee5";
 
 const AV1_CODEC = 'video/mp4; codecs="av01.0.08H.10.0.110.09.16.09.0"';
 const HEVC_CODEC = 'video/mp4; codecs="hvc1.1.6.H150.B0"';

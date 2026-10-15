@@ -7,7 +7,7 @@ import {
   renderVideoCard,
   detectDisplayHdr,
   attachThumbnailFallbacks,
-} from "./catalog.js";
+} from "./catalog.js?v=prechat-20261016-dd37ee5";
 
 const searchInput = document.getElementById("search-input");
 const searchClear = document.getElementById("search-clear");
