@@ -3,18 +3,9 @@ main = "share-worker.mjs"
 compatibility_date = "2026-10-15"
 workers_dev = false
 
-# Route over the existing GitHub Pages origin. DNS records must be proxied.
-# The handler passes through paths that merely start with these prefixes.
-routes = [
-  { pattern = "keppy.dev/watch*", zone_name = "keppy.dev" },
-  { pattern = "keppy.dev/embed*", zone_name = "keppy.dev" },
-  { pattern = "keppy.dev/oembed*", zone_name = "keppy.dev" },
-  { pattern = "keppy.dev/preview-image*", zone_name = "keppy.dev" },
-  { pattern = "www.keppy.dev/watch*", zone_name = "keppy.dev" },
-  { pattern = "www.keppy.dev/embed*", zone_name = "keppy.dev" },
-  { pattern = "www.keppy.dev/oembed*", zone_name = "keppy.dev" },
-  { pattern = "www.keppy.dev/preview-image*", zone_name = "keppy.dev" },
-]
+# The eight production routes are managed in the Cloudflare dashboard (readme).
+# Keep routes omitted so code deploys preserve that route configuration.
+# Each route deliberately uses Fail open to preserve the existing site on limits.
 
 [vars]
 SITE_ORIGIN = "https://keppy.dev"

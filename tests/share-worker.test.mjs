@@ -20,6 +20,7 @@ function fixture({ meta = metadata, raw, metadataStatus = 200, metadataThrows = 
   originStatus = 200, originHtml = template } = {}) {
   const calls = [];
   const fetcher = async (input, init = {}) => {
+    assert.notEqual(init.redirect, "error", "Cloudflare fetch supports follow or manual redirects");
     const url = input instanceof Request ? input.url : String(input);
     const method = init.method || (input instanceof Request ? input.method : "GET");
     calls.push({ url, method, init });
@@ -107,10 +108,9 @@ for (const path of ["/watch", "/watch.html"]) {
       assert.equal(response.headers.get("x-frame-options"), "DENY");
       assert.match(response.headers.get("content-security-policy"), /frame-ancestors 'none'/);
       assert.equal(calls[0].init.headers["Cache-Control"], "no-cache");
-      assert.equal(calls[0].init.cf.cacheTtl, 0);
       assert.equal(calls[0].init.cache, "no-store");
-      assert.equal(calls[0].init.cf.cacheTtlByStatus["100-599"], -1);
-      assert.equal(calls[0].init.redirect, "error");
+      assert.equal(calls[0].init.cf, undefined, "no-store cannot be combined with a Cloudflare cache TTL");
+      assert.equal(calls[0].init.redirect, "manual");
       assert.ok(calls.every((call) => !call.url.includes("index.json")));
     });
   }

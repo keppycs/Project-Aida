@@ -72,17 +72,21 @@ async function readVideo(id, fetcher) {
     // Revalidate visibility rather than caching a previously public title at the edge.
     return await timedFetch(fetcher, `${CDN}/${id}/metadata.json`, {
       headers: { "Accept": "application/json", "Cache-Control": "no-cache" },
-      cache: "no-store", cf: { cacheTtl: 0, cacheTtlByStatus: { "100-599": -1 } }, redirect: "error",
+      cache: "no-store", redirect: "manual",
     }, async (response) => {
       if (response.status === 404) return { status: 404 };
-      if (!response.ok) return { status: 503 };
+      if (!response.ok) {
+        console.warn("Preview metadata upstream status", response.status);
+        return { status: 503 };
+      }
       const meta = JSON.parse(await boundedText(response, 128000));
       if (!meta || typeof meta !== "object" || Array.isArray(meta) || meta.id !== id) return { status: 503 };
       const visibility = meta.visibility ?? (meta.unlisted ? "unlisted" : "public");
       if (!["public", "unlisted"].includes(visibility)) return { status: 404 };
       return { status: 200, meta };
     });
-  } catch {
+  } catch (error) {
+    console.warn("Preview metadata fetch failed", String(error?.message || "Request failed").replace(/https?:\/\/\S+/g, "[upstream]"));
     return { status: 503 };
   }
 }
@@ -96,7 +100,7 @@ async function findImage(id, fetcher) {
   ]) {
     const url = `${CDN}/${id}/${file}`;
     try {
-      const response = await timedFetch(fetcher, url, { method: "HEAD", redirect: "error" });
+      const response = await timedFetch(fetcher, url, { method: "HEAD", redirect: "manual" });
       if (response.ok) return { url, type };
     } catch { /* Try an older thumbnail if this one is absent or unavailable. */ }
   }
@@ -229,7 +233,7 @@ async function routeRequest(request, env, fetcher) {
   if (imageRoute) {
     if (!image) return errorResponse(404);
     try {
-      const source = await timedFetch(fetcher, image.url, { method: request.method, redirect: "error" });
+      const source = await timedFetch(fetcher, image.url, { method: request.method, redirect: "manual" });
       if (!source.ok) return errorResponse(source.status === 404 ? 404 : 503);
       // Older B2 uploads used application/octet-stream. Correct it without
       // changing any bucket objects, preserving private-video checks above.
