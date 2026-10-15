@@ -3,7 +3,8 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-    <title>Project Aida</title>
+    <title>Watch · Aida</title>
+    <meta name="description" content="Watch Keppy's videos in 120 fps on Aida." />
     <link rel="icon" href="assets/favicons/flushed.svg" type="image/svg+xml" />
 
     <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -14,16 +15,42 @@
 
     <script src="https://cdn.jsdelivr.net/npm/shaka-player@5.0.7/dist/shaka-player.compiled.min.js"></script>
 
-    <link rel="stylesheet" href="css/watch.css" />
+    <link rel="stylesheet" href="css/site.css" />
     <link rel="stylesheet" href="css/player.css" />
     <link rel="stylesheet" href="css/player-mobile.css" />
-    <script type="module" src="js/player/index.js"></script>
-    <script defer src="js/loader.js"></script>
+    <link rel="stylesheet" href="css/watch.css" />
     <script defer src="js/site-env.js"></script>
-    <script defer src="js/watch.js"></script>
+    <script type="module" src="js/watch.js"></script>
   </head>
   <body>
-    <div id="player-wrap">
+    <a class="skip-link" href="#main-content">Skip to video</a>
+    <header class="site-header">
+      <a class="brand" href="index.html" aria-label="Aida home">
+        <span class="brand-mark" aria-hidden="true">a</span>
+        <span class="brand-copy"><span class="brand-name">aida</span><span class="brand-byline">by keppy</span></span>
+      </a>
+      <nav class="site-nav" aria-label="Main navigation">
+        <a href="index.html">Library</a><span class="site-format">120 fps</span>
+      </nav>
+    </header>
+    <main id="main-content" class="site-main watch-main">
+      <div class="watch-navigation">
+        <a class="back-link" href="index.html"><span aria-hidden="true">←</span> Back to library</a>
+        <button type="button" id="theatre-btn" class="button button-quiet" aria-pressed="false" aria-controls="watch-stage">Theatre mode</button>
+      </div>
+      <section id="watch-stage" class="watch-stage" aria-label="Watch video" aria-busy="true">
+        <div id="watch-status" class="watch-status" role="status" aria-live="polite">
+          <div class="watch-status-content">
+            <div id="watch-status-spinner" class="spin-ring" aria-hidden="true"></div>
+            <h2 id="watch-status-title">Loading video</h2>
+            <p id="watch-status-detail">Getting everything ready…</p>
+            <div class="watch-status-actions">
+              <button type="button" id="watch-retry" class="button button-primary" hidden>Try again</button>
+              <a id="watch-status-library" class="button button-quiet" href="index.html" hidden>Browse the library</a>
+            </div>
+          </div>
+        </div>
+    <div id="player-wrap" tabindex="0" aria-label="Video player" inert>
       <video id="video" playsinline></video>
 
       <div class="grad-top"></div>
@@ -40,25 +67,15 @@
       </div>
 
       <!-- Big play -->
-      <div id="big-play" class="show">
-        <svg viewBox="0 0 72 72" fill="none">
-          <circle
-            cx="36"
-            cy="36"
-            r="35"
-            fill="rgba(0,0,0,.55)"
-            stroke="rgba(255,255,255,.25)"
-            stroke-width="1"
-          />
+      <button id="big-play" type="button" aria-label="Play video">
+        <svg viewBox="0 0 72 72" fill="none" aria-hidden="true">
+          <circle cx="36" cy="36" r="35" fill="rgba(0,0,0,.55)" />
           <path
-            d="M29 21.5 L55 36 L29 50.5 Z"
+            d="M26.5 21.5 L52.5 36 L26.5 50.5 Z"
             fill="rgba(255,255,255,0.88)"
-            stroke="rgba(255,255,255,0.14)"
-            stroke-width="0.75"
-            stroke-linejoin="round"
           />
         </svg>
-      </div>
+      </button>
 
       <!-- Buffering -->
       <div id="spinner"><div class="spin-ring"></div></div>
@@ -69,12 +86,12 @@
       <div id="seek-ripple-right" class="seek-ripple" aria-hidden="true"></div>
 
       <!-- Keyboard toast -->
-      <div id="kb-toast"></div>
+      <div id="kb-toast" role="status" aria-live="polite"></div>
 
       <!-- Controls -->
       <div id="controls">
         <!-- Progress -->
-        <div id="progress-wrap">
+        <div id="progress-wrap" role="slider" tabindex="0" aria-label="Seek" aria-valuemin="0" aria-valuemax="0" aria-valuenow="0" aria-valuetext="0:00">
           <div id="progress-track">
             <div id="progress-buffer"></div>
             <div id="progress-hover"></div>
@@ -87,14 +104,14 @@
         <!-- Bottom row -->
         <div id="ctrl-row">
           <!-- Play/Pause -->
-          <button class="ctrl-btn" id="play-btn" title="Play (k)">
+          <button class="ctrl-btn" id="play-btn" title="Play (k)" aria-label="Play">
             <svg id="play-icon" viewBox="0 0 24 24" fill="currentColor">
               <polygon points="5,3 19,12 5,21" />
             </svg>
           </button>
 
           <!-- Skip back -->
-          <button class="ctrl-btn" id="back-btn" title="–10s (j)">
+          <button class="ctrl-btn" id="back-btn" title="–10s (j)" aria-label="Seek back 10 seconds">
             <svg
               viewBox="0 0 24 24"
               fill="none"
@@ -119,7 +136,7 @@
           </button>
 
           <!-- Skip forward -->
-          <button class="ctrl-btn" id="fwd-btn" title="+10s (l)">
+          <button class="ctrl-btn" id="fwd-btn" title="+10s (l)" aria-label="Seek forward 10 seconds">
             <svg
               viewBox="0 0 24 24"
               fill="none"
@@ -145,7 +162,7 @@
 
           <!-- Volume -->
           <div id="vol-cluster">
-            <button class="ctrl-btn" id="mute-btn" title="Mute (m)">
+            <button class="ctrl-btn" id="mute-btn" title="Mute (m)" aria-label="Mute">
               <svg
                 id="vol-icon"
                 viewBox="0 0 24 24"
@@ -161,7 +178,7 @@
               </svg>
             </button>
             <div id="vol-slider-wrap">
-              <input type="range" id="vol-slider" min="0" max="1" step="0.01" value="0.5" />
+              <input type="range" id="vol-slider" min="0" max="1" step="0.01" value="0.5" aria-label="Volume" />
             </div>
           </div>
 
@@ -174,7 +191,7 @@
 
           <!-- Speed -->
           <div class="menu-wrap">
-            <button class="ctrl-btn" id="speed-btn" title="Playback speed">
+            <button class="ctrl-btn" id="speed-btn" title="Playback speed" aria-label="Playback speed" aria-controls="speed-menu" aria-expanded="false">
               <svg
                 viewBox="0 0 24 24"
                 fill="none"
@@ -187,8 +204,8 @@
                 <polyline points="12 6 12 12 16 14" />
               </svg>
             </button>
-            <div class="menu-popup" id="speed-menu">
-              <div class="menu-header">Speed</div>
+            <div class="menu-popup" id="speed-menu" role="group" aria-label="Playback speed" hidden inert>
+              <div class="menu-heading"><span>Playback speed</span><button class="menu-close" type="button" data-close-menu aria-label="Close playback speed">×</button></div>
               <button class="menu-item" data-speed="0.25">0.25×</button>
               <button class="menu-item" data-speed="0.5">0.5×</button>
               <button class="menu-item" data-speed="0.75">0.75×</button>
@@ -201,11 +218,11 @@
 
           <!-- Color correction (HDR on SDR displays only) -->
           <div class="menu-wrap" id="cc-wrap" style="display: none">
-            <button class="ctrl-btn" id="cc-btn" title="Color correction" type="button">
+            <button class="ctrl-btn" id="cc-btn" title="Color correction" type="button" aria-controls="cc-menu" aria-expanded="false">
               Color
             </button>
-            <div class="menu-popup" id="cc-menu">
-              <div class="menu-header">Color correction</div>
+            <div class="menu-popup" id="cc-menu" role="group" aria-label="Color correction" hidden inert>
+              <div class="menu-heading"><span>Color correction</span><button class="menu-close" type="button" data-close-menu aria-label="Close color correction">×</button></div>
               <div class="cc-toggle-row menu-toggle-row">
                 <button type="button" class="menu-toggle" id="cc-off" data-cc-enable="0">
                   Off
@@ -258,7 +275,7 @@
 
           <!-- Quality -->
           <div class="menu-wrap">
-            <button class="ctrl-btn" id="quality-btn" title="Quality">
+            <button class="ctrl-btn" id="quality-btn" title="Quality" aria-label="Video quality" aria-controls="quality-menu" aria-expanded="false">
               <svg
                 viewBox="0 0 24 24"
                 fill="none"
@@ -273,13 +290,28 @@
               </svg>
               <span id="quality-label">Auto</span>
             </button>
-            <div class="menu-popup" id="quality-menu">
+            <div class="menu-popup" id="quality-menu" role="group" aria-label="Video quality" hidden inert>
               <div class="menu-header">Quality</div>
             </div>
           </div>
 
+          <div class="menu-wrap" id="settings-wrap">
+            <button class="ctrl-btn" id="settings-btn" type="button" title="Settings" aria-label="Player settings" aria-controls="settings-menu" aria-expanded="false">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="m9 3-1 3-3 1-2 5 2 5 3 1 1 3h6l1-3 3-1 2-5-2-5-3-1-1-3z"/><circle cx="12" cy="12" r="3"/>
+              </svg>
+            </button>
+            <div class="menu-popup" id="settings-menu" role="group" aria-label="Player settings" hidden inert>
+              <div class="menu-heading"><span>Settings</span><button class="menu-close" type="button" data-close-menu aria-label="Close settings">×</button></div>
+              <button type="button" class="menu-item settings-link" data-open-menu="quality-menu"><span>Video quality</span><span class="settings-value" id="settings-quality-value">Auto</span><span aria-hidden="true">›</span></button>
+              <button type="button" class="menu-item settings-link" data-open-menu="speed-menu"><span>Playback speed</span><span class="settings-value" id="settings-speed-value">Normal</span><span aria-hidden="true">›</span></button>
+              <button type="button" class="menu-item settings-link" id="settings-color" data-open-menu="cc-menu" hidden><span>Color correction</span><span class="settings-value"></span><span aria-hidden="true">›</span></button>
+              <p class="settings-hint">Double-tap either side of the video to seek 5 seconds.</p>
+            </div>
+          </div>
+
           <!-- Fullscreen -->
-          <button class="ctrl-btn" id="fs-btn" title="Fullscreen (f)">
+          <button class="ctrl-btn" id="fs-btn" title="Fullscreen (f)" aria-label="Enter fullscreen">
             <svg
               id="fs-icon"
               viewBox="0 0 24 24"
@@ -300,5 +332,36 @@
 
       <div id="menu-backdrop" class="menu-backdrop" aria-hidden="true"></div>
     </div>
+      </section>
+      <noscript><p class="status-panel">Enable JavaScript to play this video. <a href="index.html">Back to library</a></p></noscript>
+      <section class="watch-info" aria-labelledby="watch-title">
+        <div class="watch-info-heading">
+          <div>
+            <p class="eyebrow">Now watching</p>
+            <h1 id="watch-title">Getting your video ready</h1>
+            <div id="watch-meta" class="watch-meta"></div>
+          </div>
+          <button type="button" id="share-btn" class="button button-quiet" hidden>Copy link</button>
+        </div>
+        <p id="share-status" class="sr-only" role="status" aria-live="polite"></p>
+        <p id="watch-description" class="watch-description" hidden></p>
+        <div id="watch-tags" class="watch-tags" aria-label="Video tags" hidden></div>
+        <details class="shortcut-guide">
+          <summary>Player shortcuts</summary>
+          <dl>
+            <div><dt><kbd>Space</kbd> / <kbd>K</kbd></dt><dd>Play or pause</dd></div>
+            <div><dt><kbd>←</kbd> / <kbd>→</kbd></dt><dd>Seek 5 seconds</dd></div>
+            <div><dt><kbd>J</kbd> / <kbd>L</kbd></dt><dd>Seek 10 seconds</dd></div>
+            <div><dt><kbd>M</kbd> / <kbd>F</kbd></dt><dd>Mute / fullscreen</dd></div>
+          </dl>
+          <p>Focus the player to use shortcuts. On touch screens, tap to show controls and double-tap either side to seek.</p>
+        </details>
+      </section>
+      <section id="more-videos" class="more-videos" aria-labelledby="more-videos-title" hidden>
+        <div class="section-heading"><h2 id="more-videos-title">More to watch</h2><a class="text-link" href="index.html">View library <span aria-hidden="true">↗</span></a></div>
+        <div id="more-videos-grid" class="video-grid"></div>
+      </section>
+    </main>
+    <footer class="site-footer"><span>Made by keppy. Best enjoyed in motion.</span><a href="index.html">Back to library</a></footer>
   </body>
 </html>

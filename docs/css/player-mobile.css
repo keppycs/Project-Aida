@@ -58,11 +58,12 @@
 /* ── Bottom-sheet menu backdrop ── */
 .menu-backdrop {
   display: none;
-  position: absolute;
+  position: fixed;
   inset: 0;
   z-index: 12;
   background: rgba(0, 0, 0, 0.5);
   pointer-events: auto;
+  touch-action: none;
 }
 
 .menu-backdrop.open {
@@ -71,7 +72,7 @@
 
 #player-wrap.is-mobile {
   overflow: visible;
-  --ctrl-h: 38px;
+  --ctrl-h: 44px;
   --bar-h: 3px;
 }
 
@@ -80,8 +81,23 @@
     max(10px, env(safe-area-inset-left));
 }
 
+#player-wrap.is-mobile.menu-open #controls {
+  z-index: 20;
+  pointer-events: none;
+  transform: none;
+  transition: none;
+}
+
+#player-wrap.is-mobile.menu-open .menu-popup.open {
+  pointer-events: auto;
+}
+
+#player-wrap.is-mobile .menu-backdrop {
+  z-index: 16;
+}
+
 #player-wrap.is-mobile #progress-wrap {
-  height: 14px;
+  height: 28px;
   margin-bottom: 2px;
 }
 
@@ -101,8 +117,7 @@
 }
 
 #player-wrap.is-mobile #ctrl-row {
-  overflow-x: auto;
-  overflow-y: hidden;
+  overflow: visible;
   flex-wrap: nowrap;
   -webkit-overflow-scrolling: touch;
   scrollbar-width: none;
@@ -114,18 +129,29 @@
   display: none;
 }
 
-/* Center #big-play is the only play/pause control on mobile; bar duplicates hidden */
+/* Keep primary controls in one row; secondary controls live in Settings. */
 #player-wrap.is-mobile #play-btn,
 #player-wrap.is-mobile #back-btn,
 #player-wrap.is-mobile #fwd-btn {
   display: none;
 }
+#player-wrap.is-mobile #speed-btn,
+#player-wrap.is-mobile #quality-btn,
+#player-wrap.is-mobile #cc-btn {
+  display: none;
+}
+#player-wrap.is-mobile #settings-wrap {
+  display: block;
+}
+#player-wrap.is-mobile #vol-slider-wrap {
+  display: none;
+}
 
 #player-wrap.is-mobile .ctrl-btn {
-  width: 32px;
-  height: 32px;
-  min-width: 32px;
-  min-height: 32px;
+  width: 44px;
+  height: 44px;
+  min-width: 44px;
+  min-height: 44px;
   border-radius: 6px;
 }
 
@@ -140,6 +166,12 @@
 }
 
 #player-wrap.is-mobile #quality-label {
+  max-width: 88px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+#player-wrap.is-mobile #quality-label {
   font-size: 10px;
 }
 
@@ -149,22 +181,34 @@
 }
 
 /*
- * Mobile big-play: above the fixed bottom sheet (z-index 20).
- * Container is inset:0 for centering; pointer-events:none so only the SVG receives taps.
+ * Leave the timeline and control row clear, even at 320px wide.
+ * Only the visible icon receives taps; the rest of the video remains a gesture surface.
  */
 #player-wrap.is-mobile #big-play {
+  inset: 36px 0 82px;
+  height: auto;
   pointer-events: none;
-  z-index: 25;
+  z-index: 5;
 }
 
 #player-wrap.is-mobile #big-play svg {
-  width: 64px;
-  height: 64px;
+  width: clamp(48px, 14vw, 64px);
+  height: clamp(48px, 14vw, 64px);
+  opacity: 0;
+  transform: scale(0.82);
+  transition:
+    opacity 0.18s var(--ease),
+    transform 0.18s var(--ease);
 }
 
 #player-wrap.is-mobile #big-play.show > svg {
+  opacity: 1;
+  transform: scale(1);
   pointer-events: auto;
   cursor: pointer;
+}
+#player-wrap.is-mobile #spinner {
+  inset: 36px 0 82px;
 }
 
 #player-wrap.is-mobile .menu-popup.open {
@@ -176,14 +220,53 @@
   width: 100%;
   min-width: 0;
   max-height: min(72vh, 520px);
+  max-height: min(72dvh, 520px);
   overflow-y: auto;
   border-radius: 12px 12px 0 0;
   transform: none;
-  padding-left: max(12px, env(safe-area-inset-left));
-  padding-right: max(12px, env(safe-area-inset-right));
+  padding-left: env(safe-area-inset-left);
+  padding-right: env(safe-area-inset-right);
   padding-bottom: max(12px, env(safe-area-inset-bottom));
   z-index: 20;
   box-sizing: border-box;
+  overscroll-behavior: contain;
+}
+body.player-sheet-open {
+  overflow: hidden;
+}
+#player-wrap.is-mobile .settings-link {
+  min-height: 56px;
+  font-family: var(--font);
+}
+#player-wrap.is-mobile #codec-badge,
+#player-wrap.is-mobile #protocol-badge {
+  display: none;
+}
+#player-wrap.is-mobile .player-notice {
+  bottom: auto;
+  top: max(8px, env(safe-area-inset-top));
+  width: calc(100% - 20px);
+  max-height: calc(100% - 96px);
+  overflow-y: auto;
+  font-size: 11px;
+}
+
+#player-wrap.is-mobile .menu-toggle {
+  min-height: 44px;
+}
+
+#player-wrap.is-mobile .cc-slider-row {
+  min-height: 44px;
+}
+
+#player-wrap.is-mobile.fullscreen {
+  overflow: hidden;
+}
+
+@media (max-height: 440px) and (orientation: landscape) {
+  #player-wrap.is-mobile .menu-popup.open {
+    max-height: calc(100dvh - 20px);
+  }
 }
 
 @media (pointer: coarse) {

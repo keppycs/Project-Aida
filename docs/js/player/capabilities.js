@@ -4,8 +4,8 @@ export function getPlayerProfile() {
   const h = window.innerHeight;
   const minDim = Math.min(w, h);
   const coarse = window.matchMedia("(pointer: coarse)").matches;
-  /* Use shorter viewport edge so phone landscape (wide but short) still gets mobile chrome */
-  const isMobile = minDim <= 560 || (coarse && minDim <= 720);
+  /* Compact controls must fit narrow desktop windows as well as phones in landscape. */
+  const isMobile = w <= 760 || (coarse && minDim <= 720);
   const hideVolumeChrome = coarse || w < 640;
   return {
     layout: isMobile ? "mobile" : "desktop",
@@ -34,14 +34,14 @@ export function isTouchInput(profile) {
 /** Recompute profile on resize / breakpoint changes (classList + volume chrome). */
 export function watchProfile(onChange) {
   const handler = () => onChange(getPlayerProfile());
-  const mq560 = window.matchMedia("(max-width: 560px)");
-  const mq720 = window.matchMedia("(max-width: 720px)");
-  mq560.addEventListener("change", handler);
-  mq720.addEventListener("change", handler);
+  const compact = window.matchMedia("(max-width: 760px)");
+  const pointer = window.matchMedia("(pointer: coarse)");
+  compact.addEventListener("change", handler);
+  pointer.addEventListener("change", handler);
   window.addEventListener("resize", handler);
   return () => {
-    mq560.removeEventListener("change", handler);
-    mq720.removeEventListener("change", handler);
+    compact.removeEventListener("change", handler);
+    pointer.removeEventListener("change", handler);
     window.removeEventListener("resize", handler);
   };
 }

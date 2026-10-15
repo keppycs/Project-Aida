@@ -6,23 +6,23 @@
 import { isMobileLayout } from "./capabilities.js";
 
 const DESKTOP_AUTO_HIDE_MS = 3000;
-const MOBILE_AUTO_HIDE_MS = 2000;
+const MOBILE_AUTO_HIDE_MS = 3000;
 
-/** Desktop keeps chrome up longer since mouse movement re-triggers it constantly. */
+/** Keep controls visible for a full inactivity window after interaction. */
 export function getAutoHideDelayMs(profile) {
   return isMobileLayout(profile) ? MOBILE_AUTO_HIDE_MS : DESKTOP_AUTO_HIDE_MS;
 }
 
 /**
- * Desktop: big-play is a play-only button, shown while paused.
- * Mobile: big-play doubles as the pause button too, since the bar's own play/pause
- * button is hidden on mobile (see player-mobile.css).
+ * Desktop: big-play is a brief play/pause flash on state change (see shell.js).
+ * Mobile: paused/ended video always exposes Play; playing video exposes Pause
+ * with the chrome overlay (the bar's duplicate button is hidden).
  */
 export function getBigPlayState(profile, video, uiVisible) {
   if (isMobileLayout(profile)) {
-    return { show: video.paused || uiVisible, showPause: !video.paused };
+    return { show: uiVisible || video.paused || video.ended, showPause: !video.paused && !video.ended };
   }
-  return { show: video.paused, showPause: false };
+  return { show: false, showPause: false };
 }
 
 /** Mobile menus render as a bottom sheet, dimmed by a full-screen backdrop. */

@@ -1,37 +1,41 @@
-// ── Loader ─────────────────────────────────────────────────────────────────────
-const CDN_BASE = "https://cdn.keppy.dev/file/ProjectAida";
-const DEFAULT_ID = "0"; // fallback when no ?v= param in URL
+import { videoVisibility } from "./catalog.js";
 
-// Fetches metadata.json from base and passes it to init().
-// Called from js/watch.js after CDN_BASE / DEFAULT_ID are defined.
-function videoVisibility(meta) {
-  if (meta.visibility === "public" || meta.visibility === "unlisted" || meta.visibility === "private") {
-    return meta.visibility;
+export class VideoLoadError extends Error {
+  constructor(kind, message) {
+    super(message);
+    this.kind = kind;
   }
-  if (meta.unlisted) return "unlisted";
-  return "public";
 }
 
-function load(base) {
-  const metaUrl = `${base}/metadata.json`;
-  fetch(metaUrl)
-    .then((r) => {
-      if (r.status === 404) throw new Error("not_found");
-      if (!r.ok) throw new Error(r.status);
-      return r.json();
-    })
-    .then((meta) => {
-      const vis = videoVisibility(meta);
-      const localDev = typeof shouldUseLocalCmaf === "function" && shouldUseLocalCmaf();
-      if (vis === "private" && !localDev) {
-        document.getElementById("title-text").textContent = "This video is private.";
-        return;
-      }
-      init(meta, base);
-    })
-    .catch((err) => {
-      console.error("Failed to load metadata.json", { url: metaUrl, base, err });
-      document.getElementById("title-text").textContent =
-        err.message === "not_found" ? "Video not found." : "Failed to load video.";
-    });
+/** Fetch metadata before mounting the player; unavailable videos never expose dead controls. */
+export async function loadMetadata(base, { allowPrivate = false } = {}) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 15000);
+  try {
+    const response = await fetch(`${base}/metadata.json`, { signal: controller.signal });
+    if (response.status === 404) throw new VideoLoadError("not_found", "Video not found");
+    if (!response.ok) throw new VideoLoadError("network", "Unable to load video");
+    let meta;
+    try {
+      meta = await response.json();
+    } catch {
+      throw new VideoLoadError("invalid", "Video information is unavailable");
+    }
+    if (!meta || typeof meta !== "object" || Array.isArray(meta) || !Array.isArray(meta.codecs)) {
+      throw new VideoLoadError("invalid", "Video information is unavailable");
+    }
+    if (videoVisibility(meta) === "private" && !allowPrivate) {
+      throw new VideoLoadError("private", "This video is private");
+    }
+    return {
+      ...meta,
+      title: typeof meta.title === "string" && meta.title.trim() ? meta.title : "Untitled video",
+      codecs: meta.codecs.filter((codec) => codec === "AV1" || codec === "HEVC"),
+    };
+  } catch (error) {
+    if (error instanceof VideoLoadError) throw error;
+    throw new VideoLoadError("network", "Unable to load video");
+  } finally {
+    clearTimeout(timeout);
+  }
 }

@@ -1,15 +1,12 @@
 /**
- * Mobile-only player input: touch-drag scrubbing on the seek bar, tap-to-toggle chrome
+ * Touch player input: drag scrubbing on the seek bar, tap-to-toggle chrome
  * on the video surface, and double-tap left/right to seek ±5s with a ripple overlay.
  * Only the center #big-play control toggles playback on mobile — see desktop-input.js
  * for the click-to-play equivalent. Touch `click` on the video is ignored so we do not
  * double-fire after touchend.
  */
-import { isTouchInput } from "./capabilities.js";
-
 export function bindMobileProgressInput({
   ctx,
-  getProfile,
   video,
   fmt,
   applyProgress,
@@ -19,63 +16,71 @@ export function bindMobileProgressInput({
   showUI,
 }) {
   const { progWrap, timeTip, curTime } = ctx;
+  let activePointer = null;
 
-  progWrap.addEventListener(
-    "touchstart",
-    (e) => {
-      if (!isTouchInput(getProfile())) return;
-      e.preventDefault();
-      setDragging(true);
-      const rect = progWrap.getBoundingClientRect();
-      const frac = Math.max(0, Math.min(1, (e.touches[0].clientX - rect.left) / rect.width));
-      applyProgress(frac);
-      showUI();
-    },
-    { passive: false },
-  );
-
-  progWrap.addEventListener(
-    "touchmove",
-    (e) => {
-      if (!isTouchInput(getProfile())) return;
-      e.preventDefault();
-      if (!isDragging()) return;
-      const rect = progWrap.getBoundingClientRect();
-      const frac = Math.max(0, Math.min(1, (e.touches[0].clientX - rect.left) / rect.width));
-      applyProgress(frac);
-      curTime.textContent = fmt(frac * (video.duration || 0));
-      timeTip.textContent = fmt(frac * (video.duration || 0));
-      timeTip.style.left = e.touches[0].clientX - rect.left + "px";
-    },
-    { passive: false },
-  );
-
-  progWrap.addEventListener("touchend", (e) => {
-    if (!isTouchInput(getProfile())) return;
-    if (!isDragging()) return;
-    setDragging(false);
+  function getFraction(e) {
     const rect = progWrap.getBoundingClientRect();
-    const frac = Math.max(0, Math.min(1, (e.changedTouches[0].clientX - rect.left) / rect.width));
-    onScrubTo(frac);
+    return Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+  }
+
+  function preview(e) {
+    const frac = getFraction(e);
+    const rect = progWrap.getBoundingClientRect();
+    applyProgress(frac);
+    curTime.textContent = fmt(frac * video.duration);
+    timeTip.textContent = curTime.textContent;
+    timeTip.style.left = `clamp(32px, ${Math.max(0, Math.min(rect.width, e.clientX - rect.left))}px, calc(100% - 32px))`;
     showUI();
+  }
+
+  function finishDrag(e, commit = false) {
+    if (activePointer === null || (e && e.pointerId !== activePointer)) return;
+    const pointerId = activePointer;
+    activePointer = null;
+    setDragging(false);
+    progWrap.classList.remove("scrubbing");
+    if (progWrap.hasPointerCapture(pointerId)) progWrap.releasePointerCapture(pointerId);
+    if (commit) onScrubTo(getFraction(e));
+    else {
+      const duration = video.duration;
+      applyProgress(Number.isFinite(duration) && duration > 0 ? video.currentTime / duration : 0);
+      curTime.textContent = fmt(video.currentTime);
+      timeTip.textContent = curTime.textContent;
+    }
+    showUI();
+  }
+
+  progWrap.addEventListener("pointerdown", (e) => {
+    if (e.pointerType !== "touch" || !e.isPrimary || e.button !== 0 || isDragging()) return;
+    if (!Number.isFinite(video.duration) || video.duration <= 0) return;
+    e.preventDefault();
+    activePointer = e.pointerId;
+    setDragging(true);
+    progWrap.classList.add("scrubbing");
+    progWrap.setPointerCapture(e.pointerId);
+    preview(e);
   });
 
-  progWrap.addEventListener("touchcancel", () => {
-    if (!isTouchInput(getProfile())) return;
-    setDragging(false);
+  progWrap.addEventListener("pointermove", (e) => {
+    if (e.pointerId !== activePointer) return;
+    e.preventDefault();
+    preview(e);
   });
+
+  progWrap.addEventListener("pointerup", (e) => finishDrag(e, true));
+  progWrap.addEventListener("pointercancel", (e) => finishDrag(e));
+  progWrap.addEventListener("lostpointercapture", (e) => finishDrag(e));
+  window.addEventListener("blur", () => finishDrag());
 }
 
-/** Keep in sync with `shouldIgnoreMenuDismissClick` in shell.js */
-function shouldIgnoreMenuDismissTouch(e) {
+function isInteractiveTarget(e) {
   return e.target.closest(
-    ".menu-item, .menu-toggle, .cc-slider, .menu-popup input, .menu-popup label, .menu-wrap",
+    "#controls, .menu-popup, #progress-wrap, #big-play, #autoplay-gate, #menu-backdrop, button, input, a, [role='slider']",
   );
 }
 
 export function bindMobileVideoInput({
   ctx,
-  getProfile,
   skip,
   showUI,
   hideUI,
@@ -86,11 +91,10 @@ export function bindMobileVideoInput({
 
   const MOVE_PX = 14;
   const DOUBLE_TAP_MS = 300;
-  let sx = 0;
-  let sy = 0;
-  let moved = false;
-  let lastTapTime = 0;
-  let lastTapSide = null;
+  const MAX_TAP_MS = 600;
+  const touchPointers = new Set();
+  let gesture = null;
+  let pendingTap = null;
   let singleTapTimer = null;
 
   function getTapSide(clientX) {
@@ -108,98 +112,87 @@ export function bindMobileVideoInput({
   }
 
   function clearSingleTapTimer() {
-    if (!singleTapTimer) return;
     clearTimeout(singleTapTimer);
     singleTapTimer = null;
+    pendingTap = null;
   }
 
-  function scheduleChromeToggle() {
+  function cancelGesture() {
+    gesture = null;
     clearSingleTapTimer();
+  }
+
+  function scheduleChromeToggle(tap) {
+    clearSingleTapTimer();
+    pendingTap = tap;
     singleTapTimer = setTimeout(() => {
       singleTapTimer = null;
-      if (wrap.classList.contains("ui-visible")) hideUI();
+      pendingTap = null;
+      if (isAnyMenuOpen()) return;
+      if (tap.uiWasVisible) hideUI();
       else showUI();
     }, DOUBLE_TAP_MS);
   }
 
-  wrap.addEventListener(
-    "touchstart",
-    (e) => {
-      if (!isTouchInput(getProfile())) return;
-      if (e.target.closest("#controls, #autoplay-gate")) return;
-      if (e.target.closest(".menu-popup") && shouldIgnoreMenuDismissTouch(e)) return;
-      sx = e.touches[0].clientX;
-      sy = e.touches[0].clientY;
-      moved = false;
-    },
-    { passive: true },
-  );
+  document.addEventListener("pointerdown", (e) => {
+    if (e.pointerType === "touch") touchPointers.add(e.pointerId);
+    if (!wrap.contains(e.target) || isInteractiveTarget(e) || isAnyMenuOpen() || touchPointers.size > 1) {
+      cancelGesture();
+    }
+  }, true);
 
-  wrap.addEventListener(
-    "touchmove",
-    (e) => {
-      if (!isTouchInput(getProfile())) return;
-      if (e.target.closest("#controls, .menu-popup, #progress-wrap, .cc-slider, #menu-backdrop")) {
-        return;
-      }
-      const dx = e.touches[0].clientX - sx;
-      const dy = e.touches[0].clientY - sy;
-      if (Math.abs(dx) > MOVE_PX || Math.abs(dy) > MOVE_PX) moved = true;
-    },
-    { passive: true },
-  );
+  wrap.addEventListener("pointerdown", (e) => {
+    if (e.pointerType !== "touch" || !e.isPrimary || touchPointers.size !== 1 || isInteractiveTarget(e)) return;
+    gesture = {
+      pointerId: e.pointerId,
+      x: e.clientX,
+      y: e.clientY,
+      startedAt: Date.now(),
+      uiWasVisible: wrap.classList.contains("ui-visible"),
+      menuWasOpen: isAnyMenuOpen(),
+    };
+  });
 
-  wrap.addEventListener(
-    "touchend",
-    (e) => {
-      if (!isTouchInput(getProfile())) return;
-      if (e.target.closest("#autoplay-gate")) return;
+  document.addEventListener("pointermove", (e) => {
+    if (!gesture || e.pointerId !== gesture.pointerId) return;
+    if (Math.abs(e.clientX - gesture.x) > MOVE_PX || Math.abs(e.clientY - gesture.y) > MOVE_PX) {
+      cancelGesture();
+    }
+  }, { passive: true });
 
-      if (isAnyMenuOpen()) {
-        if (shouldIgnoreMenuDismissTouch(e)) return;
-        closeAllMenus();
-        showUI();
-        return;
-      }
+  document.addEventListener("pointerup", (e) => {
+    touchPointers.delete(e.pointerId);
+    if (!gesture || e.pointerId !== gesture.pointerId) return;
+    const tap = gesture;
+    gesture = null;
+    if (Date.now() - tap.startedAt > MAX_TAP_MS) {
+      clearSingleTapTimer();
+      return;
+    }
+    if (tap.menuWasOpen || isAnyMenuOpen()) {
+      clearSingleTapTimer();
+      closeAllMenus();
+      showUI();
+      return;
+    }
+    const side = getTapSide(e.clientX);
+    const now = Date.now();
+    if (pendingTap && now - pendingTap.time < DOUBLE_TAP_MS && side === pendingTap.side) {
+      clearSingleTapTimer();
+      skip(side === "left" ? -5 : 5);
+      flashRipple(side);
+      return;
+    }
+    scheduleChromeToggle({ time: now, side, uiWasVisible: tap.uiWasVisible });
+  });
 
-      if (e.target.closest("#controls, .menu-popup, #progress-wrap, .cc-slider, #autoplay-gate")) {
-        return;
-      }
-      if (e.target.closest("#big-play")) return;
-
-      if (moved) {
-        clearSingleTapTimer();
-        showUI();
-        return;
-      }
-
-      const touch = e.changedTouches[0];
-      const side = getTapSide(touch.clientX);
-      const now = Date.now();
-
-      if (now - lastTapTime < DOUBLE_TAP_MS && side === lastTapSide) {
-        clearSingleTapTimer();
-        lastTapTime = 0;
-        lastTapSide = null;
-        skip(side === "left" ? -5 : 5);
-        flashRipple(side);
-        showUI();
-        return;
-      }
-
-      lastTapTime = now;
-      lastTapSide = side;
-      scheduleChromeToggle();
-    },
-    { passive: true },
-  );
-
-  wrap.addEventListener(
-    "touchend",
-    (e) => {
-      if (!isTouchInput(getProfile())) return;
-      if (e.target.closest(".ctrl-btn, .menu-toggle, .menu-item, .cc-slider")) showUI();
-    },
-    { passive: true },
-  );
+  document.addEventListener("pointercancel", (e) => {
+    touchPointers.delete(e.pointerId);
+    if (!gesture || e.pointerId === gesture.pointerId) cancelGesture();
+  });
+  window.addEventListener("scroll", cancelGesture, { passive: true, capture: true });
+  window.addEventListener("blur", () => {
+    touchPointers.clear();
+    cancelGesture();
+  });
 }
