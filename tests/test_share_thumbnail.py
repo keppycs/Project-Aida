@@ -131,10 +131,12 @@ class ShareThumbnailTests(unittest.TestCase):
         self.assertEqual(Path(run.call_args.args[0][run.call_args.args[0].index("-i") + 1]).suffix, ".webp")
 
     def test_all_cli_processes_direct_video_directories(self):
-        local = self.work / "docs" / "local"
+        local = self.work / "web" / "local"
         local.mkdir(parents=True)
         self.video.rename(local / "id")
         with patch.object(share_thumbnail, "ROOT", self.work), patch.object(
+            share_thumbnail, "LOCAL_DIR", local
+        ), patch.object(
             thumbnail.subprocess, "run", side_effect=self.write_jpeg
         ):
             self.assertEqual(share_thumbnail.main(["--all"]), 0)

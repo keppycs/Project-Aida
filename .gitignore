@@ -33,10 +33,10 @@ logs/
 todo.md
 
 # Local CMAF output (see readme — not committed)
-docs/local/
+web/local/
 
 # Saved reference pages (not project code)
-docs/youtube reference/
+web/youtube reference/
 
 # Reversible local file replacements; may contain private user data
 .agent-trash/

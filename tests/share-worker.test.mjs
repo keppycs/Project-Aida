@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import worker, { handleRequest, rewriteWatchHtml } from "../edge/share-worker.mjs";
 
-const template = await readFile(new URL("../docs/watch.html", import.meta.url), "utf8");
+const template = await readFile(new URL("../web/watch.html", import.meta.url), "utf8");
 const site = "https://keppy.dev";
 const cdn = "https://cdn.keppy.dev/file/ProjectAida";
 const id = "test-video_120";

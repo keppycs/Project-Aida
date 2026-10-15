@@ -198,7 +198,7 @@ def upload_index(b2: Any, bucket: str, index_path: Path, log: logging.Logger) ->
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Upload a video ID folder to the Project Aida B2 bucket.")
-    parser.add_argument("folder", help="Path to the video ID folder (e.g. docs/local/00000000000). All contents uploaded recursively.")
+    parser.add_argument("folder", help="Path to the video ID folder (e.g. web/local/00000000000). All contents uploaded recursively.")
     parser.add_argument("--prefix", default=None, metavar="PREFIX",
                         help="B2 key prefix override (default: folder name, i.e. the video ID)")
     args = parser.parse_args()
