@@ -1,11 +1,11 @@
-import { getPlayerProfile, watchProfile, isMobileLayout } from "./capabilities.js?v=player-20261016-7b6ee24";
+import { getPlayerProfile, watchProfile, isMobileLayout } from "./capabilities.js";
 import {
   initPlayback, applyCcSliderChange, setCcEnabled, markCcBannerMenuUsed,
-  persistPlaybackPrefs,
-} from "./engine.js?v=player-20261016-7b6ee24";
-import { getAutoHideDelayMs, getBigPlayState, shouldShowMenuBackdrop } from "./chrome.js?v=player-20261016-7b6ee24";
-import { bindDesktopProgressInput, bindDesktopVideoInput } from "./desktop-input.js?v=player-20261016-7b6ee24";
-import { bindMobileProgressInput, bindMobileVideoInput } from "./mobile-input.js?v=player-20261016-7b6ee24";
+  loadPlayerPrefs, persistPlaybackPrefs,
+} from "./engine.js";
+import { getAutoHideDelayMs, getBigPlayState, shouldShowMenuBackdrop } from "./chrome.js";
+import { bindDesktopProgressInput, bindDesktopVideoInput } from "./desktop-input.js";
+import { bindMobileProgressInput, bindMobileVideoInput } from "./mobile-input.js";
 
 function collectContext() {
   const wrap = document.getElementById("player-wrap");
@@ -40,8 +40,6 @@ function collectContext() {
     qualLabel: document.getElementById("quality-label"),
     speedBtn: document.getElementById("speed-btn"),
     speedMenu: document.getElementById("speed-menu"),
-    settingsBtn: document.getElementById("settings-btn"),
-    settingsMenu: document.getElementById("settings-menu"),
     hdrBadge: document.getElementById("hdr-badge"),
     codecBadge: document.getElementById("codec-badge"),
     protocolBadge: document.getElementById("protocol-badge"),
@@ -93,7 +91,6 @@ const FS_EXIT = `<polyline points="4 14 10 14 10 20"/><polyline points="20 4 14 
 
 function applyLayoutClass(wrap, profile) {
   wrap.classList.toggle("is-mobile", isMobileLayout(profile));
-  wrap.classList.toggle("hide-volume-slider", profile.hideVolumeChrome);
   wrap.dataset.layout = profile.layout;
 }
 
@@ -106,6 +103,7 @@ export async function mountPlayer(meta, base) {
   let uiTimer;
   let bigPlayFlashTimer;
   let isDragging = false;
+  let isHovering = false;
   let hasStarted = false;
 
   const { wrap, video, bigPlay, seekFlash, kbToast, playBtn, playIcon } = ctx;
@@ -133,7 +131,6 @@ export async function mountPlayer(meta, base) {
     { menu: qualMenu, button: ctx.qualBtn },
     { menu: speedMenu, button: ctx.speedBtn },
     { menu: ccMenu, button: ctx.ccBtn },
-    { menu: ctx.settingsMenu, button: ctx.settingsBtn },
   ];
   menus.forEach(({ menu, button }) => {
     menu.hidden = true;
@@ -144,10 +141,12 @@ export async function mountPlayer(meta, base) {
 
   function setDragging(v) {
     isDragging = v;
-    if (v) clearTimeout(uiTimer);
   }
   function getDragging() {
     return isDragging;
+  }
+  function setHovering(v) {
+    isHovering = v;
   }
 
   function getProgressFrac(e) {
@@ -156,8 +155,9 @@ export async function mountPlayer(meta, base) {
   }
 
   function applyProgress(frac) {
+    const w = progWrap.getBoundingClientRect().width;
     progFill.style.width = frac * 100 + "%";
-    progThumb.style.left = frac * 100 + "%";
+    progThumb.style.left = frac * w + "px";
     progThumb.style.right = "auto";
   }
 
@@ -187,31 +187,26 @@ export async function mountPlayer(meta, base) {
   }
 
   function isAnyMenuOpen() {
-    return menus.some(({ menu }) => menu.classList.contains("open"));
-  }
-
-  function menuTrigger(entry) {
-    const button = isMobileLayout(getProfile()) ? ctx.settingsBtn : entry.button;
-    return button.getClientRects().length ? button : wrap;
+    return (
+      qualMenu.classList.contains("open") ||
+      speedMenu.classList.contains("open") ||
+      ccMenu.classList.contains("open")
+    );
   }
 
   function closeAllMenus(restoreFocus = false) {
     const open = menus.find(({ menu }) => menu.classList.contains("open"));
     const focusInMenu = open?.menu.contains(document.activeElement);
-    if ((restoreFocus || focusInMenu) && open) menuTrigger(open).focus({ preventScroll: true });
+    if ((restoreFocus || focusInMenu) && open) open.button.focus();
     menus.forEach(({ menu, button }) => {
       menu.classList.remove("open");
       menu.hidden = true;
       menu.inert = true;
-      menu.setAttribute("role", "group");
-      menu.removeAttribute("aria-modal");
       button.setAttribute("aria-expanded", "false");
     });
     menuBackdrop?.classList.remove("open");
     wrap.classList.remove("menu-open");
-    document.body.classList.remove("player-sheet-open");
     syncBigPlayOverlay();
-    showUI();
   }
 
   function toggleMenu(menu, focusMenu = false) {
@@ -224,18 +219,12 @@ export async function mountPlayer(meta, base) {
       menu.classList.add("open");
       menus.find((entry) => entry.menu === menu).button.setAttribute("aria-expanded", "true");
       wrap.classList.add("menu-open");
-      if (shouldShowMenuBackdrop(getProfile())) {
-        menu.setAttribute("role", "dialog");
-        menu.setAttribute("aria-modal", "true");
-        menuBackdrop?.classList.add("open");
-        document.body.classList.add("player-sheet-open");
-        ctx.settingsBtn.setAttribute("aria-expanded", "true");
-      }
+      if (shouldShowMenuBackdrop(getProfile())) menuBackdrop?.classList.add("open");
       requestAnimationFrame(() => {
         if (!menu.classList.contains("open")) return;
         menu.scrollTop = 0;
         if (focusMenu || isMobileLayout(getProfile())) {
-          menu.querySelector(".active:not(:disabled), .menu-item:not(:disabled), button:not(:disabled), input")?.focus({ preventScroll: true });
+          menu.querySelector(".active:not(:disabled), button:not(:disabled), input")?.focus();
         }
       });
       showUI();
@@ -248,8 +237,7 @@ export async function mountPlayer(meta, base) {
   }
 
   function focusableMenuItems(menu) {
-    return [...menu.querySelectorAll("button:not(:disabled), input:not(:disabled), [tabindex='0']")]
-      .filter((item) => item.getClientRects().length > 0);
+    return [...menu.querySelectorAll("button:not(:disabled), input:not(:disabled), [tabindex='0']")];
   }
 
   menus.forEach(({ menu, button }) => {
@@ -285,11 +273,6 @@ export async function mountPlayer(meta, base) {
     });
   });
 
-  // The quality menu is rebuilt by the playback engine, so use delegated dismissal.
-  menus.forEach(({ menu }) => menu.addEventListener("click", (e) => {
-    if (e.target.closest("[data-close-menu]")) closeAllMenus(true);
-  }));
-
   function cleanupBigPlayFlash() {
     const svg = bigPlay.querySelector("svg");
     clearTimeout(bigPlayFlashTimer);
@@ -301,14 +284,6 @@ export async function mountPlayer(meta, base) {
     if (svg) svg.style.animation = "none";
   }
 
-  function setBigPlayGraphic(showPause) {
-    // Keep the tapped SVG node alive when pointer focus reveals the controls.
-    const icon = showPause ? "pause" : "play";
-    if (bigPlay.dataset.icon === icon) return;
-    bigPlay.dataset.icon = icon;
-    bigPlay.querySelector("svg").innerHTML = showPause ? BIG_PLAY_SVG_PAUSE : BIG_PLAY_SVG_PLAY;
-  }
-
   function flashBigPlayOverlay(playing) {
     if (isMobileLayout(getProfile())) return;
     const svg = bigPlay.querySelector("svg");
@@ -318,7 +293,7 @@ export async function mountPlayer(meta, base) {
     svg.style.animation = "none";
     void svg.offsetWidth;
 
-    setBigPlayGraphic(playing);
+    svg.innerHTML = playing ? BIG_PLAY_SVG_PAUSE : BIG_PLAY_SVG_PLAY;
     bigPlay.classList.add("show", "flash-brief");
     bigPlay.tabIndex = -1;
     bigPlay.setAttribute("aria-hidden", "true");
@@ -346,7 +321,7 @@ export async function mountPlayer(meta, base) {
       bigPlay.tabIndex = visible ? 0 : -1;
       bigPlay.setAttribute("aria-hidden", String(!visible));
       bigPlay.setAttribute("aria-label", "Play video");
-      setBigPlayGraphic(false);
+      svg.innerHTML = BIG_PLAY_SVG_PLAY;
       return;
     }
     bigPlay.classList.remove("initial-play");
@@ -368,24 +343,20 @@ export async function mountPlayer(meta, base) {
     bigPlay.tabIndex = visible ? 0 : -1;
     bigPlay.setAttribute("aria-hidden", String(!visible));
     bigPlay.setAttribute("aria-label", showPause ? "Pause video" : "Play video");
-    setBigPlayGraphic(showPause);
+    svg.innerHTML = showPause ? BIG_PLAY_SVG_PAUSE : BIG_PLAY_SVG_PLAY;
   }
 
   function showUI() {
     wrap.classList.add("ui-visible", "cursor-visible");
     clearTimeout(uiTimer);
-    if (!video.paused && !isDragging) uiTimer = setTimeout(hideUI, getAutoHideDelayMs(getProfile()));
+    if (!video.paused) uiTimer = setTimeout(hideUI, getAutoHideDelayMs(getProfile()));
     syncBigPlayOverlay();
   }
 
   function hideUI() {
     clearTimeout(uiTimer);
-    if (video.paused || video.ended || isDragging || isAnyMenuOpen()) return;
-    if (document.getElementById("controls").matches(":hover") && !getProfile().coarsePointer) return;
+    if (isAnyMenuOpen()) return;
     if (wrap.contains(document.activeElement) && document.activeElement.matches(":focus-visible")) return;
-    // Move pointer focus before hiding; its focusin event must not reveal the UI again.
-    if (document.activeElement === bigPlay) wrap.focus({ preventScroll: true });
-    clearTimeout(uiTimer);
     wrap.classList.remove("ui-visible", "cursor-visible");
     syncBigPlayOverlay();
   }
@@ -487,15 +458,18 @@ export async function mountPlayer(meta, base) {
   syncBigPlayOverlay();
 
   watchProfile((next) => {
-    const layoutChanged = next.layout !== profile.layout;
     profile = next;
     applyLayoutClass(wrap, profile);
     updateMenuBounds();
     syncBigPlayOverlay();
-    if (layoutChanged) {
-      closeAllMenus();
-      showUI();
+    if (profile.hideVolumeChrome) {
+      ctx.volCluster.style.display = "none";
+      video.volume = 1;
+    } else {
+      ctx.volCluster.style.display = "";
+      video.volume = loadPlayerPrefs()?.volume ?? 0.5;
     }
+    closeAllMenus();
   });
 
   video.addEventListener("play", () => {
@@ -516,12 +490,17 @@ export async function mountPlayer(meta, base) {
   });
   video.addEventListener("pause", () => {
     setPlayIcon(false);
-    showUI();
+    if (isMobileLayout(getProfile())) {
+      hideUI();
+    } else {
+      showUI();
+    }
     syncBigPlayOverlay();
   });
   video.addEventListener("ended", () => {
     setPlayIcon(false);
-    showUI();
+    if (isMobileLayout(getProfile())) hideUI();
+    else showUI();
     syncBigPlayOverlay();
   });
 
@@ -550,7 +529,7 @@ export async function mountPlayer(meta, base) {
 
   video.addEventListener("timeupdate", () => {
     syncProgressAccessibility();
-    if (isDragging || !Number.isFinite(video.duration) || !video.duration) return;
+    if (isDragging || isHovering || !video.duration) return;
     applyProgress(video.currentTime / video.duration);
     curTime.textContent = fmt(video.currentTime);
     if (video.buffered.length) {
@@ -600,9 +579,8 @@ export async function mountPlayer(meta, base) {
     clearHoverPreview,
     setDragging,
     isDragging: getDragging,
-    setHovering: () => {},
+    setHovering,
     onScrubTo,
-    showUI,
   });
   bindDesktopVideoInput({ ctx, getProfile, togglePlay, toggleFS });
 
@@ -630,37 +608,14 @@ export async function mountPlayer(meta, base) {
   backBtn.addEventListener("click", () => skip(-10));
   fwdBtn.addEventListener("click", () => skip(10));
 
-  wrap.addEventListener("pointermove", (e) => {
-    if (e.pointerType !== "touch") showUI();
-  });
+  wrap.addEventListener("mousemove", showUI);
   wrap.addEventListener("focusin", showUI);
-  wrap.addEventListener("focusout", (e) => {
-    if (!wrap.contains(e.relatedTarget)) showUI();
-  });
   wrap.addEventListener("pointerdown", (e) => {
-    if (e.pointerType === "touch") return;
     if (e.target.closest("button, input, a, [role='slider']")) return;
     wrap.focus({ preventScroll: true });
   });
-  wrap.addEventListener("pointerleave", (e) => {
-    if (e.pointerType === "touch") return;
+  wrap.addEventListener("mouseleave", () => {
     if (!video.paused) hideUI();
-  });
-
-  ctx.settingsBtn.addEventListener("click", (e) => {
-    e.stopPropagation();
-    document.getElementById("settings-quality-value").textContent = ctx.qualLabel.textContent;
-    document.getElementById("settings-speed-value").textContent = video.playbackRate === 1 ? "Normal" : `${video.playbackRate}×`;
-    document.getElementById("settings-color").hidden = ctx.ccWrap.style.display === "none";
-    toggleMenu(ctx.settingsMenu, e.detail === 0);
-  });
-  ctx.settingsMenu.addEventListener("click", (e) => {
-    e.stopPropagation();
-    const target = e.target.closest("[data-open-menu]");
-    if (!target) return;
-    const menu = document.getElementById(target.dataset.openMenu);
-    toggleMenu(menu, true);
-    if (menu === ccMenu) markCcBannerMenuUsed(wrap);
   });
 
   ctx.qualBtn.addEventListener("click", (e) => {
@@ -684,17 +639,25 @@ export async function mountPlayer(meta, base) {
     closeAllMenus();
   });
 
+  document.addEventListener(
+    "touchend",
+    (e) => {
+      if (!isAnyMenuOpen()) return;
+      if (shouldIgnoreMenuDismissClick(e)) return;
+      if (!e.target.closest("#player-wrap")) return;
+      closeAllMenus();
+      showUI();
+    },
+    { passive: true },
+  );
+
   qualMenu.addEventListener("click", (e) => e.stopPropagation());
-  qualMenu.addEventListener("click", (e) => {
-    if (e.target.closest(".menu-item[data-id]")) closeAllMenus(true);
-  });
   speedMenu.addEventListener("click", (e) => e.stopPropagation());
   menuBackdrop?.addEventListener("click", (e) => {
     e.stopPropagation();
     closeAllMenus(true);
     showUI();
   });
-  window.addEventListener("aida:playback-error", () => closeAllMenus());
 
   ctx.ccBtn.addEventListener("click", (e) => {
     e.stopPropagation();
@@ -752,7 +715,6 @@ export async function mountPlayer(meta, base) {
     fsBtn.title = isFs ? "Exit fullscreen (f)" : "Fullscreen (f)";
     wrap.classList.toggle("fullscreen", isFs);
     updateMenuBounds();
-    showUI();
   });
 
   wrap.addEventListener("keydown", (e) => {
@@ -762,10 +724,9 @@ export async function mountPlayer(meta, base) {
       closeAllMenus(true);
       return;
     }
-    if (e.target.closest("input, textarea, select, [contenteditable], [role='slider'], .menu-popup")) return;
-    if ((e.key === " " || e.key === "Enter") && e.target.closest("button, a")) return;
+    if (e.target.closest("input, textarea, select, button, a, [contenteditable], [role='slider']")) return;
     showUI();
-    switch (e.key.length === 1 ? e.key.toLowerCase() : e.key) {
+    switch (e.key) {
       case " ":
       case "k":
         e.preventDefault();

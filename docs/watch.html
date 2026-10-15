@@ -15,12 +15,12 @@
 
     <script src="https://cdn.jsdelivr.net/npm/shaka-player@5.0.7/dist/shaka-player.compiled.min.js"></script>
 
-    <link rel="stylesheet" href="css/site.css?v=player-20261016-7b6ee24" />
-    <link rel="stylesheet" href="css/player.css?v=player-20261016-7b6ee24" />
-    <link rel="stylesheet" href="css/player-mobile.css?v=player-20261016-7b6ee24" />
-    <link rel="stylesheet" href="css/watch.css?v=player-20261016-7b6ee24" />
-    <script defer src="js/site-env.js?v=player-20261016-7b6ee24"></script>
-    <script type="module" src="js/watch.js?v=player-20261016-7b6ee24"></script>
+    <link rel="stylesheet" href="css/site.css" />
+    <link rel="stylesheet" href="css/player.css" />
+    <link rel="stylesheet" href="css/player-mobile.css" />
+    <link rel="stylesheet" href="css/watch.css" />
+    <script defer src="js/site-env.js"></script>
+    <script type="module" src="js/watch.js"></script>
   </head>
   <body>
     <a class="skip-link" href="#main-content">Skip to video</a>
@@ -86,7 +86,7 @@
       <div id="seek-ripple-right" class="seek-ripple" aria-hidden="true"></div>
 
       <!-- Keyboard toast -->
-      <div id="kb-toast" role="status" aria-live="polite"></div>
+      <div id="kb-toast"></div>
 
       <!-- Controls -->
       <div id="controls">
@@ -205,7 +205,7 @@
               </svg>
             </button>
             <div class="menu-popup" id="speed-menu" role="group" aria-label="Playback speed" hidden inert>
-              <div class="menu-heading"><span>Playback speed</span><button class="menu-close" type="button" data-close-menu aria-label="Close playback speed">×</button></div>
+              <div class="menu-header">Speed</div>
               <button class="menu-item" data-speed="0.25">0.25×</button>
               <button class="menu-item" data-speed="0.5">0.5×</button>
               <button class="menu-item" data-speed="0.75">0.75×</button>
@@ -222,7 +222,7 @@
               Color
             </button>
             <div class="menu-popup" id="cc-menu" role="group" aria-label="Color correction" hidden inert>
-              <div class="menu-heading"><span>Color correction</span><button class="menu-close" type="button" data-close-menu aria-label="Close color correction">×</button></div>
+              <div class="menu-header">Color correction</div>
               <div class="cc-toggle-row menu-toggle-row">
                 <button type="button" class="menu-toggle" id="cc-off" data-cc-enable="0">
                   Off
@@ -292,21 +292,6 @@
             </button>
             <div class="menu-popup" id="quality-menu" role="group" aria-label="Video quality" hidden inert>
               <div class="menu-header">Quality</div>
-            </div>
-          </div>
-
-          <div class="menu-wrap" id="settings-wrap">
-            <button class="ctrl-btn" id="settings-btn" type="button" title="Settings" aria-label="Player settings" aria-controls="settings-menu" aria-expanded="false">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                <path d="m9 3-1 3-3 1-2 5 2 5 3 1 1 3h6l1-3 3-1 2-5-2-5-3-1-1-3z"/><circle cx="12" cy="12" r="3"/>
-              </svg>
-            </button>
-            <div class="menu-popup" id="settings-menu" role="group" aria-label="Player settings" hidden inert>
-              <div class="menu-heading"><span>Settings</span><button class="menu-close" type="button" data-close-menu aria-label="Close settings">×</button></div>
-              <button type="button" class="menu-item settings-link" data-open-menu="quality-menu"><span>Video quality</span><span class="settings-value" id="settings-quality-value">Auto</span><span aria-hidden="true">›</span></button>
-              <button type="button" class="menu-item settings-link" data-open-menu="speed-menu"><span>Playback speed</span><span class="settings-value" id="settings-speed-value">Normal</span><span aria-hidden="true">›</span></button>
-              <button type="button" class="menu-item settings-link" id="settings-color" data-open-menu="cc-menu" hidden><span>Color correction</span><span class="settings-value"></span><span aria-hidden="true">›</span></button>
-              <p class="settings-hint">Double-tap either side of the video to seek 5 seconds.</p>
             </div>
           </div>
 

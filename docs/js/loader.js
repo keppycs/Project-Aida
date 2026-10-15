@@ -1,4 +1,4 @@
-import { videoVisibility } from "./catalog.js?v=player-20261016-7b6ee24";
+import { videoVisibility } from "./catalog.js";
 
 export class VideoLoadError extends Error {
   constructor(kind, message) {

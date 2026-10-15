@@ -3,24 +3,24 @@
  * Kept as small pure functions so shell.js stays a plain orchestrator instead of
  * branching on profile.layout inline throughout its event handlers.
  */
-import { isMobileLayout } from "./capabilities.js?v=player-20261016-7b6ee24";
+import { isMobileLayout } from "./capabilities.js";
 
 const DESKTOP_AUTO_HIDE_MS = 3000;
-const MOBILE_AUTO_HIDE_MS = 3000;
+const MOBILE_AUTO_HIDE_MS = 2000;
 
-/** Keep controls visible for a full inactivity window after interaction. */
+/** Desktop keeps chrome up longer since mouse movement re-triggers it constantly. */
 export function getAutoHideDelayMs(profile) {
   return isMobileLayout(profile) ? MOBILE_AUTO_HIDE_MS : DESKTOP_AUTO_HIDE_MS;
 }
 
 /**
  * Desktop: big-play is a brief play/pause flash on state change (see shell.js).
- * Mobile: paused/ended video always exposes Play; playing video exposes Pause
- * with the chrome overlay (the bar's duplicate button is hidden).
+ * Mobile: big-play only appears with the chrome overlay; it doubles as the pause
+ * button since the bar's own play/pause button is hidden (see player-mobile.css).
  */
 export function getBigPlayState(profile, video, uiVisible) {
   if (isMobileLayout(profile)) {
-    return { show: uiVisible || video.paused || video.ended, showPause: !video.paused && !video.ended };
+    return { show: uiVisible, showPause: uiVisible && !video.paused };
   }
   return { show: false, showPause: false };
 }

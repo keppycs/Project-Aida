@@ -1,4 +1,4 @@
-import "./warn-shim.js?v=player-20261016-7b6ee24";
+import "./warn-shim.js";
 
 const AV1_CODEC = 'video/mp4; codecs="av01.0.08H.10.0.110.09.16.09.0"';
 const HEVC_CODEC = 'video/mp4; codecs="hvc1.1.6.H150.B0"';
@@ -43,7 +43,6 @@ let currentCodec = null;
 let currentProtocol = null;
 let selectedQuality = -1;
 let selectedHeight = null;
-let sourceLoadPending = false;
 
 const PLAYER_PREFS_KEY = "aida-player-prefs";
 const PREFS_CODECS = new Set(["AV1", "HEVC"]);
@@ -272,7 +271,7 @@ async function detectHDR() {
         width: 1920,
         height: 1080,
         bitrate: 10000000,
-        framerate: 120,
+        framerate: 60,
         transferFunction: "pq",
         colorGamut: "rec2020",
       },
@@ -340,78 +339,36 @@ async function selectSource(meta, base, preferCodec, preferProtocol) {
   return filtered[0];
 }
 
-function syncSourceSwitchButtons(ctx) {
-  ctx.qualMenu.setAttribute("aria-busy", String(sourceLoadPending));
-  ctx.qualMenu.querySelectorAll("[data-source-switch]").forEach((button) => {
-    button.disabled = sourceLoadPending || button.dataset.sourceUnavailable === "true";
-  });
-}
-
 async function loadSource(meta, base, preferCodec, preferProtocol, ctx) {
-  if (sourceLoadPending) return;
-  const focused = document.activeElement;
-  const sourceFocusLabel = ctx.qualMenu.contains(focused) && focused.matches("[data-source-switch]")
-    ? focused.getAttribute("aria-label") : null;
-  if (sourceFocusLabel) ctx.qualMenu.querySelector("[data-close-menu]")?.focus({ preventScroll: true });
-  sourceLoadPending = true;
-  syncSourceSwitchButtons(ctx);
+  const chosen = await selectSource(meta, base, preferCodec, preferProtocol);
+  if (!chosen) {
+    throw reportPlaybackError(
+      "This browser cannot play the available video formats. Try another browser or device.",
+      "unsupported",
+    );
+  }
+
+  currentMeta = meta;
+  currentBase = base;
+  currentCodec = chosen.codec;
+  currentProtocol = chosen.protocol;
+
+  const { codecBadge, protocolBadge } = ctx;
+  codecBadge.textContent = chosen.codec;
+  protocolBadge.textContent = chosen.protocol;
+  codecBadge.classList.add("show");
+  protocolBadge.classList.add("show");
+
+  const playbackRate = PLAYBACK_SPEEDS.has(ctx.video.playbackRate)
+    ? ctx.video.playbackRate : (loadPlayerPrefs()?.speed ?? 1);
   try {
-    const chosen = await selectSource(meta, base, preferCodec, preferProtocol);
-    if (!chosen) {
-      throw reportPlaybackError(
-        "This browser cannot play the available video formats. Try another browser or device.",
-        "unsupported",
-      );
-    }
-
-    const { video, codecBadge, protocolBadge } = ctx;
-    const previousPlayback = currentMeta ? {
-      time: Number.isFinite(video.currentTime) ? video.currentTime : null,
-      paused: video.paused,
-      volume: video.volume,
-      muted: video.muted,
-      speed: video.playbackRate,
-    } : null;
-    const playbackRate = PLAYBACK_SPEEDS.has(video.playbackRate)
-      ? video.playbackRate : (loadPlayerPrefs()?.speed ?? 1);
-
-    currentMeta = meta;
-    currentBase = base;
-    currentCodec = chosen.codec;
-    currentProtocol = chosen.protocol;
-    codecBadge.textContent = chosen.codec;
-    protocolBadge.textContent = chosen.protocol;
-    codecBadge.classList.add("show");
-    protocolBadge.classList.add("show");
-
-    try {
-      await player.load(chosen.src, previousPlayback?.time ?? null, chosen.mime);
-    } catch (e) {
-      console.error("Load failed", e);
-      ctx.spinner.classList.remove("show");
-      throw reportPlaybackError("The video could not be loaded. Check your connection and try again.");
-    }
-
-    video.playbackRate = previousPlayback?.speed ?? playbackRate;
-    if (previousPlayback) {
-      video.volume = previousPlayback.volume;
-      video.muted = previousPlayback.muted;
-      if (previousPlayback.paused) video.pause();
-      else {
-        void video.play().catch((error) => {
-          console.warn("Playback could not resume after changing video format. Press play to continue.", error);
-        });
-      }
-    }
+    await player.load(chosen.src, null, chosen.mime);
+    ctx.video.playbackRate = playbackRate;
     window.dispatchEvent(new CustomEvent("aida:playback-ready"));
-  } finally {
-    sourceLoadPending = false;
-    syncSourceSwitchButtons(ctx);
-    if (sourceFocusLabel && !ctx.qualMenu.hidden &&
-        (ctx.qualMenu.contains(document.activeElement) || document.activeElement === document.body)) {
-      [...ctx.qualMenu.querySelectorAll("[data-source-switch]:not(:disabled)")]
-        .find((button) => button.getAttribute("aria-label") === sourceFocusLabel)?.focus({ preventScroll: true });
-    }
+  } catch (e) {
+    console.error("Load failed", e);
+    ctx.spinner.classList.remove("show");
+    throw reportPlaybackError("The video could not be loaded. Check your connection and try again.");
   }
 }
 
@@ -425,9 +382,11 @@ export async function initPlayback(meta, base, ctx, profile) {
   await player.attach(ctx.video);
 
   const prefs = loadPlayerPrefs();
-  ctx.video.volume = prefs?.volume ?? 0.5;
+  ctx.video.volume = profile.hideVolumeChrome ? 1.0 : (prefs?.volume ?? 0.5);
   ctx.video.muted = prefs?.muted ?? false;
   ctx.video.playbackRate = prefs?.speed ?? 1;
+  if (profile.hideVolumeChrome) ctx.volCluster.style.display = "none";
+  else ctx.volCluster.style.display = "";
 
   player.configure({
     streaming: {
@@ -518,19 +477,6 @@ function buildQualityMenu(ctx) {
   };
   qualMenu.innerHTML = "";
 
-  const heading = document.createElement("div");
-  heading.className = "menu-heading";
-  const title = document.createElement("span");
-  title.textContent = "Video quality";
-  const closeButton = document.createElement("button");
-  closeButton.className = "menu-close";
-  closeButton.type = "button";
-  closeButton.setAttribute("aria-label", "Close video quality");
-  closeButton.dataset.closeMenu = "";
-  closeButton.textContent = "×";
-  heading.append(title, closeButton);
-  qualMenu.appendChild(heading);
-
   const codecHeader = document.createElement("div");
   codecHeader.className = "menu-header";
   codecHeader.textContent = "Codec";
@@ -548,12 +494,10 @@ function buildQualityMenu(ctx) {
     btn.type = "button";
     btn.className = "menu-toggle" + (currentCodec === value ? " active" : "");
     btn.textContent = label;
-    btn.dataset.sourceSwitch = "codec";
     btn.setAttribute("aria-label", `${label} codec`);
     btn.setAttribute("aria-pressed", String(currentCodec === value));
     if (!codecs.includes(value)) {
       btn.disabled = true;
-      btn.dataset.sourceUnavailable = "true";
       btn.classList.add("disabled");
     }
     btn.addEventListener("click", async () => {
@@ -577,7 +521,6 @@ function buildQualityMenu(ctx) {
     btn.type = "button";
     btn.className = "menu-toggle" + (currentProtocol === value ? " active" : "");
     btn.textContent = value;
-    btn.dataset.sourceSwitch = "protocol";
     btn.setAttribute("aria-label", `${value} streaming protocol`);
     btn.setAttribute("aria-pressed", String(currentProtocol === value));
     btn.addEventListener("click", async () => {
@@ -587,7 +530,6 @@ function buildQualityMenu(ctx) {
     protRow.appendChild(btn);
   });
   qualMenu.appendChild(protRow);
-  syncSourceSwitchButtons(ctx);
 
   const qualHeader = document.createElement("div");
   qualHeader.className = "menu-header";

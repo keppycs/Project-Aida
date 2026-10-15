@@ -84,8 +84,6 @@
 #player-wrap.is-mobile.menu-open #controls {
   z-index: 20;
   pointer-events: none;
-  transform: none;
-  transition: none;
 }
 
 #player-wrap.is-mobile.menu-open .menu-popup.open {
@@ -117,7 +115,8 @@
 }
 
 #player-wrap.is-mobile #ctrl-row {
-  overflow: visible;
+  overflow-x: auto;
+  overflow-y: hidden;
   flex-wrap: nowrap;
   -webkit-overflow-scrolling: touch;
   scrollbar-width: none;
@@ -129,21 +128,10 @@
   display: none;
 }
 
-/* Keep primary controls in one row; secondary controls live in Settings. */
+/* Center #big-play is the only play/pause control on mobile; bar duplicates hidden */
 #player-wrap.is-mobile #play-btn,
 #player-wrap.is-mobile #back-btn,
 #player-wrap.is-mobile #fwd-btn {
-  display: none;
-}
-#player-wrap.is-mobile #speed-btn,
-#player-wrap.is-mobile #quality-btn,
-#player-wrap.is-mobile #cc-btn {
-  display: none;
-}
-#player-wrap.is-mobile #settings-wrap {
-  display: block;
-}
-#player-wrap.is-mobile #vol-slider-wrap {
   display: none;
 }
 
@@ -181,24 +169,22 @@
 }
 
 /*
- * Leave the timeline and control row clear, even at 320px wide.
- * Only the visible icon receives taps; the rest of the video remains a gesture surface.
+ * Mobile big-play: above the fixed bottom sheet (z-index 20).
+ * Container is inset:0 for centering; pointer-events:none so only the SVG receives taps.
  */
 #player-wrap.is-mobile #big-play {
-  inset: 36px 0 82px;
-  height: auto;
   pointer-events: none;
-  z-index: 5;
+  z-index: 25;
 }
 
 #player-wrap.is-mobile #big-play svg {
-  width: clamp(48px, 14vw, 64px);
-  height: clamp(48px, 14vw, 64px);
+  width: 72px;
+  height: 72px;
   opacity: 0;
   transform: scale(0.82);
   transition:
-    opacity 0.18s var(--ease),
-    transform 0.18s var(--ease);
+    opacity 0.38s var(--ease),
+    transform 0.42s cubic-bezier(0.34, 1.15, 0.64, 1);
 }
 
 #player-wrap.is-mobile #big-play.show > svg {
@@ -206,9 +192,6 @@
   transform: scale(1);
   pointer-events: auto;
   cursor: pointer;
-}
-#player-wrap.is-mobile #spinner {
-  inset: 36px 0 82px;
 }
 
 #player-wrap.is-mobile .menu-popup.open {
@@ -220,35 +203,15 @@
   width: 100%;
   min-width: 0;
   max-height: min(72vh, 520px);
-  max-height: min(72dvh, 520px);
   overflow-y: auto;
   border-radius: 12px 12px 0 0;
   transform: none;
-  padding-left: env(safe-area-inset-left);
-  padding-right: env(safe-area-inset-right);
+  padding-left: max(12px, env(safe-area-inset-left));
+  padding-right: max(12px, env(safe-area-inset-right));
   padding-bottom: max(12px, env(safe-area-inset-bottom));
   z-index: 20;
   box-sizing: border-box;
   overscroll-behavior: contain;
-}
-body.player-sheet-open {
-  overflow: hidden;
-}
-#player-wrap.is-mobile .settings-link {
-  min-height: 56px;
-  font-family: var(--font);
-}
-#player-wrap.is-mobile #codec-badge,
-#player-wrap.is-mobile #protocol-badge {
-  display: none;
-}
-#player-wrap.is-mobile .player-notice {
-  bottom: auto;
-  top: max(8px, env(safe-area-inset-top));
-  width: calc(100% - 20px);
-  max-height: calc(100% - 96px);
-  overflow-y: auto;
-  font-size: 11px;
 }
 
 #player-wrap.is-mobile .menu-toggle {

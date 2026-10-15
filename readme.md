@@ -155,16 +155,6 @@ py -B -m unittest discover -s tests -p 'test_share_*.py'
 
 These checks use fixture metadata, fake HTTP responses and mocked FFmpeg. They do not contact Cloudflare/B2, generate real thumbnails, or verify a live chat app's cached card. Test the deployed URL separately after activation.
 
-**Player UI checks** (Node.js, Playwright and Chromium):
-
-Set `AIDA_BROWSER_EXECUTABLE` to the Chromium executable and `AIDA_TEST_ARTIFACTS` to an approved temporary directory. If Playwright is supplied by a separate runtime, set `AIDA_PLAYWRIGHT_MODULE` to that package's path; otherwise the suite resolves the installed `playwright` package normally.
-
-```powershell
-node --test tests/player-ui.test.mjs
-```
-
-The suite starts its own local server and tests the real watch-page HTML, CSS and player controls with mouse, keyboard and emulated touch input. It covers small phones, landscape, compact desktop windows, fullscreen, settings, scrubbing, muted playback and format switching. A deterministic 120 fps media fixture replaces Shaka and external requests, so these are interaction checks; real codec decoding, display refresh and native iPhone fullscreen still need browser/device testing. Failures save screenshots beneath the configured artifact directory.
-
 ---
 
 ## ⚙️ Configuration
