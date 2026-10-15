@@ -102,8 +102,8 @@ for (const path of ["/watch", "/watch.html"]) {
       assert.doesNotMatch(html, /<script>alert\(/);
       assert.doesNotMatch(html, /<img src=x>/);
       assert.equal(html.match(/<title\b/g).length, 1);
-      assert.match(html, /src="js\/watch.js"/);
-      assert.match(html, /href="css\/player.css"/);
+      assert.match(html, /src="js\/watch\.js\?v=player-20261016-7b6ee24"/);
+      assert.match(html, /href="css\/player\.css\?v=player-20261016-7b6ee24"/);
       assertSafeHeaders(response);
       assert.equal(response.headers.get("x-frame-options"), "DENY");
       assert.match(response.headers.get("content-security-policy"), /frame-ancestors 'none'/);

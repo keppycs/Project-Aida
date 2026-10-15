@@ -1,11 +1,11 @@
-import { getPlayerProfile, watchProfile, isMobileLayout } from "./capabilities.js";
+import { getPlayerProfile, watchProfile, isMobileLayout } from "./capabilities.js?v=player-20261016-7b6ee24";
 import {
   initPlayback, applyCcSliderChange, setCcEnabled, markCcBannerMenuUsed,
   persistPlaybackPrefs,
-} from "./engine.js";
-import { getAutoHideDelayMs, getBigPlayState, shouldShowMenuBackdrop } from "./chrome.js";
-import { bindDesktopProgressInput, bindDesktopVideoInput } from "./desktop-input.js";
-import { bindMobileProgressInput, bindMobileVideoInput } from "./mobile-input.js";
+} from "./engine.js?v=player-20261016-7b6ee24";
+import { getAutoHideDelayMs, getBigPlayState, shouldShowMenuBackdrop } from "./chrome.js?v=player-20261016-7b6ee24";
+import { bindDesktopProgressInput, bindDesktopVideoInput } from "./desktop-input.js?v=player-20261016-7b6ee24";
+import { bindMobileProgressInput, bindMobileVideoInput } from "./mobile-input.js?v=player-20261016-7b6ee24";
 
 function collectContext() {
   const wrap = document.getElementById("player-wrap");

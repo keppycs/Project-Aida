@@ -7,7 +7,7 @@ import {
   renderVideoCard,
   detectDisplayHdr,
   attachThumbnailFallbacks,
-} from "./catalog.js";
+} from "./catalog.js?v=player-20261016-7b6ee24";
 
 const searchInput = document.getElementById("search-input");
 const searchClear = document.getElementById("search-clear");

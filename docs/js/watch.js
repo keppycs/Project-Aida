@@ -1,9 +1,9 @@
 import {
   fetchCatalog, mediaBase, watchUrl, formatDate, formatDuration,
   renderVideoCard, detectDisplayHdr, attachThumbnailFallbacks, videoVisibility,
-} from "./catalog.js";
-import { loadMetadata, VideoLoadError } from "./loader.js";
-import { mountPlayer } from "./player/shell.js";
+} from "./catalog.js?v=player-20261016-7b6ee24";
+import { loadMetadata, VideoLoadError } from "./loader.js?v=player-20261016-7b6ee24";
+import { mountPlayer } from "./player/shell.js?v=player-20261016-7b6ee24";
 
 const id = new URLSearchParams(location.search).get("v") || "0";
 const local = typeof window.shouldUseLocalCmaf === "function" && window.shouldUseLocalCmaf();
