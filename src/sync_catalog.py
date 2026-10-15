@@ -7,16 +7,18 @@ push changed metadata.json files and the public index to B2.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 import argparse
 import json
 import logging
 import sys
+from uuid import uuid4
 
-from config import LOCAL_DIR, INDEX_PATH, get_b2_credentials, normalize_visibility
+from config import ROOT, LOCAL_DIR, INDEX_PATH, get_b2_credentials, normalize_visibility
 from upload import make_b2_client, replace_file, upload_index
 
-CATALOG_FIELDS = ("id", "title", "visibility", "createdAt")
+CATALOG_FIELDS = ("id", "title", "visibility", "createdAt", "description")
 
 
 @dataclass
@@ -59,16 +61,53 @@ def load_index(path: Path) -> list[dict]:
 
 def catalogue_patch(entry: dict) -> dict:
     video_id = entry["id"]
-    return {
+    patch = {
         "id": video_id,
         "title": entry["title"],
         "visibility": normalize_visibility(entry),
         "createdAt": entry["createdAt"],
     }
+    if "description" in entry:
+        patch["description"] = entry["description"]
+    return patch
 
 
 def format_change(field: str, old, new) -> str:
     return f"{field}: {old!r} -> {new!r}"
+
+
+def write_metadata_preserving_previous(path: Path, metadata: dict) -> None:
+    """Keep non-Git metadata recoverable when applying catalogue changes."""
+    relative = path.resolve().relative_to(ROOT.resolve())
+    trash = ROOT / ".agent-trash"
+    if not trash.resolve().is_relative_to(ROOT.resolve()):
+        raise ValueError("Metadata backups must stay inside the project")
+    stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d_%H%M%S_%f")
+    operation = trash / f"{stamp}-sync-share-metadata-{uuid4().hex[:8]}"
+    backup = operation / relative
+    temporary = path.with_name(f".metadata-sync-{uuid4().hex}.tmp")
+    moved = False
+    try:
+        temporary.write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
+        backup.parent.mkdir(parents=True, exist_ok=False)
+        (operation / "manifest.txt").write_text(
+            f"Original path: {relative.as_posix()}\n"
+            "Reason: synchronize catalogue fields, including share descriptions.\n"
+            "Task: video link previews. Timestamp is UTC.\n"
+            "Restoration: move the backup to its original path, preserving the replacement first. "
+            "Stop a running encode or metadata sync before restoring.\n",
+            encoding="utf-8",
+        )
+        path.rename(backup)
+        moved = True
+        temporary.rename(path)
+    except Exception:
+        if moved and not path.exists():
+            backup.rename(path)
+        raise
+    finally:
+        # Unique, reproducible serialization of metadata supplied to this call.
+        temporary.unlink(missing_ok=True)
 
 
 def sync_metadata(
@@ -98,6 +137,8 @@ def sync_metadata(
     changes: list[str] = []
 
     for field in CATALOG_FIELDS:
+        if field not in patch:
+            continue
         new_val = patch[field]
         old_val = meta.get(field)
         if old_val != new_val:
@@ -117,9 +158,10 @@ def sync_metadata(
 
     if apply:
         for field in CATALOG_FIELDS:
-            meta[field] = patch[field]
+            if field in patch:
+                meta[field] = patch[field]
         meta.pop("unlisted", None)
-        meta_path.write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8")
+        write_metadata_preserving_previous(meta_path, meta)
 
     return meta_path
 

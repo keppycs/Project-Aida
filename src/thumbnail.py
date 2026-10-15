@@ -3,10 +3,104 @@ import logging
 import math
 import subprocess
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from logging import Logger
+from uuid import uuid4
 
-from transcode import probe_video, parse_framerate
+
+ROOT = Path(__file__).resolve().parent.parent
+
+
+def generate_share_thumbnail(
+    out_dir: Path,
+    log: Logger,
+    *,
+    replace: bool = False,
+) -> Path | None:
+    """Create a crawler-compatible SDR JPEG from an existing SDR still.
+
+    This only converts a still image; no video rendition is changed. Existing
+    JPEGs are kept unless replace=True. Replacements are preserved in the
+    project's .agent-trash directory after the new image has been generated.
+    """
+    out_dir = out_dir.resolve()
+    try:
+        out_dir.relative_to(ROOT)
+    except ValueError:
+        raise ValueError("Share thumbnails must be generated inside the project.") from None
+
+    output = out_dir / "thumbnail_share.jpg"
+    if output.is_symlink() or (output.exists() and not output.is_file()):
+        raise ValueError("Refusing to replace a non-file share thumbnail.")
+    if output.exists() and not replace:
+        log.info("[THUMBNAIL]    Keeping existing thumbnail_share.jpg")
+        return output
+
+    # Full-resolution SDR preserves the source aspect ratio. The 720p image is
+    # a useful fallback when backfilling a catalog with only small stills kept.
+    source = next((
+        path for path in (
+            out_dir / "thumbnail_sdr.webp",
+            out_dir / "thumbnail_sdr_720p.webp",
+        ) if not path.is_symlink() and path.is_file()
+    ), None)
+    if source is None:
+        log.warning("[THUMBNAIL]    No SDR WebP available for thumbnail_share.jpg")
+        return None
+    if not source.resolve().is_relative_to(ROOT):
+        raise ValueError("Share thumbnail source must be inside the project.")
+
+    # Write a new file first so an FFmpeg failure cannot destroy the old JPEG.
+    temporary = out_dir / f".thumbnail_share-{uuid4().hex}.jpg"
+    cmd = [
+        "ffmpeg", "-nostdin", "-n", "-i", str(source),
+        "-frames:v", "1", "-an",
+        "-vf", "scale=1280:720:force_original_aspect_ratio=decrease:force_divisible_by=2:flags=lanczos,format=yuvj420p",
+        "-c:v", "mjpeg", "-q:v", "2", "-update", "1",
+        str(temporary),
+    ]
+    log.info("[THUMBNAIL]    Generating thumbnail_share.jpg ...")
+    archived: Path | None = None
+    try:
+        subprocess.run(cmd, check=True, capture_output=True)
+        if not temporary.is_file() or temporary.stat().st_size == 0:
+            raise RuntimeError("FFmpeg did not produce a non-empty share thumbnail")
+
+        if output.exists():
+            if not replace:
+                return output
+            if not output.is_file() or output.is_symlink():
+                raise ValueError("Refusing to replace a non-file share thumbnail.")
+            trash = ROOT / ".agent-trash"
+            if not trash.resolve().is_relative_to(ROOT):
+                raise ValueError("Share thumbnail backups must stay inside the project.")
+            timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d_%H%M%S_%f")
+            operation = trash / f"{timestamp}-replace-share-thumbnail-{uuid4().hex[:8]}"
+            archived = operation / output.relative_to(ROOT)
+            archived.parent.mkdir(parents=True, exist_ok=False)
+            (operation / "manifest.txt").write_text(
+                f"Original path: {output.relative_to(ROOT).as_posix()}\n"
+                "Reason: replace social share thumbnail after successful JPEG generation.\n"
+                "Task: add video link previews. Timestamp is UTC.\n"
+                "Restoration: move the archived file to its original path; preserve or move "
+                "the replacement first. No process needs stopping.\n",
+                encoding="utf-8",
+            )
+            output.rename(archived)
+            log.info("[THUMBNAIL]    Previous share thumbnail saved to %s", archived)
+        temporary.rename(output)
+        log.info("[THUMBNAIL]    thumbnail_share.jpg done")
+        return output
+    except (subprocess.CalledProcessError, OSError, RuntimeError) as exc:
+        if archived is not None and archived.is_file() and not output.exists():
+            archived.rename(output)
+        detail = exc.stderr.decode(errors="replace") if isinstance(exc, subprocess.CalledProcessError) and exc.stderr else str(exc)
+        log.warning("[THUMBNAIL]    Failed to generate thumbnail_share.jpg: %s", detail)
+        return None
+    finally:
+        # This unique temporary image is reproducible from the SDR source above.
+        temporary.unlink(missing_ok=True)
 
 
 # ffprobe → zscale name mappings (pass-through for matching names, fallback to raw value)
@@ -53,7 +147,7 @@ def generate_thumbnails(
     log: Logger,
     seek_override: float | None = None,
 ) -> None:
-    """Generate four thumbnails for a video: full-res and 720p, HDR (AVIF) and SDR (WebP).
+    """Generate HDR/SDR stills plus an SDR JPEG for social link previews.
 
     All colorspace metadata is derived from probe data rather than hardcoded,
     so the output accurately reflects the source. Thumbnails are written to out_dir.
@@ -147,6 +241,8 @@ def generate_thumbnails(
                 f"CMD: {' '.join(cmd)}"
             )
 
+    generate_share_thumbnail(out_dir, log, replace=True)
+
 
 def _parse_seek(value: str) -> float:
     """Parse a seek value — accepts seconds (e.g. '368.742') or HH:MM:SS.ms (e.g. '00:06:08.742')."""
@@ -161,6 +257,7 @@ def _parse_seek(value: str) -> float:
 
 if __name__ == "__main__":
     from config import HDR_TRANSFERS
+    from transcode import probe_video
 
     parser = argparse.ArgumentParser(description="Generate thumbnails for a video at a specific timestamp.")
     parser.add_argument("source", help="Path to the source video file.")

@@ -19,6 +19,12 @@ MIME_MAP = {
     ".mp4":  "video/mp4",
     ".fmp4": "video/mp4",
     ".json": "application/json",
+    ".jpg":  "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".png":  "image/png",
+    ".webp": "image/webp",
+    ".avif": "image/avif",
+    ".gif":  "image/gif",
 }
 
 

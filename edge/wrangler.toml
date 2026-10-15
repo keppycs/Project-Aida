@@ -1,0 +1,18 @@
+name = "aida-share-previews"
+main = "share-worker.mjs"
+compatibility_date = "2026-10-15"
+workers_dev = false
+
+# Route over the existing GitHub Pages origin. DNS records must be proxied.
+# The handler passes through paths that merely start with these prefixes.
+routes = [
+  { pattern = "keppy.dev/watch*", zone_name = "keppy.dev" },
+  { pattern = "keppy.dev/embed*", zone_name = "keppy.dev" },
+  { pattern = "keppy.dev/oembed*", zone_name = "keppy.dev" },
+  { pattern = "www.keppy.dev/watch*", zone_name = "keppy.dev" },
+  { pattern = "www.keppy.dev/embed*", zone_name = "keppy.dev" },
+  { pattern = "www.keppy.dev/oembed*", zone_name = "keppy.dev" },
+]
+
+[vars]
+SITE_ORIGIN = "https://keppy.dev"

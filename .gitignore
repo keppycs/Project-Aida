@@ -37,3 +37,6 @@ docs/local/
 
 # Saved reference pages (not project code)
 docs/youtube reference/
+
+# Reversible local file replacements; may contain private user data
+.agent-trash/

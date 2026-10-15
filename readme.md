@@ -99,6 +99,60 @@ On **any other host** (localhost, LAN, preview), add **`&local=1`** to the watch
 
 Hosted through GitHub Pages.
 
+### Shared-link thumbnails and embeds
+
+`edge/share-worker.mjs` adds video-specific Open Graph and Twitter card metadata to the **initial HTML** of `/watch?v=VIDEO_ID` and `/watch.html?v=VIDEO_ID`. Chat crawlers can read the title, description and thumbnail without running the frontend's JavaScript. Existing watch links and the Copy link button keep working.
+
+GitHub Pages cannot generate different HTML for different `?v=` values. This feature therefore needs a **Cloudflare Worker Route in front of the existing site**, rather than just adding JavaScript meta tags. The website and video storage can stay where they are. Only the watch, embed and oEmbed paths use the Worker; the CDN is unaffected. See [Cloudflare's route documentation](https://developers.cloudflare.com/workers/configuration/routing/routes/) and the [Open Graph specification](https://ogp.me/).
+
+The Worker reads each video's `metadata.json` from the existing CDN. Public and unlisted videos get previews; private, missing and invalid metadata never supply a video's title, description or image. It revalidates metadata and sends `Cache-Control: no-store`. Receiving apps can still retain their own previously cached cards. These preview checks do not add authentication to the public storage bucket.
+
+New thumbnail runs also create **`thumbnail_share.jpg`**, an SDR still bounded by 1280×720 with its aspect ratio preserved. Uploads now set the correct image MIME types. The Worker prefers this JPEG, then tries existing SDR WebP thumbnails for older uploads. If all thumbnails are missing, the card still has text. Existing AVIF/WebP website thumbnails keep their current behavior.
+
+Animated GIF/AVIF previews depend on the receiving app, so the social card uses a static JPEG. Browser support for animated image formats does not guarantee that a chat app animates link previews. The embed uses the **existing player and video streams**; this feature creates no video rendition or reduced-frame-rate fallback.
+
+**Activate on Cloudflare:**
+
+1. Keep the static site on GitHub Pages and deploy the Worker below. It supports both the original player-only watch page and the newer library layout. Run the updated local pipeline for future uploads. No push, upload or deployment happens when running the tests below.
+2. In Cloudflare DNS, verify that the website's `keppy.dev` and `www` records are **Proxied** (orange cloud). This is separate from the `cdn.keppy.dev` record. Keep the existing GitHub Pages origin.
+3. Create a JavaScript Worker named `aida-share-previews` and paste `edge/share-worker.mjs` into its editor. It has no npm dependencies or secrets. Deploy it, disable its public `workers.dev` URL, and add these Routes under **Settings → Domains & Routes** for the `keppy.dev` zone:
+   - `keppy.dev/watch*`, `keppy.dev/embed*`, `keppy.dev/oembed*`
+   - `www.keppy.dev/watch*`, `www.keppy.dev/embed*`, `www.keppy.dev/oembed*`
+4. Alternatively, if you already use Wrangler, the same configuration is in `edge/wrangler.toml`: run `npx wrangler deploy --config edge/wrangler.toml` from the repository root. Do not create a Worker Custom Domain over the site; this implementation uses Routes over its existing origin.
+5. Open a watch URL and inspect **View source**: `og:title` and `og:image` should already contain that video's values. Open the image URL directly to verify it is public. Then share the watch URL in a fresh message. A previously shared card may remain cached by the receiving app.
+
+**Existing videos:**
+
+```powershell
+# Create missing JPEGs from already-generated local SDR WebP stills; no video encode or upload.
+py src/share_thumbnail.py docs/local/VIDEO_ID
+# Or process the local video directories:
+py src/share_thumbnail.py --all
+```
+
+Upload the newly generated `thumbnail_share.jpg` to the corresponding video directory in B2 with `Content-Type: image/jpeg`; video segments do not need uploading again. Existing JPEGs are skipped. To regenerate one, add `--replace`: the previous JPEG is moved into `.agent-trash/` with a restoration manifest after conversion succeeds.
+
+New encodes put descriptions in per-video metadata. For older videos, `py src/sync_catalog.py` previews description and catalogue changes. After reviewing the dry run, `py src/sync_catalog.py --apply --upload` applies and uploads those changes together, keeping previous local metadata in `.agent-trash/`. For local changes only, use `--apply`. The uploader sends only metadata changed during that run, so a separate upload run after a local-only apply will not republish those files. Videos whose metadata has no description get a short default description until synced.
+
+**Player embeds:** once the Worker is active, `/embed?v=VIDEO_ID` presents just the existing player without autoplay. For example:
+
+```html
+<iframe src="https://keppy.dev/embed?v=VIDEO_ID"
+  title="Aida video" width="1280" height="720" style="border:0;max-width:100%"
+  allow="fullscreen; picture-in-picture; encrypted-media" allowfullscreen></iframe>
+```
+
+Watch pages advertise a JSON [oEmbed](https://oembed.com/) endpoint at `/oembed?url=ENCODED_WATCH_URL&format=json`, including optional `maxwidth` / `maxheight` constraints. It returns iframe markup for public/unlisted videos and rejects other hosts or private videos. oEmbed consumers discover the player from the watch page; whether a messaging platform actually plays it inline is that platform's decision. There is no direct MP4 or alternative frame-rate encode added for social players.
+
+**Local checks** (Node.js and Python standard library only):
+
+```powershell
+node --test tests/share-worker.test.mjs
+py -B -m unittest discover -s tests -p 'test_share_*.py'
+```
+
+These checks use fixture metadata, fake HTTP responses and mocked FFmpeg. They do not contact Cloudflare/B2, generate real thumbnails, or verify a live chat app's cached card. Test the deployed URL separately after activation.
+
 ---
 
 ## ⚙️ Configuration

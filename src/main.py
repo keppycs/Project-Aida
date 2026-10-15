@@ -271,6 +271,7 @@ def run_pipeline(
     meta = {
         "id":             video_id,
         "title":          title,
+        "description":    description,
         "createdAt":      created_at,
         "duration":       round(duration, 3),
         "frameRate":      round(fps, 3),
