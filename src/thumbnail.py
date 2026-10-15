@@ -256,12 +256,12 @@ def _parse_seek(value: str) -> float:
 
 
 if __name__ == "__main__":
-    from config import HDR_TRANSFERS
+    from config import HDR_TRANSFERS, LOCAL_DIR
     from transcode import probe_video
 
     parser = argparse.ArgumentParser(description="Generate thumbnails for a video at a specific timestamp.")
     parser.add_argument("source", help="Path to the source video file.")
-    parser.add_argument("--id", dest="video_id", required=True, help="Video ID (used as output folder name under docs/local/).")
+    parser.add_argument("--id", dest="video_id", required=True, help="Video ID (used as output folder name under web/local/).")
     parser.add_argument("--seek", default=None, help="Timestamp to capture (seconds or HH:MM:SS.ms). Default: 10%% of duration.")
     args = parser.parse_args()
 
@@ -292,8 +292,7 @@ if __name__ == "__main__":
         print(f"Warning: seek {seek:.3f}s exceeds duration {duration:.3f}s, clamping.", file=sys.stderr)
         seek = max(0, duration - 1.0)
 
-    root = Path(__file__).parent.parent
-    out_dir = root / "docs" / "local" / args.video_id
+    out_dir = LOCAL_DIR / args.video_id
     out_dir.mkdir(parents=True, exist_ok=True)
 
     log.info(f"Source     : {video_file}")

@@ -1,7 +1,7 @@
 /**
  * Live vs dev: favicon + when &local=1 may point CMAF at ./local/{id}.
  * Off-live hosts also load Eruda (mobile console / network / elements) for debugging.
- * Kept in one file so watch/index stay simple; tracked in git (unlike docs/local/ chunks).
+ * Kept in one file so watch/index stay simple; tracked in git (unlike web/local/ chunks).
  *
  * Add hostnames here if you deploy the static site to another production domain.
  */

@@ -1,4 +1,4 @@
-"""Sync catalogue fields from docs/local/index.json into per-video metadata.json.
+"""Sync catalogue fields from web/local/index.json into per-video metadata.json.
 
 By default runs as a dry-run. Use --apply to write local files, --upload to
 push changed metadata.json files and the public index to B2.

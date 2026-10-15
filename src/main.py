@@ -288,7 +288,7 @@ def run_pipeline(
     meta_local.write_text(json.dumps(meta, indent=2), encoding="utf-8")
     log.info(f"[METADATA]     Written {meta_local}")
 
-    # Update docs/local/index.json — full local catalogue regardless of upload
+    # Update web/local/index.json — full local catalogue regardless of upload
     date_str    = datetime.fromtimestamp(created_at, tz=ams).strftime("%d-%m-%Y %H:%M:%S %Z")
     tags_list   = [t.strip() for t in tags.split(",") if t.strip()]
     entry = {

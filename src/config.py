@@ -2,7 +2,7 @@ from pathlib import Path
 import os
 
 ROOT = Path(__file__).parent.parent
-LOCAL_DIR = ROOT / "docs" / "local"
+LOCAL_DIR = ROOT / "web" / "local"
 INDEX_PATH = LOCAL_DIR / "index.json"
 
 # ── B2 Config ──────────────────────────────────────────────────────────────────

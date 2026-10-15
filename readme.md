@@ -77,9 +77,19 @@ The Python backend manages the full encoding flow:
 
 ---
 
+## Project documentation
+
+Project documentation lives in `docs/`. The three design references were copied unchanged from Evoke and retain their original product-specific wording:
+
+- [Design language](docs/DESIGN_LANGUAGE.md)
+- [UI design](docs/UI_DESIGN.md)
+- [Behavior](docs/BEHAVIOR.md)
+
+Project Aida's 120 fps requirement remains defined in [AGENTS.md](AGENTS.md).
+
 ## 🌍 Web Frontend
 
-Located in `/docs`, the frontend is minimal and fast:
+Located in `/web`, the frontend is minimal and fast:
 
 - 🧭 **Home Page**
   - Hero section to showcase the latest video
@@ -91,13 +101,17 @@ Located in `/docs`, the frontend is minimal and fast:
 - 🎨 **Styling**
   - Vanilla CSS with a clean, modern look⁵
 
-**Local CMAF playback (not in git):** Encode output goes under `docs/local/{video_id}/` (ignored by `.gitignore`). Open **`watch.html`** over HTTP (e.g. Live Server). Links use explicit **`watch.html?v=…`** in markup/JS; if you use Cloudflare or another reverse proxy, you can rewrite to a clean URL such as `/watch` while the repo stays file-based.
+**Local CMAF playback (not in git):** Encode output goes under `web/local/{video_id}/` (ignored by `.gitignore`). Serve `web/` as the document root, for example with `py -B -m http.server 8000 --directory web`, and open **`watch.html`** over HTTP. Links use explicit **`watch.html?v=…`** in markup/JS; if you use Cloudflare or another reverse proxy, you can rewrite to a clean URL such as `/watch` while the repo stays file-based.
 
-On the **production** host (`keppy.dev` / `www.keppy.dev` in `docs/js/site-env.js`), playback always uses the **CDN**; `?local=` is ignored.
+On the **production** host (`keppy.dev` / `www.keppy.dev` in `web/js/site-env.js`), playback always uses the **CDN**; `?local=` is ignored.
 
 On **any other host** (localhost, LAN, preview), add **`&local=1`** to the watch URL (e.g. `watch.html?v=0&local=1`) to load **`./local/{id}`** CMAF instead of the CDN. A **LOCAL** badge appears when that folder is used. Favicons: **flushed** on the live site, **bug** off-live (`site-env.js`).
 
-Hosted through GitHub Pages.
+### GitHub Pages
+
+The static site is published from `web/` by [the Pages workflow](.github/workflows/pages.yml). The artifact contains the contents of `web/` at its root, preserving public URLs such as `/watch.html`, `/css/` and `/js/`. Local encodes in `web/local/` and saved pages in `web/youtube reference/` are excluded from the artifact. `docs/` is project documentation and is not part of the website artifact.
+
+**Before publishing this directory reorganization**, change the repository's **Settings → Pages → Build and deployment → Source** to **GitHub Actions**. Branch publishing only supports the repository root or `/docs`; leaving it pointed at `/docs` would publish the design documents instead of the website. Then push to `main` or run **Deploy website to Pages** manually. Keep the existing `keppy.dev` custom domain in Pages settings. See [GitHub's custom-workflow documentation](https://docs.github.com/en/pages/getting-started-with-github-pages/using-custom-workflows-with-github-pages).
 
 ### Shared-link thumbnails and embeds
 
@@ -113,7 +127,7 @@ Animated GIF/AVIF previews depend on the receiving app, so the social card uses 
 
 **Activate on Cloudflare:**
 
-1. Keep the static site on GitHub Pages and deploy the Worker below. It supports both the original player-only watch page and the newer library layout. Run the updated local pipeline for future uploads. No push, upload or deployment happens when running the tests below.
+1. Keep the static site on GitHub Pages using the `web/` workflow above and deploy the Worker below. It supports both the original player-only watch page and the newer library layout. Run the updated local pipeline for future uploads. No push, upload or deployment happens when running the tests below.
 2. In Cloudflare DNS, verify that the website's `keppy.dev` and `www` records are **Proxied** (orange cloud). This is separate from the `cdn.keppy.dev` record. Keep the existing GitHub Pages origin.
 3. Create a JavaScript Worker named `aida-share-previews` and paste `edge/share-worker.mjs` into its editor. It has no npm dependencies or secrets. Deploy it, disable its public `workers.dev` URL, and add these Routes under **Settings → Domains & Routes** for the `keppy.dev` zone:
    - `keppy.dev/watch*`, `keppy.dev/embed*`, `keppy.dev/oembed*`, `keppy.dev/preview-image*`
@@ -127,7 +141,7 @@ Deployment verified on **2026-10-15**: `aida-share-previews` is active on all ei
 
 ```powershell
 # Create missing JPEGs from already-generated local SDR WebP stills; no video encode or upload.
-py src/share_thumbnail.py docs/local/VIDEO_ID
+py src/share_thumbnail.py web/local/VIDEO_ID
 # Or process the local video directories:
 py src/share_thumbnail.py --all
 ```
@@ -183,7 +197,7 @@ These checks use fixture metadata, fake HTTP responses and mocked FFmpeg. They d
 
 From the repo root, run: `py src/main.py -i "path to video" -id "video id" -desc "description" -tags "i,like,soft,cookies"` → get fully streamable output, which looks like:
 
-- docs/local/{video_id}/
+- web/local/{video_id}/
   - 📂 AV1 and 📂 HEVC — each folder has the same layout:
     - Segments `chunk_<rep>_<n>.fmp4`, init segments `init_<rep>.mp4`
     - `manifest.mpd`, `master.m3u8`, `media_<rep>.m3u8` (one media playlist per ladder rung)
