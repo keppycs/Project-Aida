@@ -103,11 +103,11 @@ Hosted through GitHub Pages.
 
 `edge/share-worker.mjs` adds video-specific Open Graph and Twitter card metadata to the **initial HTML** of `/watch?v=VIDEO_ID` and `/watch.html?v=VIDEO_ID`. Chat crawlers can read the title, description and thumbnail without running the frontend's JavaScript. Existing watch links and the Copy link button keep working.
 
-GitHub Pages cannot generate different HTML for different `?v=` values. This feature therefore needs a **Cloudflare Worker Route in front of the existing site**, rather than just adding JavaScript meta tags. The website and video storage can stay where they are. Only the watch, embed and oEmbed paths use the Worker; the CDN is unaffected. See [Cloudflare's route documentation](https://developers.cloudflare.com/workers/configuration/routing/routes/) and the [Open Graph specification](https://ogp.me/).
+GitHub Pages cannot generate different HTML for different `?v=` values. This feature therefore needs a **Cloudflare Worker Route in front of the existing site**, rather than just adding JavaScript meta tags. The website and video storage can stay where they are. Only the watch, embed, oEmbed and preview-image paths use the Worker; the CDN is unaffected. See [Cloudflare's route documentation](https://developers.cloudflare.com/workers/configuration/routing/routes/) and the [Open Graph specification](https://ogp.me/).
 
 The Worker reads each video's `metadata.json` from the existing CDN. Public and unlisted videos get previews; private, missing and invalid metadata never supply a video's title, description or image. It revalidates metadata and sends `Cache-Control: no-store`. Receiving apps can still retain their own previously cached cards. These preview checks do not add authentication to the public storage bucket.
 
-New thumbnail runs also create **`thumbnail_share.jpg`**, an SDR still bounded by 1280×720 with its aspect ratio preserved. Uploads now set the correct image MIME types. The Worker prefers this JPEG, then tries existing SDR WebP thumbnails for older uploads. If all thumbnails are missing, the card still has text. Existing AVIF/WebP website thumbnails keep their current behavior.
+New thumbnail runs also create **`thumbnail_share.jpg`**, an SDR still bounded by 1280×720 with its aspect ratio preserved. Uploads now set the correct image MIME types. The Worker prefers this JPEG, then tries existing SDR WebP thumbnails for older uploads. It serves the chosen image through `/preview-image?v=VIDEO_ID` with the correct MIME type, including when an older B2 object was uploaded as `application/octet-stream`. This image route also checks visibility. If all thumbnails are missing, the card still has text. Existing AVIF/WebP website thumbnails keep their current behavior.
 
 Animated GIF/AVIF previews depend on the receiving app, so the social card uses a static JPEG. Browser support for animated image formats does not guarantee that a chat app animates link previews. The embed uses the **existing player and video streams**; this feature creates no video rendition or reduced-frame-rate fallback.
 
@@ -116,8 +116,8 @@ Animated GIF/AVIF previews depend on the receiving app, so the social card uses 
 1. Keep the static site on GitHub Pages and deploy the Worker below. It supports both the original player-only watch page and the newer library layout. Run the updated local pipeline for future uploads. No push, upload or deployment happens when running the tests below.
 2. In Cloudflare DNS, verify that the website's `keppy.dev` and `www` records are **Proxied** (orange cloud). This is separate from the `cdn.keppy.dev` record. Keep the existing GitHub Pages origin.
 3. Create a JavaScript Worker named `aida-share-previews` and paste `edge/share-worker.mjs` into its editor. It has no npm dependencies or secrets. Deploy it, disable its public `workers.dev` URL, and add these Routes under **Settings → Domains & Routes** for the `keppy.dev` zone:
-   - `keppy.dev/watch*`, `keppy.dev/embed*`, `keppy.dev/oembed*`
-   - `www.keppy.dev/watch*`, `www.keppy.dev/embed*`, `www.keppy.dev/oembed*`
+   - `keppy.dev/watch*`, `keppy.dev/embed*`, `keppy.dev/oembed*`, `keppy.dev/preview-image*`
+   - `www.keppy.dev/watch*`, `www.keppy.dev/embed*`, `www.keppy.dev/oembed*`, `www.keppy.dev/preview-image*`
 4. Alternatively, if you already use Wrangler, the same configuration is in `edge/wrangler.toml`: run `npx wrangler deploy --config edge/wrangler.toml` from the repository root. Do not create a Worker Custom Domain over the site; this implementation uses Routes over its existing origin.
 5. Open a watch URL and inspect **View source**: `og:title` and `og:image` should already contain that video's values. Open the image URL directly to verify it is public. Then share the watch URL in a fresh message. A previously shared card may remain cached by the receiving app.
 

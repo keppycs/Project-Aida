@@ -72,7 +72,7 @@ async function readVideo(id, fetcher) {
     // Revalidate visibility rather than caching a previously public title at the edge.
     return await timedFetch(fetcher, `${CDN}/${id}/metadata.json`, {
       headers: { "Accept": "application/json", "Cache-Control": "no-cache" },
-      cf: { cacheTtl: 0 }, redirect: "error",
+      cache: "no-store", cf: { cacheTtl: 0, cacheTtlByStatus: { "100-599": -1 } }, redirect: "error",
     }, async (response) => {
       if (response.status === 404) return { status: 404 };
       if (!response.ok) return { status: 503 };
@@ -105,7 +105,8 @@ async function findImage(id, fetcher) {
 
 function shareData(id, meta, image, origin) {
   return {
-    id, image, url: watchUrl(id, origin), player: embedUrl(id, origin),
+    id, image: image ? { url: `${origin}/preview-image?v=${encodeURIComponent(id)}`, type: image.type } : null,
+    url: watchUrl(id, origin), player: embedUrl(id, origin),
     title: text(meta.title, "Untitled video", 200),
     description: text(meta.description, DEFAULT_DESCRIPTION, 300),
   };
@@ -212,7 +213,8 @@ async function routeRequest(request, env, fetcher) {
   const url = new URL(request.url);
   const embed = url.pathname === "/embed";
   const oembed = url.pathname === "/oembed";
-  if (!WATCH_PATHS.has(url.pathname) && !embed && !oembed) return fetcher(request);
+  const imageRoute = url.pathname === "/preview-image";
+  if (!WATCH_PATHS.has(url.pathname) && !embed && !oembed && !imageRoute) return fetcher(request);
   if (!["GET", "HEAD"].includes(request.method)) return new Response("Method not allowed", { status: 405, headers: { Allow: "GET, HEAD" } });
   const origin = siteOrigin(env);
   const id = oembed ? oembedId(url.searchParams.get("url"), origin) : (url.searchParams.get("v") || "0");
@@ -222,8 +224,21 @@ async function routeRequest(request, env, fetcher) {
   if (oembed && !size) return errorResponse(400, true);
 
   const video = await readVideo(id, fetcher);
-  if (video.status !== 200 && (embed || oembed)) return errorResponse(video.status, oembed);
+  if (video.status !== 200 && (embed || oembed || imageRoute)) return errorResponse(video.status, oembed);
   const image = video.meta && !oembed ? await findImage(id, fetcher) : null;
+  if (imageRoute) {
+    if (!image) return errorResponse(404);
+    try {
+      const source = await timedFetch(fetcher, image.url, { method: request.method, redirect: "error" });
+      if (!source.ok) return errorResponse(source.status === 404 ? 404 : 503);
+      // Older B2 uploads used application/octet-stream. Correct it without
+      // changing any bucket objects, preserving private-video checks above.
+      return new Response(request.method === "HEAD" ? null : source.body, { headers: {
+        "Content-Type": image.type, "Content-Disposition": "inline",
+        "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff",
+      } });
+    } catch { return errorResponse(503); }
+  }
   const data = video.meta ? shareData(id, video.meta, image, origin) : null;
   if (oembed) {
     const body = {

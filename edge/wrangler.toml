@@ -9,9 +9,11 @@ routes = [
   { pattern = "keppy.dev/watch*", zone_name = "keppy.dev" },
   { pattern = "keppy.dev/embed*", zone_name = "keppy.dev" },
   { pattern = "keppy.dev/oembed*", zone_name = "keppy.dev" },
+  { pattern = "keppy.dev/preview-image*", zone_name = "keppy.dev" },
   { pattern = "www.keppy.dev/watch*", zone_name = "keppy.dev" },
   { pattern = "www.keppy.dev/embed*", zone_name = "keppy.dev" },
   { pattern = "www.keppy.dev/oembed*", zone_name = "keppy.dev" },
+  { pattern = "www.keppy.dev/preview-image*", zone_name = "keppy.dev" },
 ]
 
 [vars]

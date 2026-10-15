@@ -7,6 +7,8 @@ const template = await readFile(new URL("../docs/watch.html", import.meta.url), 
 const site = "https://keppy.dev";
 const cdn = "https://cdn.keppy.dev/file/ProjectAida";
 const id = "test-video_120";
+const previewImageUrl = `${site}/preview-image?v=${id}`;
+const imageBytes = new Uint8Array([0, 255, 2, 128, 13, 10, 0, 77]);
 const title = 'Title </title><script>alert("x")</script> & café';
 const description = 'Description " onload="alert(1) <img src=x> & more';
 const escapedTitle = "Title &lt;/title&gt;&lt;script&gt;alert(&quot;x&quot;)&lt;/script&gt; &amp; café";
@@ -14,7 +16,8 @@ const escapedDescription = "Description &quot; onload=&quot;alert(1) &lt;img src
 const metadata = { id, title, description, visibility: "public", frameRate: 120 };
 
 function fixture({ meta = metadata, raw, metadataStatus = 200, metadataThrows = false,
-  images = ["thumbnail_share.jpg"], originStatus = 200, originHtml = template } = {}) {
+  images = ["thumbnail_share.jpg"], imageGetStatus = 200, imageGetThrows = false,
+  originStatus = 200, originHtml = template } = {}) {
   const calls = [];
   const fetcher = async (input, init = {}) => {
     const url = input instanceof Request ? input.url : String(input);
@@ -25,8 +28,17 @@ function fixture({ meta = metadata, raw, metadataStatus = 200, metadataThrows = 
       return new Response(raw ?? JSON.stringify(meta), { status: metadataStatus });
     }
     if (url.startsWith(`${cdn}/${id}/thumbnail_`)) {
-      assert.equal(method, "HEAD");
-      return new Response(null, { status: images.includes(url.split("/").pop()) ? 200 : 404 });
+      assert.ok(method === "HEAD" || method === "GET");
+      if (method === "GET" && imageGetThrows) throw new Error("Image offline");
+      const status = images.includes(url.split("/").pop()) ? (method === "GET" ? imageGetStatus : 200) : 404;
+      return new Response(method === "HEAD" ? null : status === 200 ? imageBytes : "UPSTREAM_IMAGE_ERROR", {
+        status, headers: {
+          // Existing B2 thumbnails use this MIME type; the public image route
+          // must supply the selected image's actual type to preview crawlers.
+          "Content-Type": "application/octet-stream", "Content-Disposition": "attachment",
+          "Cache-Control": "public, max-age=3600",
+        },
+      });
     }
     if (url === `${site}/watch.html?v=${id}`) {
       return new Response(originHtml, { status: originStatus, headers: {
@@ -78,7 +90,9 @@ for (const path of ["/watch", "/watch.html"]) {
       assert.deepEqual(contents(html, "og:title"), [escapedTitle]);
       assert.deepEqual(contents(html, "og:description"), [escapedDescription]);
       assert.deepEqual(contents(html, "og:url"), [`${site}/watch?v=${id}`]);
-      assert.deepEqual(contents(html, "og:image"), [`${cdn}/${id}/thumbnail_share.jpg`]);
+      assert.deepEqual(contents(html, "og:image"), [previewImageUrl]);
+      assert.deepEqual(contents(html, "og:image:secure_url"), [previewImageUrl]);
+      assert.deepEqual(contents(html, "twitter:image"), [previewImageUrl]);
       assert.deepEqual(contents(html, "og:image:type"), ["image/jpeg"]);
       assert.deepEqual(contents(html, "twitter:card"), ["summary_large_image"]);
       assert.deepEqual(contents(html, "og:video"), [`${site}/embed?v=${id}`]);
@@ -94,6 +108,8 @@ for (const path of ["/watch", "/watch.html"]) {
       assert.match(response.headers.get("content-security-policy"), /frame-ancestors 'none'/);
       assert.equal(calls[0].init.headers["Cache-Control"], "no-cache");
       assert.equal(calls[0].init.cf.cacheTtl, 0);
+      assert.equal(calls[0].init.cache, "no-store");
+      assert.equal(calls[0].init.cf.cacheTtlByStatus["100-599"], -1);
       assert.equal(calls[0].init.redirect, "error");
       assert.ok(calls.every((call) => !call.url.includes("index.json")));
     });
@@ -131,11 +147,54 @@ test("old uploads fall back from JPEG to existing WebP thumbnails", async (t) =>
     await t.test(file, async () => {
       const { calls, fetcher } = fixture({ images: [file] });
       const html = await (await handleRequest(request(`/watch?v=${id}`), {}, fetcher)).text();
-      assert.deepEqual(contents(html, "og:image"), [`${cdn}/${id}/${file}`]);
+      assert.deepEqual(contents(html, "og:image"), [previewImageUrl]);
       assert.deepEqual(contents(html, "og:image:type"), ["image/webp"]);
       const probes = calls.filter((call) => call.method === "HEAD");
       assert.ok(probes[0].url.endsWith("thumbnail_share.jpg"));
       assert.ok(probes.at(-1).url.endsWith(file));
+    });
+  }
+});
+
+test("image proxy streams existing JPEG or WebP bytes with the correct public MIME type", async (t) => {
+  for (const [file, type] of [
+    ["thumbnail_share.jpg", "image/jpeg"],
+    ["thumbnail_sdr_720p.webp", "image/webp"],
+    ["thumbnail_sdr.webp", "image/webp"],
+  ]) {
+    for (const method of ["GET", "HEAD"]) {
+      await t.test(`${method} ${file}`, async () => {
+        const { calls, fetcher } = fixture({ images: [file] });
+        const response = await handleRequest(request(`/preview-image?v=${id}`, { method }), {}, fetcher);
+        assert.equal(response.status, 200);
+        assert.equal(response.headers.get("content-type"), type);
+        assert.equal(response.headers.get("cache-control"), "no-store");
+        assert.equal(response.headers.get("x-content-type-options"), "nosniff");
+        assert.equal(response.headers.get("content-disposition"), "inline");
+        assert.deepEqual(new Uint8Array(await response.arrayBuffer()), method === "HEAD" ? new Uint8Array() : imageBytes);
+        assert.equal(calls[0].url, `${cdn}/${id}/metadata.json`);
+        assert.equal(calls.at(-1).url, `${cdn}/${id}/${file}`);
+        assert.equal(calls.at(-1).method, method);
+        assert.ok(calls.every((call) => !call.url.startsWith(`${site}/watch.html`)));
+      });
+    }
+  }
+});
+
+test("image proxy fails safely when no thumbnail exists or selected image disappears", async (t) => {
+  for (const [name, options, status] of [
+    ["no existing thumbnail", { images: [] }, 404],
+    ["image vanishes after HEAD", { imageGetStatus: 404 }, 404],
+    ["image server error", { imageGetStatus: 500 }, 503],
+    ["image network error", { imageGetThrows: true }, 503],
+  ]) {
+    await t.test(name, async () => {
+      const { fetcher } = fixture(options);
+      const response = await handleRequest(request(`/preview-image?v=${id}`), {}, fetcher);
+      assert.equal(response.status, status);
+      assert.match(response.headers.get("content-type"), /text\/plain/);
+      assert.equal(response.headers.get("cache-control"), "no-store");
+      assert.doesNotMatch(await response.text(), /UPSTREAM_IMAGE_ERROR|SECRET_TITLE|SECRET_DESCRIPTION/);
     });
   }
 });
@@ -175,7 +234,7 @@ for (const [name, options, status] of failures) {
     assert.deepEqual(contents(html, "og:video"), []);
     assert.equal(body(html), body(template));
     assert.doesNotMatch(html, /SECRET_TITLE|SECRET_DESCRIPTION|<script>alert\(/);
-    for (const path of [`/embed?v=${id}`, oembedPath()]) {
+    for (const path of [`/embed?v=${id}`, oembedPath(), `/preview-image?v=${id}`]) {
       const rejected = await handleRequest(request(path), {}, fetcher);
       assert.equal(rejected.status, status, path);
       assert.equal(rejected.headers.get("cache-control"), "no-store");
@@ -195,7 +254,7 @@ test("legacy unlisted metadata remains shareable", async () => {
 test("invalid IDs are rejected before any fetch", async () => {
   for (const invalid of ["../secret", "a/b", "with space", "<script>", "café", "x".repeat(129)]) {
     const { calls, fetcher } = fixture();
-    for (const route of ["/watch", "/watch.html", "/embed"]) {
+    for (const route of ["/watch", "/watch.html", "/embed", "/preview-image"]) {
       const response = await handleRequest(request(`${route}?${new URLSearchParams({ v: invalid })}`), {}, fetcher);
       assert.equal(response.status, 400, `${route}: ${invalid}`);
     }
@@ -326,7 +385,7 @@ test("HEAD returns the same headers with no success body for watch, embed and oE
 
 test("HEAD error responses never contain a body", async () => {
   const { fetcher } = fixture({ meta: { ...metadata, visibility: "private" } });
-  for (const path of ["/embed?v=a%2Fb", `/embed?v=${id}`, oembedPath(), oembedPath({ format: "xml" })]) {
+  for (const path of ["/embed?v=a%2Fb", `/embed?v=${id}`, `/preview-image?v=${id}`, "/preview-image?v=a%2Fb", oembedPath(), oembedPath({ format: "xml" })]) {
     const response = await handleRequest(request(path, { method: "HEAD" }), {}, fetcher);
     assert.ok(response.status >= 400);
     assert.equal(await response.text(), "", path);
@@ -335,9 +394,11 @@ test("HEAD error responses never contain a body", async () => {
 
 test("other methods are rejected without fetching and unrelated routes pass through", async () => {
   const { calls, fetcher } = fixture();
-  const response = await handleRequest(request(`/watch?v=${id}`, { method: "POST" }), {}, fetcher);
-  assert.equal(response.status, 405);
-  assert.equal(response.headers.get("allow"), "GET, HEAD");
+  for (const path of [`/watch?v=${id}`, `/preview-image?v=${id}`]) {
+    const response = await handleRequest(request(path, { method: "POST" }), {}, fetcher);
+    assert.equal(response.status, 405);
+    assert.equal(response.headers.get("allow"), "GET, HEAD");
+  }
   assert.equal(calls.length, 0);
   const original = request("/css/watch.css");
   let forwarded;
