@@ -51,7 +51,7 @@ Evoke begins with semantic HTML and retains dependable form, validation, keyboar
 
 Focus uses one deliberate, geometry-stable signal. Browser outlines and application focus borders must never stack into a double ring.
 
-Scrollable surfaces preserve native wheel, touch, keyboard, and scrollbar behavior. Scrollbar styling stays restrained and its presence never moves, resizes, or rewraps neighboring content.
+Scrollable surfaces preserve native wheel, touch momentum, keyboard, focus scrolling and `scrollIntoView`. The visible scrollbar is a slim, zero-space, thumb-only overlay, not a reserved gutter or a transparent space-consuming track. Hide space-consuming native scrollbar chrome and use a custom overlay thumb where needed. Its drag position maps to the actual container's native scroll range; do not intercept wheel/touch scrolling or translate content to imitate scrolling. The thumb is absent when there is no scroll travel. Row hover/focus fills retain the full intended width and existing side spacing, without compensation padding or a mirrored empty lane. Overflow, thumb visibility and scroll locking never change content width, wrapping or control positions. Keep accessible scroll access and non-outline focus feedback, and isolate thumb dragging from nearby actions and sheet dismissal.
 
 Dark and light use the same interaction hierarchy but independent surface, ink, line, accent, danger, and elevation tokens. Settings exposes System, Dark, and Light; theme selection updates the current page and browser theme color immediately without remounting the workspace.
 

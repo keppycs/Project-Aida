@@ -14,11 +14,11 @@ const searchClear = document.getElementById("search-clear");
 const hero = document.getElementById("hero");
 const heroSkeleton = document.getElementById("hero-skeleton");
 const heroContent = document.getElementById("hero-content");
-const library = document.getElementById("videos");
+const videosSection = document.getElementById("videos");
 const videosGrid = document.getElementById("videos-grid");
-const libraryCount = document.getElementById("library-count");
+const videosCount = document.getElementById("videos-count");
 const resultsSummary = document.getElementById("results-summary");
-const statusPanel = document.getElementById("library-status");
+const statusPanel = document.getElementById("videos-status");
 const statusAction = document.getElementById("status-action");
 const skeletonCards = [...videosGrid.children].map((card) => card.cloneNode(true));
 searchInput.value = new URLSearchParams(location.search).get("q") || "";
@@ -91,8 +91,8 @@ function renderResults() {
 
   if (!allVideos.length) {
     videosGrid.replaceChildren();
-    resultsSummary.textContent = "The library is empty.";
-    showStatus("The collection starts here", "There are no public videos yet. Check back for the first upload.", "Refresh library", load);
+    resultsSummary.textContent = "No videos yet.";
+    showStatus("No videos yet", "There are no public videos yet. Check back for the first upload.", "Refresh videos", load);
     return;
   }
 
@@ -126,18 +126,18 @@ async function load() {
   searchClear.hidden = true;
   hero.hidden = false;
   hero.setAttribute("aria-busy", "true");
-  library.setAttribute("aria-busy", "true");
+  videosSection.setAttribute("aria-busy", "true");
   heroSkeleton.hidden = false;
   heroContent.hidden = true;
   statusPanel.hidden = true;
-  libraryCount.textContent = "";
-  resultsSummary.textContent = "Loading the library…";
+  videosCount.textContent = "";
+  resultsSummary.textContent = "Loading videos…";
   videosGrid.replaceChildren(...skeletonCards.map((card) => card.cloneNode(true)));
 
   try {
     [allVideos, hdrCapable] = await Promise.all([fetchCatalog(), detectDisplayHdr().catch(() => false)]);
     loadState = "ready";
-    libraryCount.textContent = String(allVideos.length);
+    videosCount.textContent = String(allVideos.length);
     searchInput.disabled = false;
     if (allVideos.length) renderHero(allVideos[0]);
     renderResults();
@@ -147,14 +147,14 @@ async function load() {
     allVideos = [];
     hero.hidden = true;
     videosGrid.replaceChildren();
-    resultsSummary.textContent = "The library couldn't be loaded.";
-    showStatus("The library is out of reach", "We couldn’t load the videos. Check your connection and try again.", "Try again", load, "!");
+    resultsSummary.textContent = "Videos couldn't be loaded.";
+    showStatus("Couldn't load videos", "We couldn’t load the videos. Check your connection and try again.", "Try again", load, "!");
     if (canRestoreFocus()) statusAction.focus({ preventScroll: true });
     console.warn("Unable to load the Aida catalogue:", error);
   } finally {
     if (retryControl) document.removeEventListener("focusin", trackFocus);
     hero.setAttribute("aria-busy", "false");
-    library.setAttribute("aria-busy", "false");
+    videosSection.setAttribute("aria-busy", "false");
   }
 }
 

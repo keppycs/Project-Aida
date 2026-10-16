@@ -1,9 +1,9 @@
 import {
-  fetchCatalog, mediaBase, formatDate, formatDuration,
+  fetchCatalog, mediaBase, formatDate,
   renderVideoCard, detectDisplayHdr, attachThumbnailFallbacks,
 } from "./catalog.js?v=ux-stability-v14";
 import { loadMetadata, VideoLoadError } from "./loader.js?v=ux-stability-v14";
-import { mountPlayer } from "./player/shell.js?v=quality-labels-v26";
+import { mountPlayer } from "./player/shell.js?v=overlay-scrollbar-v36";
 
 const id = new URLSearchParams(location.search).get("v") || "0";
 const local = typeof window.shouldUseLocalCmaf === "function" && window.shouldUseLocalCmaf();
@@ -13,7 +13,6 @@ const playerWrap = document.getElementById("player-wrap");
 const video = document.getElementById("video");
 const status = document.getElementById("watch-status");
 const retryButton = document.getElementById("watch-retry");
-const theatreButton = document.getElementById("theatre-btn");
 let currentMeta = null;
 let catalog = [];
 let playbackFailed = false;
@@ -42,9 +41,9 @@ function showFailure(kind, message) {
   document.getElementById("watch-status-title").textContent = message || titles[kind] || titles.playback;
   document.getElementById("watch-status-detail").textContent = descriptions[kind] || descriptions.playback;
   retryButton.hidden = kind === "private" || kind === "not_found" || kind === "unsupported";
-  document.getElementById("watch-status-library").hidden = false;
+  document.getElementById("watch-status-videos").hidden = false;
   if (playerHadFocus) {
-    (retryButton.hidden ? document.getElementById("watch-status-library") : retryButton).focus({ preventScroll: true });
+    (retryButton.hidden ? document.getElementById("watch-status-videos") : retryButton).focus({ preventScroll: true });
   }
   if (!currentMeta) document.getElementById("watch-title").textContent = titles[kind] || "Video unavailable";
   if (document.fullscreenElement === playerWrap) void document.exitFullscreen().catch(() => {});
@@ -61,9 +60,7 @@ function renderDetails(meta) {
   const metaRow = document.getElementById("watch-meta");
   metaRow.replaceChildren();
   const date = formatDate(meta.createdAt || entry?.createdAt);
-  const duration = formatDuration(meta.duration || entry?.duration);
-  const fps = Number(meta.frameRate || entry?.frameRate);
-  for (const text of [date, duration, Number.isFinite(fps) && fps > 0 ? `${Math.round(fps)} fps` : ""]) {
+  for (const text of [date]) {
     if (!text) continue;
     const span = document.createElement("span");
     span.textContent = text;
@@ -97,17 +94,6 @@ async function renderMoreVideos() {
   document.getElementById("more-videos").hidden = false;
 }
 
-function setTheatre(enabled) {
-  document.body.classList.toggle("theatre-mode", enabled);
-  theatreButton.setAttribute("aria-pressed", String(enabled));
-  theatreButton.textContent = enabled ? "Exit theatre mode" : "Theatre mode";
-}
-try { setTheatre(localStorage.getItem("aida-theatre") === "true"); } catch {}
-theatreButton.addEventListener("click", () => {
-  const enabled = !document.body.classList.contains("theatre-mode");
-  setTheatre(enabled);
-  try { localStorage.setItem("aida-theatre", String(enabled)); } catch {}
-});
 retryButton.addEventListener("click", () => location.reload());
 window.addEventListener("aida:playback-error", (event) => showFailure(event.detail?.kind || "playback", event.detail?.message));
 

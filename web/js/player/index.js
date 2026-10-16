@@ -1,4 +1,4 @@
-import { mountPlayer } from "./shell.js?v=quality-labels-v26";
+import { mountPlayer } from "./shell.js?v=overlay-scrollbar-v36";
 
 window.init = (meta, base) => {
   mountPlayer(meta, base);

@@ -139,7 +139,20 @@
 #player-wrap.menu-open #big-play { pointer-events: none; }
 #big-play.flash-brief { pointer-events: none; transition: none; }
 #big-play.flash-brief svg { transform-origin: 50% 50%; }
-/* Only the 44px utility row consumes visible height. The scrub target extends upward. */
+/* Preserve the compact paint. This nonfocusable target sits behind the controls;
+   input.js limits mouse seeking to the 10px strip around the rail. */
+#progress-touch-target {
+  position: absolute;
+  left: max(12px, env(safe-area-inset-left));
+  right: max(12px, env(safe-area-inset-right));
+  bottom: calc(max(4px, env(safe-area-inset-bottom)) + var(--ctrl-h) + 4px + var(--bar-h) / 2 - 22px);
+  height: 44px;
+  z-index: 9;
+  visibility: hidden;
+  pointer-events: none;
+  touch-action: none;
+}
+#player-wrap.ui-visible #progress-touch-target { visibility: visible; pointer-events: auto; }
 #controls {
   position: absolute;
   left: max(12px, env(safe-area-inset-left));
@@ -158,17 +171,18 @@
   transition-delay: 0s;
 }
 #progress-wrap {
-  --progress-center-offset: calc(4px + var(--bar-h) / 2);
+  --progress-center-offset: 50%;
   position: absolute;
   left: 0;
   right: 0;
-  bottom: 100%;
-  height: 44px;
+  bottom: calc(100% + 4px + var(--bar-h) / 2 - 5px);
+  height: 10px;
   cursor: pointer;
+  /* Keep native touch adjustment from snapping nearby button taps onto this
+     focusable slider. Pointer capture still delivers an active scrub here. */
   pointer-events: none;
   touch-action: none;
 }
-#player-wrap.ui-visible #progress-wrap,
 #player-wrap.ui-visible #ctrl-row button,
 #player-wrap.ui-visible #vol-slider { pointer-events: auto; }
 #progress-track {
@@ -207,12 +221,15 @@
 }
 #progress-wrap:focus-visible #progress-track { height: var(--bar-h-hover); }
 #progress-wrap:focus-visible #progress-thumb { opacity: 1; }
+#progress-wrap.mouse-hover #progress-track { height: var(--bar-h-hover); }
+#progress-wrap.mouse-hover #progress-thumb,
+#progress-wrap.mouse-hover #time-tooltip { opacity: 1; }
 #progress-wrap.scrubbing #progress-thumb,
 #progress-wrap.scrubbing #time-tooltip { opacity: 1; }
 #progress-wrap.scrubbing #progress-track { height: var(--bar-h-hover); }
 #time-tooltip {
   position: absolute;
-  bottom: 20px;
+  bottom: calc(var(--progress-center-offset) + 14.5px);
   transform: translateX(-50%);
   padding: 4px 7px !important;
   border-radius: 5px;
@@ -288,6 +305,7 @@
 .player-settings[hidden],
 .settings-page[hidden],
 .settings-icon[hidden] { display: none; }
+#settings-scroll-thumb[hidden] { display: none; }
 .player-settings {
   display: block;
   position: absolute;
@@ -305,6 +323,7 @@
   transform-origin: bottom right;
 }
 .settings-surface {
+  position: relative;
   display: flex;
   flex-direction: column;
   width: 100%;
@@ -331,6 +350,27 @@
 #settings-close { margin-left: auto; }
 #settings-body { position: relative; min-height: 0; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; scrollbar-width: thin; scrollbar-color: #ffffff40 transparent; }
 @supports not (scrollbar-gutter: stable) { #settings-body { overflow-y: scroll; } }
+/* Enhance only the scrollbar chrome. The body remains the native scroll owner. */
+#settings-body.overlay-scrollbar { scrollbar-gutter: auto; scrollbar-width: none; }
+#settings-body.overlay-scrollbar::-webkit-scrollbar { display: none; width: 0; height: 0; }
+#settings-scroll-thumb {
+  position: absolute;
+  top: 0;
+  right: 0;
+  z-index: 2;
+  width: 12px;
+  border: 0;
+  background: transparent;
+  outline: none;
+  box-shadow: none;
+  cursor: default;
+  touch-action: none;
+  user-select: none;
+}
+#settings-scroll-thumb::before { content: ""; position: absolute; inset: 0 4px; border-radius: 2px; background: #ffffff55; pointer-events: none; }
+#settings-scroll-thumb:focus-visible::before,
+#settings-scroll-thumb.is-dragging::before { background: #fff; }
+@media (hover: hover) and (pointer: fine) { #settings-scroll-thumb:hover::before { background: #ffffff99; } }
 .settings-page { padding: 6px 0 !important; }
 .menu-item {
   display: flex;
@@ -364,13 +404,15 @@
 .menu-badge { margin-left: auto !important; color: var(--text-dim); font-size: 0.6875rem; white-space: nowrap; }
 .menu-hint { padding: 8px 16px !important; color: var(--text-dim); font-size: 0.75rem; line-height: 1.5; }
 .playback-advanced {
+  position: relative;
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 5.5rem), 1fr));
   gap: 12px;
   padding: 8px 16px !important;
-  border-top: 1px solid #ffffff0d;
-  border-bottom: 1px solid #ffffff14;
+  /* The header owns the full-width divider; retain the section's geometry. */
+  border-block: 1px solid transparent;
 }
+.playback-advanced::after { content: ""; position: absolute; left: 16px; right: 16px; bottom: -1px; height: 1px; background: #ffffff14; pointer-events: none; }
 .playback-choice { display: flex; flex-direction: column; min-width: 0; gap: 4px; padding: 0 !important; }
 .playback-choice-label { min-width: 0; color: var(--text-dim); font-size: .75rem; line-height: 1rem; overflow-wrap: anywhere; }
 .playback-choice .menu-toggle-row { min-width: 0; gap: 0; padding: 0 !important; border-radius: 10px; overflow: hidden; background: #ffffff06; }
@@ -465,9 +507,6 @@
   .menu-toggle:hover:not(:disabled) { background: #ffffff12; }
   .playback-choice .menu-toggle:hover:not(:disabled) { background: #ffffff0a; }
   .playback-choice .menu-toggle.active:hover:not(:disabled) { background: #e8ff4726; color: #f0ff85; }
-  #progress-wrap:hover #progress-track { height: var(--bar-h-hover); }
-  #progress-wrap:hover #progress-thumb,
-  #progress-wrap:hover #time-tooltip { opacity: 1; }
 }
 /* Focus changes fill and ink, never a control's perimeter or hit geometry. */
 #player-wrap button:focus-visible,

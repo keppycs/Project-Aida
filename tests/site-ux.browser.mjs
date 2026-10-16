@@ -16,7 +16,7 @@ process.env.TEMP = process.env.TMP = artifacts;
 process.env.PLAYWRIGHT_BROWSERS_PATH = resolve(dirname(executablePath), "../..");
 const preview = await startPlayerPreview();
 const filter = process.argv.find(argument => argument.startsWith("--profile="))?.split("=")[1];
-const libraryOnly = process.argv.includes("--library-only");
+const videosOnly = process.argv.includes("--videos-only");
 const profiles = [
   { name: "classic-desktop", mode: "classic", width: 1440, height: 900 },
   { name: "overlay-desktop", mode: "overlay", width: 1440, height: 900 },
@@ -25,7 +25,7 @@ const profiles = [
   { name: "landscape844", mode: "overlay", width: 844, height: 390, touch: true },
 ].filter(profile => !filter || profile.name === filter);
 assert.ok(profiles.length, `Unknown site UX profile: ${filter}`);
-const publicEntry = { id: PUBLIC_VIDEO_ID, title: "Public 120 fps motion study", description: "A public video fixture for reviewing the library and player.",
+const publicEntry = { id: PUBLIC_VIDEO_ID, title: "Public 120 fps motion study", description: "A public video fixture for reviewing the videos page and player.",
   createdAt: 1774446542, duration: 25.963, frameRate: 120, width: 2560, height: 1440, codecs: ["AV1", "HEVC"], visibility: "public", tags: ["public", "120 fps", "a", "4K"] };
 const catalog = [publicEntry, ...Array.from({ length: 23 }, (_, index) => ({ id: `ux-${index}`, title: `Motion study ${String(index + 2).padStart(2, "0")}`,
   description: "Public synthetic catalog fixture", createdAt: 1774446541 - index, duration: 12 + index, frameRate: 120, visibility: "public", tags: ["public"] }))];
@@ -66,30 +66,99 @@ async function clearAligned(page) {
     button: document.querySelector("#search-clear").getBoundingClientRect().toJSON() }));
   assert.ok(geometry.button.width >= 44 && geometry.button.height >= 44, "Search clear must retain a44px target");
   assert.ok(Math.abs(geometry.input.y + geometry.input.height / 2 - geometry.button.y - geometry.button.height / 2) < .25,
-    "Clear must stay vertically centered in its input, independently of the persistent label");
+    "Clear must stay vertically centered in its input");
 }
-async function focusPresentation(page, selector) {
+async function centeredHeaderSearch(page, label) {
+  const geometry = await page.evaluate(() => {
+    const header = document.querySelector(".site-header"), form = document.querySelector("#search-form");
+    return { header: header.getBoundingClientRect().toJSON(), form: form.getBoundingClientRect().toJSON(),
+      brand: header.querySelector(".brand").getBoundingClientRect().toJSON(),
+      input: document.querySelector("#search-input").getBoundingClientRect().toJSON(),
+      headerOwnsForm: form.closest("header") === header, stacked: matchMedia("(max-width: 700px)").matches };
+  });
+  const { header, form, brand, input } = geometry;
+  assert.equal(geometry.headerOwnsForm, true, `${label}: search must belong to the header`);
+  assert.ok(Math.abs(form.x + form.width / 2 - header.x - header.width / 2) < .5, `${label}: search must be centered in the header`);
+  assert.ok(form.x >= header.x - .5 && form.right <= header.right + .5 && form.y >= header.y && form.bottom <= header.bottom,
+    `${label}: search must fit within the header`);
+  const overlapsX = Math.min(form.right, brand.right) - Math.max(form.x, brand.x) > .5;
+  const overlapsY = Math.min(form.bottom, brand.bottom) - Math.max(form.y, brand.y) > .5;
+  assert.ok(!(overlapsX && overlapsY), `${label}: search and brand must not collide`);
+  assert.ok(input.width >= 44 && input.height >= 44, `${label}: search must retain a44px target`);
+  if (geometry.stacked) {
+    assert.ok(brand.bottom <= form.y, `${label}: mobile search must sit below the brand`);
+    assert.ok(Math.abs(form.width - header.width) < .5, `${label}: mobile search must use the full header width`);
+  }
+  return geometry;
+}
+function neutralColor(color, label) {
+  const channels = color.match(/[\d.]+/g)?.map(Number) || [];
+  assert.ok(channels.length >= 3 && (channels.length < 4 || channels[3] > 0), `${label}: a visible color is required, received ${color}`);
+  assert.ok(Math.max(...channels.slice(0, 3)) - Math.min(...channels.slice(0, 3)) <= 24,
+    `${label}: search feedback must be neutral, received ${color}`);
+}
+async function focusPresentation(page, selector, { caretOnly = false, activate = null } = {}) {
+  if (caretOnly) assert.equal(selector, "#search-input", "Caret-only feedback is limited to the search input");
   const read = element => {
     const style = getComputedStyle(element), rect = element.getBoundingClientRect();
     return { rect: { x: rect.x, y: rect.y + scrollY, width: rect.width, height: rect.height }, outline: style.outlineStyle,
       outlineWidth: style.outlineWidth, shadow: style.boxShadow,
       border: ["Top", "Right", "Bottom", "Left"].map(side => Number.parseFloat(style[`border${side}Width`]) > 0 && style[`border${side}Style`] !== "none"
-        ? [style[`border${side}Width`], style[`border${side}Style`], style[`border${side}Color`]] : "unpainted"), background: style.backgroundColor, color: style.color };
+        ? [style[`border${side}Width`], style[`border${side}Style`], style[`border${side}Color`]] : "unpainted"), background: style.backgroundColor, color: style.color,
+      focused: document.activeElement === element, caret: style.caretColor };
   };
   await page.locator(selector).scrollIntoViewIfNeeded();
   await page.locator(selector).evaluate(element => element.blur());
   await page.mouse.move(0, 0);
   await painted(page);
   const before = await page.locator(selector).evaluate(read);
-  await page.keyboard.press("Tab");
-  await page.locator(selector).evaluate(element => element.focus({ preventScroll: true }));
+  if (activate) await activate();
+  else {
+    await page.keyboard.press("Tab");
+    await page.locator(selector).evaluate(element => element.focus({ preventScroll: true }));
+  }
   await page.waitForTimeout(220);
   const after = await page.locator(selector).evaluate(read);
   assert.ok(after.outline === "none" || Number.parseFloat(after.outlineWidth) === 0, `${selector} must not acquire an outline`);
   assert.equal(after.shadow, before.shadow, `${selector} must not acquire a focus shadow/ring`);
   assert.deepEqual(after.border, before.border, `${selector} must not acquire an interaction border`);
   for (const key of ["x", "y", "width", "height"]) assert.ok(Math.abs(after.rect[key] - before.rect[key]) < .2, `${selector} focus changed ${key}`);
-  assert.ok(after.background !== before.background || after.color !== before.color, `${selector} needs geometry-stable visible keyboard feedback`);
+  if (caretOnly) {
+    assert.equal(after.focused, true, "Search must retain native focus");
+    assert.equal(after.background, before.background, "Search focus must not highlight its background");
+    assert.equal(after.color, before.color, "Search focus must not change its text color");
+    const rgb = color => (color.match(/[\d.]+/g) || []).map(Number);
+    const caret = rgb(after.caret), background = rgb(after.background);
+    assert.ok(caret.length >= 3 && (caret.length < 4 || caret[3] > 0), "Search caret must remain visible");
+    assert.ok(Math.max(...caret.slice(0, 3).map((channel, index) => Math.abs(channel - background[index]))) >= 100,
+      "Search caret must contrast with the unchanged input background");
+  } else assert.ok(after.background !== before.background || after.color !== before.color, `${selector} needs geometry-stable visible keyboard feedback`);
+  return { before, after };
+}
+async function caretSearchPresentation(page, cdp, touch, label) {
+  const input = page.locator("#search-input"), modes = {};
+  for (const mode of ["pointer", "keyboard", ...(touch ? ["touch"] : [])]) {
+    modes[mode] = await focusPresentation(page, "#search-input", { caretOnly: true,
+      activate: mode === "pointer" ? () => input.click() : mode === "touch" ? async () => {
+        const box = await input.boundingBox();
+        await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: box.x + box.width / 2, y: box.y + box.height / 2 }] });
+        await page.waitForTimeout(100);
+        await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+      } : null });
+    const value = await input.inputValue();
+    await page.keyboard.press("End");
+    await page.keyboard.insertText("x");
+    assert.equal(await input.inputValue(), `${value}x`, `${label} ${mode}: focused native search must remain editable`);
+    await page.keyboard.press("Backspace");
+    assert.equal(await input.inputValue(), value);
+    assert.equal(await input.evaluate(element => element.selectionStart === element.selectionEnd), true, "Search caret must be collapsed after editing");
+  }
+  const selection = await page.locator("#search-input").evaluate(input => {
+    const style = getComputedStyle(input, "::selection");
+    return { background: style.backgroundColor, color: style.color };
+  });
+  neutralColor(selection.background, `${label} selected text background`);
+  return { modes, selection };
 }
 async function doubleText(page) {
   await page.evaluate(() => {
@@ -172,23 +241,25 @@ async function runProfile(browser, profile) {
   page.on("pageerror", error => result.errors.push(error.message));
   page.setDefaultTimeout(15000);
   const cdp = await context.newCDPSession(page);
-  const anchors = [".site-header", ".brand", ".site-main", "#search-form", ".search-label", ".search-field", ".library-toolbar", "#videos-grid > :first-child"];
+  const anchors = [".site-header", ".brand", ".site-main", "#search-form", ".search-field", ".videos-toolbar", "#videos-grid > :first-child"];
   await page.goto(`${preview.origin}/index.html`, { waitUntil: "domcontentloaded" });
   await page.evaluate(() => document.fonts.ready);
   result.states.loading = await state(page, anchors);
   assert.equal(await page.locator("#search-input").isDisabled(), true);
-  await page.locator(".site-nav a").focus();
+  await page.locator(".brand").focus();
   initialGate = null;
   releaseInitial();
   await page.waitForFunction(() => document.querySelector("#videos").getAttribute("aria-busy") === "false" && document.querySelectorAll("#videos-grid .video-card").length === 24);
   await painted(page);
-  assert.equal(await page.evaluate(() => document.activeElement.matches(".site-nav a")), true, "Initial loading completion must preserve focus moved to navigation");
+  assert.equal(await page.evaluate(() => document.activeElement.matches(".brand")), true, "Initial loading completion must preserve focus moved to the home link");
   result.states.populated = await state(page, anchors);
-  assert.equal(await page.locator(".search-label").isVisible(), true, "Search keeps a persistent visible associated label");
-  assert.equal(await page.locator("#search-input").evaluate(input => input.labels?.[0]?.textContent.trim()), "Search library");
+  assert.equal(await page.locator(".search-label, label[for='search-input']").count(), 0, "Header search must not render a label");
+  assert.equal(await page.getByRole("searchbox", { name: "Search", exact: true }).count(), 1, "Search must keep its accessible name");
+  assert.equal(await page.locator("#search-input").getAttribute("placeholder"), "Search");
+  result.searchHeader = { normal: await centeredHeaderSearch(page, `${profile.name} normal text`) };
   horizontalStable(result.states.loading, result.states.populated, `${profile.name} loading→populated`);
   await page.locator("#search-input").fill("zzzz-no-public-match");
-  await page.waitForFunction(() => !document.querySelector("#library-status").hidden && !document.querySelector("#videos-grid").children.length);
+  await page.waitForFunction(() => !document.querySelector("#videos-status").hidden && !document.querySelector("#videos-grid").children.length);
   await clearAligned(page);
   result.states.noResults = await state(page, anchors);
   horizontalStable(result.states.populated, result.states.noResults, `${profile.name} populated→no results`, ["#videos-grid > :first-child"]);
@@ -197,7 +268,7 @@ async function runProfile(browser, profile) {
   result.states.cleared = await state(page, anchors);
   horizontalStable(result.states.populated, result.states.cleared, `${profile.name} clear search`);
   assert.equal(await page.evaluate(() => document.activeElement.id), "search-input");
-  await noHorizontalOverflow(page, `${profile.name} library`);
+  await noHorizontalOverflow(page, `${profile.name} videos page`);
   await resetScroll(page, cdp, profile.touch);
   await page.waitForFunction(() => [...document.querySelectorAll("#hero-img img")].every(image => image.complete && image.naturalWidth > 0));
   await page.screenshot({ path: `${artifacts}/${profile.name}-index.png` });
@@ -207,13 +278,14 @@ async function runProfile(browser, profile) {
   const keyboardBefore = await page.evaluate(() => scrollY);
   await page.keyboard.press("PageDown");
   await page.waitForFunction(before => scrollY > before + 10, keyboardBefore);
-  await focusPresentation(page, "#search-input");
+  result.searchPresentation = { normal: await caretSearchPresentation(page, cdp, profile.touch, `${profile.name} normal text`) };
+  await page.locator(".site-header").screenshot({ path: `${artifacts}/${profile.name}-search-caret.png`, caret: "initial" });
 
   for (const mode of ["empty", "error"]) {
     catalogMode = mode;
     await page.reload({ waitUntil: "domcontentloaded" });
     await page.waitForFunction(() => document.querySelector("#videos").getAttribute("aria-busy") === "false");
-    assert.equal(await page.locator("#library-status").isVisible(), true);
+    assert.equal(await page.locator("#videos-status").isVisible(), true);
     result.states[mode] = await state(page, anchors);
     horizontalStable(result.states.populated, result.states[mode], `${profile.name} ${mode}`, ["#videos-grid > :first-child"]);
     await noHorizontalOverflow(page, `${profile.name} ${mode}`);
@@ -223,16 +295,16 @@ async function runProfile(browser, profile) {
     await page.locator("#status-action").click();
     if (releaseRetry) {
       await page.waitForFunction(() => document.querySelector("#videos").getAttribute("aria-busy") === "true");
-      await page.locator(".site-nav a").focus();
+      await page.locator(".brand").focus();
       // Wheel is native in both pointer profiles and has no touch-fling momentum
       // that could keep moving independently of the asynchronous catalog result.
       await nativeScroll(page, cdp, false);
       await page.waitForTimeout(220);
-      const before = await page.evaluate(() => ({ active: document.activeElement.matches(".site-nav a"), scroll: scrollY }));
+      const before = await page.evaluate(() => ({ active: document.activeElement.matches(".brand"), scroll: scrollY }));
       releaseRetry();
       await page.waitForFunction(() => document.querySelectorAll("#videos-grid .video-card").length === 24);
       await painted(page);
-      const after = await page.evaluate(() => ({ active: document.activeElement.matches(".site-nav a"), scroll: scrollY }));
+      const after = await page.evaluate(() => ({ active: document.activeElement.matches(".brand"), scroll: scrollY }));
       assert.ok(before.active && after.active, "Retry completion must not reclaim keyboard focus after it moves elsewhere");
       assert.ok(Math.abs(after.scroll - before.scroll) < 1, "Retry completion must not reclaim the user's scroll position");
       result.states.retryPreserved = { before, after };
@@ -246,17 +318,20 @@ async function runProfile(browser, profile) {
   await page.waitForFunction(() => document.querySelectorAll("#videos-grid .video-card").length === 24);
   await doubleText(page);
   await noHorizontalOverflow(page, `${profile.name} long titles and200% text`);
+  result.searchHeader.enlarged = await centeredHeaderSearch(page, `${profile.name}200% text`);
   await page.locator("#search-input").fill("public");
   await clearAligned(page);
-  await focusPresentation(page, "#search-clear");
-  result.libraryPassed = true;
-  if (libraryOnly) {
+  result.searchPresentation.enlarged = await caretSearchPresentation(page, cdp, profile.touch, `${profile.name}200% text`);
+  const clearFocus = await focusPresentation(page, "#search-clear");
+  neutralColor(clearFocus.after.background, `${profile.name} search clear keyboard focus fill`);
+  result.videosPassed = true;
+  if (videosOnly) {
     assert.deepEqual(result.errors, []);
-    assert.deepEqual(debugRequests, [], "Normal library must not load a debug overlay");
+    assert.deepEqual(debugRequests, [], "Normal videos page must not load a debug overlay");
     result.passed = true;
     await context.close(); page = null;
     await writeFile(`${artifacts}/results.json`, JSON.stringify(results, null, 2));
-    console.log(`PASS ${profile.name}: final library labels, all recovery states, native scroll/focus, actual gutters and200%text`);
+    console.log(`PASS ${profile.name}: final videos labels, all recovery states, native scroll/focus, actual gutters and200%text`);
     return;
   }
 
@@ -286,7 +361,9 @@ async function runProfile(browser, profile) {
   }, name);
   const menuAnchors = ["#settings-body", "#smooth-pause-toggle", "#speed-btn", "#quality-btn", "#speed-label", "#quality-label", "#settings-home .setting-switch", "#settings-home .menu-chevron"];
   const addRows = async selector => page.locator(selector).evaluate(group => {
-    for (let index = 0; index < 14; index++) {
+    // Exceed even a full-height viewport at the minimum 44px row size.
+    const rowCount = Math.ceil(innerHeight / 44) + 2;
+    for (let index = 0; index < rowCount; index++) {
       const button = document.createElement("button");
       button.type = "button"; button.className = "menu-item settings-row ux-overflow-fixture";
       const label = document.createElement("span"), value = document.createElement("span");
@@ -445,7 +522,9 @@ async function runProfile(browser, profile) {
   await page.keyboard.press("Escape");
   await page.waitForFunction(() => document.querySelector("#settings-panel").hidden);
   if (profile.name === "landscape844") {
-    await activate("#theatre-btn");
+    // Constrain this fixture to keep exercising native error scrolling in a
+    // short landscape surface after the former theatre layout was removed.
+    await page.locator("#player-wrap").evaluate(player => { player.style.maxHeight = "260px"; });
     await page.evaluate(() => window.dispatchEvent(new CustomEvent("aida:playback-error", { detail: { kind: "network", message: "Public fixture network interruption" } })));
     await page.locator("#watch-status").scrollIntoViewIfNeeded();
     result.errorOverlay = await page.locator("#watch-status").evaluate(status => ({ height: status.clientHeight, scrollHeight: status.scrollHeight,
@@ -463,7 +542,10 @@ async function runProfile(browser, profile) {
     assert.ok(hit.height >= 44 && hit.inside && hit.target === "watch-retry", "Native scroll/focus must keep Retry reachable in the short error surface");
     await page.screenshot({ path: `${artifacts}/${profile.name}-error200.png` });
     await activate("#watch-retry");
-    await page.waitForFunction(() => document.querySelector("#watch-status").hidden && document.querySelector("video").readyState >= 2);
+    await page.waitForFunction(() => {
+      const status = document.querySelector("#watch-status"), video = document.querySelector("video");
+      return !!status && status.hidden && !!video && video.readyState >= 2;
+    });
   }
   assert.deepEqual(result.errors, []);
   assert.deepEqual(debugRequests, [], "Normal pages must not load a debug overlay");

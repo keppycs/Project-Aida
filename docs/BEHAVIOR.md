@@ -106,6 +106,8 @@ Main settings edits apply globally to the installation and become defaults for s
 
 ### Per-device presentation
 
+- Page and nested surfaces use native scrolling with zero-space, thumb-only overlay scrollbar chrome. Hide space-consuming native chrome and use a custom thumb where needed, without gutters, matching empty lanes, compensation padding, tracks or background strips. Wheel, touch momentum, keyboard, focus scrolling and `scrollIntoView` remain browser-owned; thumb dragging sets the actual scroll container's scroll position and never moves content with transforms. Rows and their hover/focus fills keep their full intended width and existing side spacing as overflow or thumb visibility changes. The thumb is absent without scroll travel, and its drag cannot activate neighboring controls or sheet dismissal. Preserve accessible scroll access and the shared non-outline focus and transparent tap-highlight treatment.
+- Verify overflow present/absent, content resize, menu navigation, scroll locking, thumb dragging and drag cancellation in classic-scrollbar and overlay-scrollbar browser modes. Native scrolling and focus remain usable, content/control bounds stay unchanged by scrollbar state, and only the thumb may be painted; a screenshot of a settled menu alone is insufficient.
 - The active session, sidebar state, and every named scroll surface remember their latest manual state per device.
 - Navigating away/back, refreshing, reconnecting, or remounting from an authoritative snapshot restores scroll only after real content mounts.
 - Restoration clamps when content is shorter and never overrides a newer manual scroll.
