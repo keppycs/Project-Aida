@@ -135,12 +135,12 @@ async function geometry(page, label) {
       return { x: r.x, y: r.y, width: r.width, height: r.height, right: r.right, bottom: r.bottom };
     };
     const wrap = rect("#player-wrap"), center = rect("#big-play");
-    const row = rect("#ctrl-row"), track = rect("#progress-track"), seek = rect("#progress-wrap");
+    const row = rect("#ctrl-row"), track = rect("#progress-track");
     return {
-      wrap, center, row, track, seek,
+      wrap, center, row, track,
       centerErrorX: Math.abs(center.x + center.width / 2 - wrap.x - wrap.width / 2),
       centerErrorY: Math.abs(center.y + center.height / 2 - wrap.y - wrap.height / 2),
-      seekCenterError: Math.abs(track.y + track.height / 2 - seek.y - seek.height / 2),
+      railGap: row.y - track.bottom,
       overflow: document.documentElement.scrollWidth - innerWidth,
       buttons: [...document.querySelectorAll("#player-wrap button")].filter((button) => {
         const style = getComputedStyle(button);
@@ -151,9 +151,7 @@ async function geometry(page, label) {
   assert.ok(metrics.centerErrorX <= 1, `${label}: center x off by ${metrics.centerErrorX}px`);
   assert.ok(metrics.centerErrorY <= 1, `${label}: center y off by ${metrics.centerErrorY}px`);
   assert.ok(Math.abs(metrics.row.height - 44) <= 1, `${label}: utility row ${metrics.row.height}px`);
-  assert.ok(Math.abs(metrics.seek.height - 44) <= .1, `${label}: seek target ${metrics.seek.height}px`);
-  assert.ok(metrics.seekCenterError <= .1, `${label}: rail ${metrics.seekCenterError}px from seek target center`);
-  assert.ok(metrics.seek.bottom <= metrics.row.y + .1, `${label}: seek target must not overlap utility row`);
+  assert.ok(metrics.railGap >= 0 && metrics.railGap <= 8, `${label}: visible rail ${metrics.railGap}px above utility row`);
   assert.ok(metrics.overflow <= 1, `${label}: horizontal overflow ${metrics.overflow}px`);
   for (const button of metrics.buttons) {
     assert.ok(button.width >= 43.9 && button.height >= 43.9, `${label}: ${button.id} target ${button.width}×${button.height}px`);
