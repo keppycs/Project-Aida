@@ -76,7 +76,7 @@ function renderDetails(meta) {
   if (Array.isArray(tags)) {
     for (const tag of tags.filter((tag) => typeof tag === "string" && tag.trim())) {
       const link = document.createElement("a");
-      link.href = `index.html?q=${encodeURIComponent(tag)}`;
+      link.href = `./?q=${encodeURIComponent(tag)}`;
       link.textContent = tag;
       tagList.append(link);
     }
