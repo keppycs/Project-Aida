@@ -441,7 +441,6 @@ function buildQualityMenu(ctx) {
   const focused = document.activeElement;
   const focusedLabel = content.contains(focused) ? focused.getAttribute("aria-label") : null;
   const focusedId = content.contains(focused) ? focused.dataset.id : null;
-  const advancedWasOpen = content.querySelector("details")?.open ?? false;
   const restoreFocus = () => {
     if (qualMenu.hidden || (!focusedLabel && focusedId == null)) return;
     [...content.querySelectorAll("button")].find((button) => focusedLabel
@@ -461,7 +460,7 @@ function buildQualityMenu(ctx) {
   autoItem.dataset.id = "-1";
   autoItem.id = "quality-auto-item";
   autoItem.setAttribute("aria-pressed", String(selectedQuality === -1));
-  autoItem.innerHTML = `${check}<span class="quality-option-label">Auto</span><span class="menu-badge" id="quality-auto-badge">ABR</span>`;
+  autoItem.innerHTML = `${check}<span class="quality-option-label">Auto</span><span class="menu-badge" id="quality-auto-badge"></span>`;
   autoItem.addEventListener("click", () => selectQuality(-1, ctx));
   content.appendChild(autoItem);
 
@@ -474,22 +473,23 @@ function buildQualityMenu(ctx) {
     const fps = displayFrameRate(track.frameRate || currentMeta?.frameRate);
     item.setAttribute("aria-label", `${track.height}p${fps ? ` at ${fps} frames per second` : ""}`);
     item.setAttribute("aria-pressed", "false");
-    item.innerHTML = `${check}<span class="quality-option-label">${track.height}p${fps ? `<span class="quality-fps">${fps} fps</span>` : ""}</span><span class="menu-badge">${kbps > 1000 ? (kbps / 1000).toFixed(1) + " Mbps" : kbps + " kbps"}</span>`;
+    item.innerHTML = `${check}<span class="quality-option-label">${trackLabel(track)}</span><span class="menu-badge">${kbps > 1000 ? (kbps / 1000).toFixed(1) + " Mbps" : kbps + " kbps"}</span>`;
     item.addEventListener("click", () => selectQuality(track.id, ctx));
     content.appendChild(item);
   });
 
-  const advanced = document.createElement("details");
+  const advanced = document.createElement("section");
   advanced.className = "playback-advanced";
-  advanced.open = advancedWasOpen;
-  const summary = document.createElement("summary");
-  summary.textContent = "Advanced playback";
-  advanced.appendChild(summary);
+  advanced.setAttribute("aria-label", "Playback format");
   const addChoice = (title, choices, selected, enabled, choose) => {
-    const header = document.createElement("div");
-    header.className = "menu-header";
-    header.textContent = title;
-    advanced.appendChild(header);
+    const group = document.createElement("div");
+    group.className = "playback-choice";
+    group.setAttribute("role", "group");
+    group.setAttribute("aria-label", title);
+    const label = document.createElement("span");
+    label.className = "playback-choice-label";
+    label.textContent = title;
+    group.appendChild(label);
     const row = document.createElement("div");
     row.className = "menu-toggle-row";
     choices.forEach((value) => {
@@ -512,14 +512,18 @@ function buildQualityMenu(ctx) {
       });
       row.appendChild(button);
     });
-    advanced.appendChild(row);
+    group.appendChild(row);
+    advanced.appendChild(group);
   };
   addChoice("Codec", ["AV1", "HEVC"], currentCodec,
     (value) => (currentMeta?.codecs || []).includes(value),
     (value) => loadSource(currentMeta, currentBase, value, currentProtocol, ctx, { preservePlayback: true }));
   addChoice("Protocol", ["DASH", "HLS"], currentProtocol, () => true,
     (value) => loadSource(currentMeta, currentBase, currentCodec, value, ctx, { preservePlayback: true }));
-  content.appendChild(advanced);
+  const resolutionHeading = document.createElement("h3");
+  resolutionHeading.className = "menu-header quality-resolution-heading";
+  resolutionHeading.textContent = "Resolution";
+  content.prepend(advanced, resolutionHeading);
 
   if (selectedHeight !== null) {
     const target = tracks.find((track) => track.height === selectedHeight);
@@ -552,7 +556,7 @@ function buildQualityMenu(ctx) {
 
 function trackLabel(track) {
   const fps = displayFrameRate(track.frameRate || currentMeta?.frameRate);
-  return `${track.height}p${fps ? ` \u00b7 ${fps} fps` : ""}`;
+  return `${track.height}p${fps}`;
 }
 
 function selectQuality(id, ctx) {
@@ -575,15 +579,21 @@ function selectQuality(id, ctx) {
     item.setAttribute("aria-pressed", String(parseInt(item.dataset.id, 10) === id));
   });
   persistPlayerPrefs();
-  settingsChanged(ctx);
+  if (id === -1) {
+    updateQualityLabel(ctx);
+  } else {
+    const autoBadge = document.getElementById("quality-auto-badge");
+    if (autoBadge) autoBadge.textContent = "";
+    settingsChanged(ctx);
+  }
 }
 
 function updateQualityLabel(ctx) {
   if (selectedQuality !== -1 || !player) return;
   const active = player.getVariantTracks().find((t) => t.active);
-  const label = active ? trackLabel(active) : null;
+  const label = active?.height ? trackLabel(active) : null;
   ctx.qualLabel.textContent = label ? `Auto · ${label}` : "Auto";
   const autoBadge = document.getElementById("quality-auto-badge");
-  if (autoBadge) autoBadge.textContent = label ?? "ABR";
+  if (autoBadge) autoBadge.textContent = label ?? "";
   settingsChanged(ctx);
 }

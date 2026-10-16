@@ -16,7 +16,6 @@ html:has(#player-wrap.is-mobile.menu-open) { overflow: hidden; }
 #player-wrap.is-mobile #progress-thumb { opacity: 1; }
 #player-wrap.is-mobile #time-tooltip { display: none; }
 #player-wrap.is-mobile #progress-wrap.scrubbing #time-tooltip { display: block; }
-#player-wrap.is-mobile.menu-open #big-play { opacity: 0; pointer-events: none; }
 #player-wrap.is-mobile .menu-backdrop { position: fixed; background: #0009; pointer-events: auto; }
 #player-wrap.is-mobile .player-settings {
   position: fixed;

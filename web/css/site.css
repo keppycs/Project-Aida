@@ -1,5 +1,8 @@
 *, *::before, *::after { box-sizing: border-box; }
 * { margin: 0; padding: 0; }
+/* Suppress native touch flashes on every hit target, including custom controls
+   and nested icon/text nodes. Keyboard focus keeps its explicit fill/ink below. */
+* { -webkit-tap-highlight-color: transparent; }
 :root {
   --accent: #e8ff47;
   --accent-dim: #b8cc2a;
@@ -31,7 +34,6 @@ html { background: var(--bg); color: var(--text); font-family: var(--font); over
 :where(textarea, select[multiple]) { scrollbar-gutter: stable; scrollbar-color: #747a83 var(--surface); }
 body { min-width: 0; min-height: 100vh; min-height: 100dvh; display: flex; flex-direction: column; background: var(--bg); line-height: 1.5; }
 button, input, select, textarea { font: inherit; }
-button, a { -webkit-tap-highlight-color: transparent; }
 a { color: inherit; }
 img { display: block; max-width: 100%; }
 button { color: inherit; }

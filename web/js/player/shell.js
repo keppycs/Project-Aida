@@ -2,10 +2,10 @@ import { getPlayerProfile, watchProfile, isMobileLayout } from "./capabilities.j
 import {
   initPlayback, applyCcSliderChange, setCcEnabled,
   loadPlayerPrefs, persistPlaybackPrefs, getPlaybackFrameRate,
-} from "./engine.js?v=motion-smooth-v13";
+} from "./engine.js?v=quality-labels-v26";
 import { getAutoHideDelayMs, getBigPlayState, shouldShowMenuBackdrop } from "./chrome.js?v=progress-hover-removed-v4";
 import { bindProgressInput, bindSurfaceInput } from "./input.js?v=volume-space-v23";
-import { createSettings } from "./settings.js?v=bottom-sheet-v15";
+import { createSettings } from "./settings.js?v=quality-sheet-v18";
 import { createFrameStepper } from "./frame-step.js?v=progress-hover-removed-v4";
 import { createSmoothPause } from "./smooth-pause.js?v=motion-smooth-v13";
 
@@ -249,11 +249,11 @@ export async function mountPlayer(meta, base) {
         bigPlay.setAttribute("aria-hidden", "true");
         return;
       }
-      const visible = !isAnyMenuOpen();
+      const interactive = !isAnyMenuOpen();
       bigPlay.classList.add("initial-play");
-      bigPlay.classList.toggle("show", visible);
-      bigPlay.tabIndex = visible ? 0 : -1;
-      bigPlay.setAttribute("aria-hidden", String(!visible));
+      bigPlay.classList.add("show");
+      bigPlay.tabIndex = interactive ? 0 : -1;
+      bigPlay.setAttribute("aria-hidden", String(!interactive));
       bigPlay.setAttribute("aria-label", "Play video");
       svg.innerHTML = BIG_PLAY_SVG_PLAY;
       return;
@@ -271,11 +271,11 @@ export async function mountPlayer(meta, base) {
       { paused: smoothPause.intendedPaused },
       wrap.classList.contains("ui-visible"),
     );
-    const visible = show && !isAnyMenuOpen();
-    if (!visible && document.activeElement === bigPlay) wrap.focus({ preventScroll: true });
-    bigPlay.classList.toggle("show", visible);
-    bigPlay.tabIndex = visible ? 0 : -1;
-    bigPlay.setAttribute("aria-hidden", String(!visible));
+    const interactive = show && !isAnyMenuOpen();
+    if (!interactive && document.activeElement === bigPlay) wrap.focus({ preventScroll: true });
+    bigPlay.classList.toggle("show", show);
+    bigPlay.tabIndex = interactive ? 0 : -1;
+    bigPlay.setAttribute("aria-hidden", String(!interactive));
     bigPlay.setAttribute("aria-label", showPause ? "Pause video" : "Play video");
     svg.innerHTML = showPause ? BIG_PLAY_SVG_PAUSE : BIG_PLAY_SVG_PLAY;
   }
