@@ -154,7 +154,7 @@ Tools opens a bounded phone sheet with the current writing chapter and one prima
 
 The active Stop action remains reachable from the reader and relevant tool surfaces. Idle tools do not leave a toolbar behind. Opening, switching, or dismissing a tool preserves the mounted manuscript, reading position, structural selection, and exact creative drafts. Drafts persist as they change, including the interval before asynchronous saves commit; save failure retains the live input and a direct recovery action.
 
-Stories opens the application session drawer, not a second project library. Each Story session still owns one project. Tool headers and actions keep fixed 44px targets, bodies scroll natively within the visual viewport, and keyboard/safe-area changes cannot hide the return or Stop control. Dark remains the reference appearance; System and Light use the same hierarchy through the shared semantic tokens.
+Stories opens the application session drawer, not a second Videos collection for the project. Each Story session still owns one project. Tool headers and actions keep fixed 44px targets, bodies scroll natively within the visual viewport, and keyboard/safe-area changes cannot hide the return or Stop control. Dark remains the reference appearance; System and Light use the same hierarchy through the shared semantic tokens.
 
 ### Generate
 

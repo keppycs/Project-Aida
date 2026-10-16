@@ -2,12 +2,12 @@
 
 > **Project Aida scope:** This is an imported Evoke reference. Aida's site and player keep their loud yellow accent (`#e8ff47`); Evoke's mint palette and product-specific branding do not apply. Follow [AGENTS.md](../AGENTS.md) for Aida's requirements.
 
-The [Characters library](CHARACTERS.md) is a sidebar destination with thumbnail
+The [Videos character collection](CHARACTERS.md) is a sidebar destination with thumbnail
 cards and a name/description editor. Text is pasted directly into Description.
 The embedded shared Gallery has masonry images, 1–3 columns, reference selection,
 and recoverable removal. Its viewer provides **Set as thumbnail**, **Qwen Edit**,
 and **Image details** alongside shared image controls. **Use reference** in Gallery
-controls reference eligibility for both character creation and Cast; library counts
+controls reference eligibility for both character creation and Cast; counts in Videos
 match checked images. Images are stored automatically, without a Save reference
 button. Cast exposes character enablement and preferred appearance, without an
 image-reference disclosure or counter. Create
@@ -69,9 +69,9 @@ The sidebar contains:
 
 Automatic chat titles show a 60-character opening preview of the writing or image request, using single-line whitespace and an ellipsis when longer. Blank chats retain their type label, and manually renamed chats keep their chosen title. Each row reserves two title lines and a separate 44px menu target; long text, including unbroken strings, clamps within that title area. Quiet type metadata sits below, with live status shown only when meaningful. Active rows have a subtle accent edge. Hover, focus, and opening the row menu never move neighboring rows.
 
-The normal sidebar preserves the current creative library. Main Settings is the same shared configuration on every connected device. New chats copy its current values at creation. There is no Admin PIN, profile switch, or browser-wide settings fork in the interface.
+The normal sidebar preserves the current creative Videos collection. Main Settings is the same shared configuration on every connected device. New chats copy its current values at creation. There is no Admin PIN, profile switch, or browser-wide settings fork in the interface.
 
-Library views, workflow editors, galleries, and other supporting surfaces open from the session or settings context that owns them. They do not become competing top-level “apps” unless a confirmed workflow cannot be reached coherently otherwise.
+Videos, workflow editors, galleries, and other supporting surfaces open from the session or settings context that owns them. They do not become competing top-level “apps” unless a confirmed workflow cannot be reached coherently otherwise.
 
 ### Session route
 
@@ -97,7 +97,7 @@ New session displays four cards: Roleplay, Story, Generate, and Iterate. Each ha
 
 ## 4. Session list behavior
 
-- Rows are virtualizable/searchable for large libraries without losing keyboard semantics.
+- Rows are virtualizable/searchable for large Videos collections without losing keyboard semantics.
 - Title is primary; type and status are secondary.
 - The selected row remains stable while status text changes.
 - Generating sessions update live without flashing or reordering under the pointer.
@@ -107,7 +107,7 @@ New session displays four cards: Roleplay, Story, Generate, and Iterate. Each ha
 
 ## 5. Startup and synchronization
 
-Evoke opens without authentication on every configured device. Global Settings is shared installation-wide; each device keeps its own chat library. Host/Origin and HTTPS checks remain. See [SETTINGS.md](SETTINGS.md).
+Evoke opens without authentication on every configured device. Global Settings is shared installation-wide; each device keeps its own Videos collection of chats. Host/Origin and HTTPS checks remain. See [SETTINGS.md](SETTINGS.md).
 
 The opening uses Evoke purple (#171426), without an icon tile or visible text. On Android, the native SplashScreen holds the transparent Evoke symbol on purple and follows the system launcher entry transition. Keep the native splash until the destination content, header controls, saved reading position and visible images are ready and WebView confirms its populated frame. Fade the native logo and purple surface away together over 120 ms, respecting system animation settings. Suppress the HTML splash and underlying page fade inside the APK so no second icon or partial page appears. Android/OnePlus controls icon-to-window expansion; physical-phone verification is required.
 
@@ -147,7 +147,7 @@ Every history motion suppresses the empty-editor example placeholder until the t
 
 ### Story reader and tools
 
-The default Story screen is the manuscript: exact chapter headings and prose below a single Stories/title/Tools row. Long titles truncate within their reserved header slot. There is no persistent metadata row, action dock, generation progress footer, version disclosure, or paragraph-selection chrome in the reader. A prose tap does not open editing or retarget generation. Stories opens the existing application session drawer, retaining the mounted Story and reading position; it never opens a nested project library.
+The default Story screen is the manuscript: exact chapter headings and prose below a single Stories/title/Tools row. Long titles truncate within their reserved header slot. There is no persistent metadata row, action dock, generation progress footer, version disclosure, or paragraph-selection chrome in the reader. A prose tap does not open editing or retarget generation. Stories opens the existing application session drawer, retaining the mounted Story and reading position; it never opens a nested Videos collection for the project.
 
 Tools is a temporary sheet over the reader. It identifies the current writing chapter and offers the one current Generate/Continue, Stop, Resume, or Retry action. Chapters, Edit & rewrite, Story setup, Images, and Settings & export lead to focused pages with explicit Back/Done controls. Chapters separates the reading destination from the writing target. The edit page makes chapter and paragraph scope explicit and contains the available history, rewrite, speech, image, and recoverable removal actions. Optional setup values use styled semantic disclosures; advanced settings stay out of the first-use idea field.
 
@@ -269,7 +269,7 @@ The Images group adds Auto image on Continue, dependent Auto video, Continue + i
 
 ## Import & export
 
-Settings includes a Backup jump link and a phone-width Import & export section. Export defaults to password encryption, with password/confirmation fields and no autofocus. Turning it off explicitly displays plaintext/credential exposure. Import chooses a file, requests a password only when necessary, then shows date/counts and existing-match behavior before its action. Busy controls stay in place; status uses a reserved region. Success offers Open imported library. Existing text fields are not replaced while reporting progress/errors. See [BACKUPS.md](BACKUPS.md).
+Settings includes a Backup jump link and a phone-width Import & export section. Export defaults to password encryption, with password/confirmation fields and no autofocus. Turning it off explicitly displays plaintext/credential exposure. Import chooses a file, requests a password only when necessary, then shows date/counts and existing-match behavior before its action. Busy controls stay in place; status uses a reserved region. Success offers Open imported Videos. Existing text fields are not replaced while reporting progress/errors. See [BACKUPS.md](BACKUPS.md).
 
 ### File-backed renderer selection
 

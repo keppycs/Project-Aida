@@ -1,6 +1,6 @@
 # Evoke v6 behavior specification
 
-Settings → Android app provides Install in the PWA and Update in supported APKs. The native page shows Current app and Current interface with separate update statuses and progress. Compatible signed interface bundles download in the background after a healthy boot and wait for the next cold process launch; checking, downloading and staging never reload active writing or generation. Signature, size/digest and native/bridge/storage compatibility checks precede staging, and failed readiness trials restore a healthy cached or included interface. An explicit Update Android app tap downloads and verifies a fixed-origin APK inside the app, including package/version and installed-signer checks, before Android's permission and installation confirmation. Older APKs keep the phone-browser fallback. Neither release checks nor interface downloads change Current app. Unavailable releases and failed downloads show retryable status. PWA and APK libraries stay separate; same-origin interface updates and in-place signed APK updates preserve the encrypted library. See [ANDROID.md](ANDROID.md).
+Settings → Android app provides Install in the PWA and Update in supported APKs. The native page shows Current app and Current interface with separate update statuses and progress. Compatible signed interface bundles download in the background after a healthy boot and wait for the next cold process launch; checking, downloading and staging never reload active writing or generation. Signature, size/digest and native/bridge/storage compatibility checks precede staging, and failed readiness trials restore a healthy cached or included interface. An explicit Update Android app tap downloads and verifies a fixed-origin APK inside the app, including package/version and installed-signer checks, before Android's permission and installation confirmation. Older APKs keep the phone-browser fallback. Neither release checks nor interface downloads change Current app. Unavailable releases and failed downloads show retryable status. PWA and APK Videos collections stay separate; same-origin interface updates and in-place signed APK updates preserve the encrypted Videos collection. See [ANDROID.md](ANDROID.md).
 
 Cast image requests honor the selected Hybrid, Monolithic, Essential, or Resolver prompt enhancement in the same Meromero vision call that selects references. They retain selected file-backed instructions, compatible presets, direction, visual defaults, and current scene context; Generate Bypass explicitly skips enhancement. Cast imposes no output-token cap or 32,000-character prepared-prompt limit. Provider context limits still apply.
 
@@ -8,20 +8,20 @@ The fixed model `meromero` prepares Cast scene images with reasoning **Off**, fo
 
 Qwen image rendering uses 15 steps. Reference edits and the Qwen stage of Krea + Qwen use image 1's dimensions, with Qwen's native 32-pixel rounding and no 1 MP resize. Qwen-only Cast scenes use the selected aspect ratio and MP independently of reference dimensions. Krea keeps its existing sizing; vision-planning previews remain smaller.
 
-Reusable characters follow [CHARACTERS.md](CHARACTERS.md): a browser-local library,
+Reusable characters follow [CHARACTERS.md](CHARACTERS.md): a browser-local Videos collection,
 explicit per-chat cast and look selection, Qwen reference generation/refinement,
 and an optional report-only consistency check. A matching name never enables a
-library character automatically. Enabled descriptions inform writing; selected
+character from Videos automatically. Enabled descriptions inform writing; selected
 references inform character-aware images. Cards use the shared Gallery; a chosen
 thumbnail persists, with available references/candidates as a fallback. Qwen Edit
 uses the viewed image and description, preserving originals and reference
-selection. Gallery's **Use reference** checkboxes determine library reference counts
+selection. Gallery's **Use reference** checkboxes determine Videos reference counts
 and the Cast reference inputs across appearance groups. Cast has no separate
 reference selector or counter; legacy per-chat subsets no longer filter images. All images persist
 automatically, including unchecked candidates, without a separate Save reference
 action. Description accepts pasted text. Existing chat modes remain unchanged.
 
-The character library sorts by A → Z, Z → A, Newest first, Oldest first, or Last
+The Videos character collection sorts by A → Z, Z → A, Newest first, Oldest first, or Last
 edited. Its device-local choice persists through navigation and reload; sorting
 does not modify cards. Legacy creation order uses the earliest recorded edit date.
 
@@ -62,12 +62,12 @@ The word **must** identifies confirmed product behavior. Unsettled behavior is r
 - A fresh page paints a stable generic Evoke surface immediately. The complete destination fades in once its content, controls, saved reading position, and visible media are ready. Partial shells and intermediate loading stages remain covered; no artificial minimum loading delay is added. The webpage cover has no logo, so it does not repeat Chrome’s PWA launch icon.
 - Opening never focuses an editable field or deliberately opens the keyboard. Backgrounding clears editable focus without clearing text or selection, and a preserved page resumes without replaying its opening animation.
 - Repeat launches use locally saved configuration and read the current last-used chat directly from the device store (APK encrypted native vault; PWA IndexedDB). Server refresh runs in the background without remounting the editor. A first launch without saved configuration retries automatically when disconnected.
-- Android uses a bundled interface and a purple native opening with the transparent symbol. The whole splash fades over 120 ms when the populated page and WebView frame are ready. A preserved activity resumes without reloading; process loss restores current local state. Chrome and APK storage are separate; Settings → Backup transfers the library explicitly, with password encryption on by default and additive import preview. See [BACKUPS.md](BACKUPS.md).
+- Android uses a bundled interface and a purple native opening with the transparent symbol. The whole splash fades over 120 ms when the populated page and WebView frame are ready. A preserved activity resumes without reloading; process loss restores current local state. Chrome and APK storage are separate; Settings → Backup transfers the Videos collection explicitly, with password encryption on by default and additive import preview. See [BACKUPS.md](BACKUPS.md).
 - Returning to a suspended PWA keeps the existing editor, draft queue, selection, and reading position. Updates download quietly and apply on a later full launch; update discovery never forces the current page to reload.
 - Connected clients receive committed changes live. When continuity is uncertain, the client reacquires current authoritative state instead of guessing.
 - Backend loss pauses provider execution; chat content and settings remain editable on the device.
 
-- The normal app retains each existing creative library. There is no Admin PIN or profile switch in the interface; devices can use the same main Settings.
+- The normal app retains each existing Videos collection of creative work. There is no Admin PIN or profile switch in the interface; devices can use the same main Settings.
 - On every boot, main Settings comes from current shared configuration. Every new chat fetches and saves an independent copy of the settings at creation. Existing chats retain their own values and copied resources, including former browser-specific configuration.
 
 ### Browser-backed app
@@ -76,7 +76,7 @@ Main settings edits apply globally to the installation and become defaults for s
 
 - Local creative records, retained assets, and copied configuration persist in this installation's device store (APK encrypted native vault; PWA IndexedDB).
 - The backend receives local creative payloads only for the requested service operation, keeps them in process memory under a opaque lease retained while it holds jobs, and never writes them to Evoke's SQLite or asset store.
-- Reload/navigation may reconnect to an in-memory lease while the backend remains alive. An actual backend restart loses uncollected memory results; browser storage loss and another device cannot recover the local library. Closing the app does not stop an accepted Generate/Iterate batch or Roleplay/Story image, including while its prompt is being prepared. Job-bearing leases do not expire while the browser is away; empty leases expire after 30 minutes.
+- Reload/navigation may reconnect to an in-memory lease while the backend remains alive. An actual backend restart loses uncollected memory results; browser storage loss and another device cannot recover the local Videos collection. Closing the app does not stop an accepted Generate/Iterate batch or Roleplay/Story image, including while its prompt is being prepared. Job-bearing leases do not expire while the browser is away; empty leases expire after 30 minutes.
 - Local ComfyUI runs use verified WebSocket-only image output. Workflows containing SaveImage, PreviewImage, unknown output nodes, or any unverifiable disk-writing path fail before queueing. No fallback exists.
 - After terminal handling Evoke removes that prompt's ComfyUI history entry. A provider or custom node outside Evoke's verified contract may retain its own data; Evoke never labels such a workflow Local-compatible.
 
@@ -240,7 +240,7 @@ The model is never shown text it must not touch. When the final prose paragraph 
 
 ### Reading and tools
 
-Story opens as a continuous reader with a compact Stories/title/Tools header. Chapter headings and exact prose own the screen; editing, setup, chapter navigation, images, settings, export, and history live in focused tool surfaces instead of a permanent dock. Stories opens the existing application session drawer. Each Story session owns exactly one project; there is no nested project library.
+Story opens as a continuous reader with a compact Stories/title/Tools header. Chapter headings and exact prose own the screen; editing, setup, chapter navigation, images, settings, export, and history live in focused tool surfaces instead of a permanent dock. Stories opens the existing application session drawer. Each Story session owns exactly one project; there is no nested Videos collection for the project.
 
 Reading position and generation target are independent. Scrolling, opening a chapter to read, and opening tools do not retarget generation. Tools names the current writing chapter; changing that target requires explicit intent. Passage actions name their chapter/paragraph scope. Stop remains reachable while generation is active, including after dismissing Tools. Returning to reading preserves the mounted manuscript, exact text, and reading position without focusing an editor.
 
@@ -333,7 +333,7 @@ Roleplay and Story ordinary/Cast images and manual/automatic videos return to th
 
 The backend waits for active GPU leases to drain, releases the actual ComfyUI endpoints used by the chain, and warms a shared lifecycle-managed writing host with one reasoning-off token. New work can supersede optional warmup; queued media takes priority. Warmup failure cannot remove saved media or change the generation outcome. Independent writing hosts and unmanaged Gemma services receive no readiness call; legacy accepted requests without a writing target cannot reconstruct it. Generate and Iterate retain their existing behavior, including video renderer release without a writing return. If new image work cancels pending renderer cleanup, the next image lease performs the release before rendering.
 
-Evoke opens without authentication on every configured device. Global Settings is shared installation-wide; each device keeps its own chat library. Host/Origin and HTTPS checks remain. See [SETTINGS.md](SETTINGS.md).
+Evoke opens without authentication on every configured device. Global Settings is shared installation-wide; each device keeps its own Videos collection of chats. Host/Origin and HTTPS checks remain. See [SETTINGS.md](SETTINGS.md).
 
 The installed PWA opens from its cached shell and saved configuration while reading current creative state from IndexedDB. Local edits remain available without the backend; provider operations and Global saves require connectivity. Configuration refresh never replaces mounted writing. Conflicting newer content never silently overwrites dirty local work, and local edits never silently win.
 
