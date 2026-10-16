@@ -6,8 +6,8 @@
 }
 
 #player-wrap {
-  --accent: #c7ebdb;
-  --accent-dim: #9cbdae;
+  --accent: #e8ff47;
+  --accent-dim: #b8cc2a;
   --surface: #1b1d20;
   --surface2: #282b2f;
   --text: #fafafa;
@@ -253,8 +253,11 @@
 }
 #vol-slider::-webkit-slider-runnable-track,
 .cc-slider::-webkit-slider-runnable-track { height: 3px; border-radius: 3px; background: #ffffff50; }
+/* The filled track follows the displayed volume in both pointer and keyboard states. */
+#vol-slider::-webkit-slider-runnable-track { background: linear-gradient(to right, var(--accent) var(--volume-fill, 50%), #ffffff50 var(--volume-fill, 50%)); }
 #vol-slider::-moz-range-track,
 .cc-slider::-moz-range-track { height: 3px; border-radius: 3px; background: #ffffff50; }
+#vol-slider::-moz-range-progress { height: 3px; border-radius: 3px; background: var(--accent); }
 #vol-slider::-webkit-slider-thumb,
 .cc-slider::-webkit-slider-thumb {
   appearance: none;
@@ -373,7 +376,7 @@
   cursor: pointer;
   transition: background-color 150ms, border-color 150ms, color 150ms;
 }
-.menu-toggle.active { background: #c7ebdb15; color: var(--accent); }
+.menu-toggle.active { background: #e8ff4715; color: var(--accent); }
 .menu-toggle.disabled,
 .menu-toggle:disabled { opacity: .35; cursor: not-allowed; }
 .cc-sliders { display: flex; flex-direction: column; gap: 4px; padding: 0 16px 8px !important; }
@@ -446,8 +449,8 @@
 #big-play:focus-visible > svg > circle { fill: transparent; }
 #player-wrap :is(button, input, summary, [role="slider"]):focus { outline: none; }
 #progress-wrap:focus-visible #progress-track { background: #ffffff8c; }
-#player-wrap input[type="range"]:focus-visible::-webkit-slider-runnable-track { background: var(--accent); }
-#player-wrap input[type="range"]:focus-visible::-moz-range-track { background: var(--accent); }
+#player-wrap input[type="range"]:not(#vol-slider):focus-visible::-webkit-slider-runnable-track { background: var(--accent); }
+#player-wrap input[type="range"]:not(#vol-slider):focus-visible::-moz-range-track { background: var(--accent); }
 #player-wrap input[type="range"]:focus-visible::-webkit-slider-thumb { background: var(--accent); }
 #player-wrap input[type="range"]:focus-visible::-moz-range-thumb { background: var(--accent); }
 @media (max-width: 600px) {

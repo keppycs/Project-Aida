@@ -7,6 +7,7 @@ import { startPlayerPreview } from "./support/player-preview.mjs";
 const require = createRequire(import.meta.url);
 const runtime = "C:/Users/keppy/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/playwright";
 const { chromium } = require(process.env.AIDA_PLAYWRIGHT_MODULE || runtime);
+const sharp = require(process.env.AIDA_SHARP_MODULE || resolve(runtime, "../sharp"));
 const executablePath = process.env.AIDA_BROWSER_EXECUTABLE || "C:/Users/keppy/AppData/Local/Temp/codex-work/aida-player-review-1792104966336/browser/chromium-1234/chrome-win64/chrome.exe";
 const browserRoot = resolve(dirname(executablePath), "../..");
 const artifacts = process.env.AIDA_REVIEW_DIR || `C:/Users/keppy/AppData/Local/Temp/codex-work/aida-player-focus-${Date.now()}`;
@@ -81,6 +82,197 @@ async function visibleKeyboardFocus(page, selector) {
   return { selector, baseline, focus };
 }
 
+async function spaceTransport(page, name, { repeat = false } = {}) {
+  await page.evaluate(() => {
+    const video = document.querySelector("video");
+    window.__spaceReview = { play: 0, pause: 0, clicks: 0 };
+    if (window.__spaceReviewBound) return;
+    window.__spaceReviewBound = true;
+    video.addEventListener("play", () => window.__spaceReview.play++);
+    video.addEventListener("pause", () => window.__spaceReview.pause++);
+    document.querySelector("#player-wrap").addEventListener("click", () => window.__spaceReview.clicks++, true);
+  });
+  const read = () => page.evaluate(() => {
+    const video = document.querySelector("video"), panel = document.querySelector("#settings-panel");
+    return { paused: video.paused, time: video.currentTime, volume: video.volume, muted: video.muted,
+      focused: document.activeElement.id, page: panel.dataset.page, menuHidden: panel.hidden,
+      speed: document.querySelector("#speed-label").textContent, ...window.__spaceReview };
+  });
+  const before = await read();
+  assert.equal(before.paused, true, `${name}: Space review must start paused`);
+  await page.keyboard.down("Space");
+  await page.waitForFunction(() => !document.querySelector("video").paused);
+  if (repeat) {
+    await page.keyboard.down("Space");
+    await page.keyboard.down("Space");
+    await page.waitForTimeout(100);
+    const held = await read();
+    assert.equal(held.paused, false, `${name}: repeated keydown must not toggle again`);
+    assert.equal(held.play, 1);
+    assert.equal(held.pause, 0);
+  }
+  await page.keyboard.up("Space");
+  await page.waitForTimeout(100);
+  const released = await read();
+  assert.equal(released.paused, false, `${name}: Space keyup must not trigger a second action`);
+  assert.equal(released.play, 1);
+  assert.equal(released.pause, 0);
+  assert.equal(released.clicks, 0, `${name}: Space must not synthesize a native control click`);
+  await page.keyboard.press("Space");
+  await page.waitForFunction(() => document.querySelector("video").paused && window.__spaceReview.pause === 1);
+  const after = await read();
+  assert.equal(after.play, 1);
+  assert.equal(after.pause, 1, `${name}: a second physical press must pause exactly once`);
+  assert.equal(after.clicks, 0);
+  for (const key of ["volume", "muted", "focused", "page", "menuHidden", "speed"]) {
+    assert.equal(after[key], before[key], `${name}: Space changed ${key}`);
+  }
+  assert.ok(after.time >= before.time && after.time < before.time + 2, `${name}: Space must only advance normal playback`);
+  return { name, repeat, before, released, after };
+}
+
+async function volumeRangeFeedback(page) {
+  const slider = page.locator("#vol-slider");
+  const baseline = await slider.evaluate(decoration);
+  const read = () => slider.evaluate(element => {
+    const video = document.querySelector("video");
+    return { value: Number(element.value), volume: video.volume, muted: video.muted, paused: video.paused,
+      time: video.currentTime, focused: document.activeElement === element, visible: element.matches(":focus-visible"),
+      prefs: JSON.parse(localStorage.getItem("aida-player-prefs")) };
+  });
+  const yellow = pixel => [232, 255, 71].every((channel, index) => Math.abs(pixel[index] - channel) <= 3);
+  const captures = [];
+  const painted = async name => {
+    const state = await read();
+    const file = `${artifacts}/desktop-volume-${name}.png`;
+    const png = await slider.screenshot({ path: file });
+    const { data, info } = await sharp(png).removeAlpha().raw().toBuffer({ resolveWithObject: true });
+    const pixel = (x, y = Math.floor(info.height / 2)) => [...data.subarray((y * info.width + x) * info.channels, (y * info.width + x) * info.channels + 3)];
+    // Native range thumbs move across the track's width minus their 12px diameter.
+    // Inspect the painted pixels because Chromium does not reliably expose native
+    // range pseudo-element colors through getComputedStyle.
+    const thumbX = Math.round(6 + (info.width - 12) * state.value);
+    const thumb = pixel(thumbX);
+    if (state.visible) assert.ok(yellow(thumb), `${name}: keyboard focus must visibly fill the thumb yellow`);
+    else assert.ok(thumb.every(channel => channel >= 250), `${name}: pointer thumb must stay white`);
+    const filled = state.value >= .2 ? pixel(4) : null;
+    if (filled) assert.ok(yellow(filled), `${name}: used volume track must paint Aida yellow`);
+    const unused = state.value <= .8 ? pixel(info.width - 5) : null;
+    if (unused) {
+      assert.equal(yellow(unused), false, `${name}: unused volume track must never turn yellow`);
+      assert.ok(Math.max(...unused) >= 40, `${name}: unused track must remain painted (${unused.join(", ")})`);
+    }
+    const actual = await slider.evaluate(decoration);
+    assert.ok(actual.outlineStyle === "none" || actual.outlineWidth === 0, `${name}: volume range has an outline`);
+    assert.deepEqual(actual.border, baseline.border, `${name}: volume range changed its perimeter border`);
+    assert.equal(actual.boxShadow, baseline.boxShadow, `${name}: volume range added a perimeter shadow`);
+    captures.push({ name, file, state, thumb, filled, unused });
+    return captures.at(-1);
+  };
+  const unchangedPlayback = (actual, expected, action) => {
+    assert.equal(actual.paused, expected.paused, `${action}: range input must not toggle playback`);
+    assert.equal(actual.time, expected.time, `${action}: range input must not seek the video`);
+  };
+
+  const saved = await read();
+  assert.equal(saved.value, .6, "saved volume must initialize the range");
+  assert.equal(saved.volume, .6);
+  assert.equal(saved.muted, false);
+  assert.equal(saved.paused, true);
+  await painted("saved");
+  const box = await slider.boundingBox();
+  await page.mouse.click(box.x + box.width * .35, box.y + box.height / 2);
+  const pointer = await painted("pointer");
+  assert.equal(pointer.state.focused, true, "pointer activation must leave the native range focused");
+  assert.equal(pointer.state.visible, false);
+  assert.ok(pointer.state.value > .25 && pointer.state.value < .45);
+  assert.equal(pointer.state.volume, pointer.state.value);
+  assert.equal(pointer.state.prefs.volume, pointer.state.value);
+  unchangedPlayback(pointer.state, saved, "pointer volume");
+
+  const space = await spaceTransport(page, "volume range", { repeat: true });
+  const keyboard = await painted("keyboard");
+  assert.equal(keyboard.state.focused, true, "Space must not blur the volume range");
+  assert.equal(keyboard.state.visible, true);
+  assert.equal(keyboard.state.value, pointer.state.value, "Space must not change the selected volume");
+  assert.equal(keyboard.state.volume, pointer.state.volume);
+  assert.equal(keyboard.state.muted, pointer.state.muted);
+  assert.deepEqual(keyboard.filled, pointer.filled, "Space must preserve the used track's color");
+  assert.equal(keyboard.state.paused, true);
+  await page.screenshot({ path: `${artifacts}/desktop-volume-keyboard-page.png` });
+
+  for (const [key, expected] of [["ArrowRight", pointer.state.value + .01], ["ArrowLeft", pointer.state.value], ["Home", 0], ["End", 1]]) {
+    await page.keyboard.press(key);
+    const state = await read();
+    assert.ok(Math.abs(state.value - expected) < .00001, `${key}: native volume range must select ${expected}`);
+    assert.equal(state.volume, state.value);
+    assert.equal(state.prefs.volume, state.value);
+    assert.equal(state.muted, state.value === 0);
+    assert.equal(state.focused, true);
+    unchangedPlayback(state, keyboard.state, `${key} on volume`);
+    await painted(key.toLowerCase());
+  }
+
+  await page.mouse.click(box.x + box.width * .35, box.y + box.height / 2);
+  const audible = await read();
+  await page.locator("#mute-btn").click();
+  const muted = await painted("muted");
+  assert.equal(muted.state.value, 0);
+  assert.equal(muted.state.muted, true);
+  assert.equal(muted.state.volume, audible.volume, "muting must preserve the selected volume");
+  assert.equal(muted.state.prefs.volume, audible.volume);
+  await page.locator("#mute-btn").click();
+  const restored = await painted("restored");
+  assert.equal(restored.state.value, audible.value, "unmute must restore the selected volume and fill");
+  assert.equal(restored.state.muted, false);
+  assert.equal(restored.state.prefs.volume, audible.volume);
+  unchangedPlayback(restored.state, keyboard.state, "mute/unmute");
+
+  // Keep the surrounding focus review's saved playback state independent of this case.
+  await slider.evaluate((element, saved) => {
+    element.value = saved.volume;
+    element.dispatchEvent(new Event("input", { bubbles: true }));
+    document.querySelector("video").muted = saved.muted;
+  }, saved);
+  console.log("PASS desktop volume: painted partial fill, pointer then Space, native range keys, mute/restore, saved preferences");
+  return { captures, space };
+}
+
+async function spaceControlFeedback(page) {
+  const cases = [];
+  const savedMuted = await page.locator("video").evaluate(video => video.muted);
+  await page.locator("#mute-btn").click();
+  cases.push(await spaceTransport(page, "mute button"));
+  await page.locator("#settings-btn").focus();
+  cases.push(await spaceTransport(page, "closed Settings trigger"));
+  await page.locator("#settings-btn").click();
+  await page.waitForFunction(() => document.querySelector("#settings-panel").dataset.phase === "open");
+  cases.push(await spaceTransport(page, "open Settings heading"));
+  await page.locator("#settings-btn").focus();
+  cases.push(await spaceTransport(page, "open Settings trigger"));
+  await page.locator("#speed-btn").click();
+  await page.waitForFunction(() => document.querySelector("#settings-panel").dataset.phase === "open"
+    && document.querySelector("#settings-panel").dataset.page === "speed");
+  await page.locator('#speed-menu [data-speed="1.5"]').focus();
+  cases.push(await spaceTransport(page, "Settings speed option"));
+  await page.keyboard.press("Escape");
+  await page.waitForFunction(() => document.querySelector("#settings-panel").hidden);
+  await page.locator("#mute-btn").click();
+  const timeline = await page.locator("#progress-wrap").boundingBox();
+  await page.mouse.click(timeline.x + timeline.width * .3, timeline.y + timeline.height / 2);
+  await page.waitForFunction(() => !document.querySelector("video").seeking);
+  assert.equal(await page.evaluate(() => document.activeElement.id), "progress-wrap", "pointer seeking must focus its actual control");
+  cases.push(await spaceTransport(page, "timeline seek after mute control"));
+  await page.locator(".back-link").focus();
+  await page.mouse.click(timeline.x + timeline.width * .4, timeline.y + timeline.height / 2);
+  await page.waitForFunction(() => !document.querySelector("video").seeking);
+  assert.equal(await page.evaluate(() => document.activeElement.id), "progress-wrap", "seeking must replace stale focus outside the player");
+  cases.push(await spaceTransport(page, "timeline seek after page link focus"));
+  if (await page.locator("video").evaluate(video => video.muted) !== savedMuted) await page.locator("#mute-btn").click();
+  console.log("PASS desktop Space: focused mute, Settings trigger, menu option, seek after control, no native click or repeat toggles");
+  return cases;
+}
+
 try {
   for (const [label, viewport, touch] of [["desktop", { width: 1440, height: 1000 }, false], ["mobile", { width: 424, height: 900 }, true]]) {
     const context = await browser.newContext({ viewport, hasTouch: touch, isMobile: touch });
@@ -91,10 +283,11 @@ try {
     await context.route("**/eruda@*/**", route => route.abort());
     await context.route("https://fonts.googleapis.com/**", route => route.abort());
     await context.route("https://fonts.gstatic.com/**", route => route.abort());
-    await context.addInitScript(() => {
-      localStorage.setItem("aida-player-prefs", JSON.stringify({ codec: "AV1", protocol: "DASH", quality: 360, muted: true }));
+    await context.addInitScript(touch => {
+      localStorage.setItem("aida-player-prefs", JSON.stringify({ codec: "AV1", protocol: "DASH", quality: 360,
+        ...(touch ? { muted: true } : { volume: .6, muted: false }) }));
       localStorage.setItem("aida-cc-banner-dismissed", "1");
-    });
+    }, touch);
     try {
       await page.goto(preview.url, { waitUntil: "domcontentloaded" });
       await page.waitForFunction(() => document.querySelector("#watch-status").hidden && !document.querySelector("#player-wrap").inert && document.querySelector("video").readyState >= 2 && !document.querySelector("#spinner").classList.contains("show"), null, { timeout: 45000 });
@@ -147,6 +340,9 @@ try {
         await page.waitForFunction(() => document.querySelector("video").paused);
       } else assert.equal(await page.locator("video").evaluate(video => video.paused), true);
       await wrapperCheck(page, baseline, "surface pointer focus");
+
+      const volumeRange = touch ? null : await volumeRangeFeedback(page);
+      const spaceControls = touch ? null : await spaceControlFeedback(page);
 
       await page.keyboard.press("Tab");
       await page.locator("#player-wrap").focus();
@@ -205,7 +401,7 @@ try {
       focusedControls.push(await visibleKeyboardFocus(page, "#search-input"));
       await page.screenshot({ path: `${artifacts}/${label}-search-focus.png` });
       assert.deepEqual(errors, []);
-      results.push({ label, passed: true, fullscreen, forward, focusedControls, errors });
+      results.push({ label, passed: true, fullscreen, forward, focusedControls, volumeRange, spaceControls, errors });
       console.log(`PASS ${label}: wrapper focus, controls, keyboard, settings, frame stepping; fullscreen ${fullscreen}`);
     } catch (error) {
       await page.screenshot({ path: `${artifacts}/${label}-failure.png` }).catch(() => {});
