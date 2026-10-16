@@ -108,7 +108,7 @@ On **any other host** (localhost, LAN, preview), add **`&local=1`** to the watch
 
 Player interaction checks live in `tests/player-*.browser.mjs`. Settings motion has a traced layout budget and native touch interruption checks in `tests/player-settings-performance.browser.mjs`; Smooth Pause has unit and browser checks. Use the local preview and review the UI before publishing.
 
-The library and watch page share neutral surfaces, system fonts and native scrollbars with reserved gutters. Search filters the collection without removing the featured content above the search field, and the query stays in the URL. Local previews load the optional mobile debug console only with `&debug=1`.
+The videos page and watch page share neutral surfaces, system fonts and native scrollbars with reserved gutters. Search filters the collection without removing the featured content above the search field, and the query stays in the URL. Local previews load the optional mobile debug console only with `&debug=1`.
 
 Run `node tests/site-ux.browser.mjs` for shared UI changes. It checks real classic/overlay scrollbar modes, loading/search/empty/error states, short and long pages, player Settings overflow, enlarged text, touch targets and native scrolling. `AIDA_PLAYWRIGHT_MODULE`, `AIDA_BROWSER_EXECUTABLE` and `AIDA_REVIEW_DIR` can select the test runtime, browser and artifact directory. Keep `tests/player-focus.browser.mjs` and the player motion tests alongside this check.
 
@@ -132,7 +132,7 @@ Animated GIF/AVIF previews depend on the receiving app, so the social card uses 
 
 **Activate on Cloudflare:**
 
-1. Keep the static site on GitHub Pages using the `web/` workflow above and deploy the Worker below. It supports both the original player-only watch page and the newer library layout. Run the updated local pipeline for future uploads. No push, upload or deployment happens when running the tests below.
+1. Keep the static site on GitHub Pages using the `web/` workflow above and deploy the Worker below. It supports both the original player-only watch page and the newer videos page layout. Run the updated local pipeline for future uploads. No push, upload or deployment happens when running the tests below.
 2. In Cloudflare DNS, verify that the website's `keppy.dev` and `www` records are **Proxied** (orange cloud). This is separate from the `cdn.keppy.dev` record. Keep the existing GitHub Pages origin.
 3. Create a JavaScript Worker named `aida-share-previews` and paste `edge/share-worker.mjs` into its editor. It has no npm dependencies or secrets. Deploy it, disable its public `workers.dev` URL, and add these Routes under **Settings → Domains & Routes** for the `keppy.dev` zone:
    - `keppy.dev/watch*`, `keppy.dev/embed*`, `keppy.dev/oembed*`, `keppy.dev/preview-image*`
@@ -165,7 +165,7 @@ New encodes put descriptions in per-video metadata. For older videos, `py src/sy
 
 Watch pages advertise a JSON [oEmbed](https://oembed.com/) endpoint at `/oembed?url=ENCODED_WATCH_URL&format=json`, including optional `maxwidth` / `maxheight` constraints. It returns iframe markup for public/unlisted videos and rejects other hosts or private videos. oEmbed consumers discover the player from the watch page; whether a messaging platform actually plays it inline is that platform's decision. There is no direct MP4 or alternative frame-rate encode added for social players.
 
-**Local checks** (Node.js and Python standard library only):
+**Local checks** (Node.js and Python built-in modules only):
 
 ```powershell
 node --test tests/share-worker.test.mjs
