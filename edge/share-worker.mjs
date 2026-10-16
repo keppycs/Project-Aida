@@ -3,7 +3,6 @@ const SITE = "https://keppy.dev";
 const CDN = "https://cdn.keppy.dev/file/ProjectAida";
 const WATCH_PATHS = new Set(["/watch", "/watch.html"]);
 const VIDEO_ID = /^[A-Za-z0-9_-]{1,128}$/;
-const DEFAULT_DESCRIPTION = "Watch Keppy's videos in 120 fps on Aida.";
 
 export function escapeHtml(value) {
   return String(value).replace(/[&<>"']/g, (char) => ({
@@ -107,12 +106,72 @@ async function findImage(id, fetcher) {
   return null;
 }
 
-function shareData(id, meta, image, origin) {
+function positiveNumber(value) {
+  if (typeof value !== "number" && (typeof value !== "string" || !value.trim())) return null;
+  const number = Number(value);
+  return Number.isFinite(number) && number > 0 ? number : null;
+}
+
+function frameRate(value) {
+  const parts = value.split("/");
+  if (parts.length > 2) return null;
+  const numerator = positiveNumber(parts[0]);
+  const denominator = parts.length === 2 ? positiveNumber(parts[1]) : 1;
+  const rate = numerator && denominator ? numerator / denominator : null;
+  return Number.isFinite(rate) && rate > 0 ? rate : null;
+}
+
+function manifestRenditions(manifest) {
+  if (!/<(?:[\w.-]+:)?MPD\b/.test(manifest) || !/<\/(?:[\w.-]+:)?MPD\s*>/.test(manifest)) return [];
+  const renditions = [];
+  for (const adaptation of manifest.matchAll(/<(?:[\w.-]+:)?AdaptationSet\b([^>]*)>([\s\S]*?)<\/(?:[\w.-]+:)?AdaptationSet\s*>/g)) {
+    const adaptationTag = `<AdaptationSet ${adaptation[1]}>`;
+    for (const representation of adaptation[2].matchAll(/<(?:[\w.-]+:)?Representation\b([^>]*)>/g)) {
+      const type = attribute(representation[0], "contentType") || attribute(adaptationTag, "contentType");
+      const mime = attribute(representation[0], "mimeType") || attribute(adaptationTag, "mimeType");
+      if ((type && type !== "video") || (mime && !mime.startsWith("video/")) || (type !== "video" && !mime.startsWith("video/"))) continue;
+      const height = positiveNumber(attribute(representation[0], "height") || attribute(adaptationTag, "height"));
+      if (!Number.isSafeInteger(height)) continue;
+      const rate = frameRate(attribute(representation[0], "frameRate") || attribute(adaptationTag, "frameRate"));
+      // Retain a maximum-height rendition even when its rate is unavailable:
+      // a valid lower tier must never be advertised as the highest resolution.
+      renditions.push({ height, rate });
+    }
+  }
+  return renditions;
+}
+
+async function playbackSummary(id, meta, fetcher) {
+  const duration = positiveNumber(meta.duration);
+  if (duration === null || !Number.isSafeInteger(Math.floor(duration))) return null;
+  const codecs = [...new Set(Array.isArray(meta.codecs) ? meta.codecs.filter(codec => ["AV1", "HEVC"].includes(codec)) : [])];
+  const renditions = (await Promise.all(codecs.map(async codec => {
+    try {
+      return await timedFetch(fetcher, `${CDN}/${id}/${codec}/manifest.mpd`, {
+        headers: { Accept: "application/dash+xml", "Cache-Control": "no-cache" },
+        cache: "no-store", redirect: "manual",
+      }, async response => response.ok ? manifestRenditions(await boundedText(response, 256000)) : []);
+    } catch { return []; }
+  }))).flat();
+  const height = Math.max(0, ...renditions.map(rendition => rendition.height));
+  const rates = renditions.filter(rendition => rendition.height === height && rendition.rate !== null).map(rendition => rendition.rate);
+  if (!height || !rates.length) return null;
+  const rate = Number(Math.max(...rates).toFixed(3));
+  if (!rate) return null;
+  const total = Math.floor(duration);
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const seconds = String(total % 60).padStart(2, "0");
+  const length = hours ? `${hours}:${String(minutes).padStart(2, "0")}:${seconds}` : `${minutes}:${seconds}`;
+  return `${height}p${rate} • ${length}`;
+}
+
+function shareData(id, meta, image, origin, description) {
   return {
     id, image: image ? { url: `${origin}/preview-image?v=${encodeURIComponent(id)}`, type: image.type } : null,
     url: watchUrl(id, origin), player: embedUrl(id, origin),
     title: text(meta.title, "Untitled video", 200),
-    description: text(meta.description, DEFAULT_DESCRIPTION, 300),
+    description,
   };
 }
 
@@ -123,15 +182,17 @@ function metaTag(key, value, attribute = "property") {
 export function renderShareHead(data, { embed = false } = {}) {
   const tags = [
     `<title>${escapeHtml(data ? `${data.title} · Aida` : "Watch · Aida")}</title>`,
-    metaTag("description", data?.description || DEFAULT_DESCRIPTION, "name"),
     metaTag("og:site_name", "Aida"),
     metaTag("og:title", data?.title || "Aida"),
-    metaTag("og:description", data?.description || DEFAULT_DESCRIPTION),
     metaTag("og:type", data ? "video.other" : "website"),
     metaTag("twitter:card", data?.image ? "summary_large_image" : "summary", "name"),
     metaTag("twitter:title", data?.title || "Aida", "name"),
-    metaTag("twitter:description", data?.description || DEFAULT_DESCRIPTION, "name"),
   ];
+  if (data?.description) tags.push(
+    metaTag("description", data.description, "name"),
+    metaTag("og:description", data.description),
+    metaTag("twitter:description", data.description, "name"),
+  );
   if (data) {
     tags.push(`<link rel="canonical" href="${escapeHtml(data.url)}" />`, metaTag("og:url", data.url));
     if (data.image) {
@@ -230,7 +291,10 @@ async function routeRequest(request, env, fetcher) {
 
   const video = await readVideo(id, fetcher);
   if (video.status !== 200 && (embed || oembed || imageRoute)) return errorResponse(video.status, oembed);
-  const image = video.meta && !oembed ? await findImage(id, fetcher) : null;
+  const [image, description] = video.meta && !oembed ? await Promise.all([
+    findImage(id, fetcher),
+    imageRoute ? null : playbackSummary(id, video.meta, fetcher),
+  ]) : [null, null];
   if (imageRoute) {
     if (!image) return errorResponse(404);
     try {
@@ -244,7 +308,7 @@ async function routeRequest(request, env, fetcher) {
       } });
     } catch { return errorResponse(503); }
   }
-  const data = video.meta ? shareData(id, video.meta, image, origin) : null;
+  const data = video.meta ? shareData(id, video.meta, image, origin, description) : null;
   if (oembed) {
     const body = {
       version: "1.0", type: "video", provider_name: "Aida", provider_url: origin,
