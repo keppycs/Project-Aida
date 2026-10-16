@@ -1,11 +1,12 @@
-import { getPlayerProfile, watchProfile, isMobileLayout } from "./capabilities.js?v=prechat-20261016-dd37ee5";
+import { getPlayerProfile, watchProfile, isMobileLayout } from "./capabilities.js?v=progress-hover-removed-v4";
 import {
-  initPlayback, applyCcSliderChange, setCcEnabled, markCcBannerMenuUsed,
-  loadPlayerPrefs, persistPlaybackPrefs,
-} from "./engine.js?v=prechat-20261016-dd37ee5";
-import { getAutoHideDelayMs, getBigPlayState, shouldShowMenuBackdrop } from "./chrome.js?v=prechat-20261016-dd37ee5";
-import { bindDesktopProgressInput, bindDesktopVideoInput } from "./desktop-input.js?v=prechat-20261016-dd37ee5";
-import { bindMobileProgressInput, bindMobileVideoInput } from "./mobile-input.js?v=prechat-20261016-dd37ee5";
+  initPlayback, applyCcSliderChange, setCcEnabled,
+  loadPlayerPrefs, persistPlaybackPrefs, getPlaybackFrameRate,
+} from "./engine.js?v=progress-hover-removed-v4";
+import { getAutoHideDelayMs, getBigPlayState, shouldShowMenuBackdrop } from "./chrome.js?v=progress-hover-removed-v4";
+import { bindProgressInput, bindSurfaceInput } from "./input.js?v=progress-hover-removed-v4";
+import { createSettings } from "./settings.js?v=progress-hover-removed-v4";
+import { createFrameStepper } from "./frame-step.js?v=progress-hover-removed-v4";
 
 function collectContext() {
   const wrap = document.getElementById("player-wrap");
@@ -23,15 +24,12 @@ function collectContext() {
     muteBtn: document.getElementById("mute-btn"),
     volSlider: document.getElementById("vol-slider"),
     volCluster: document.getElementById("vol-cluster"),
-    backBtn: document.getElementById("back-btn"),
-    fwdBtn: document.getElementById("fwd-btn"),
     curTime: document.getElementById("cur-time"),
     durTime: document.getElementById("dur-time"),
     fsBtn: document.getElementById("fs-btn"),
     fsIcon: document.getElementById("fs-icon"),
     progWrap: document.getElementById("progress-wrap"),
     progFill: document.getElementById("progress-fill"),
-    progHover: document.getElementById("progress-hover"),
     progBuf: document.getElementById("progress-buffer"),
     progThumb: document.getElementById("progress-thumb"),
     timeTip: document.getElementById("time-tooltip"),
@@ -105,20 +103,18 @@ export async function mountPlayer(meta, base) {
   let isDragging = false;
   let isHovering = false;
   let hasStarted = false;
+  let progressFrame;
 
   const { wrap, video, bigPlay, seekFlash, kbToast, playBtn, playIcon } = ctx;
   const {
     muteBtn,
     volSlider,
-    backBtn,
-    fwdBtn,
     curTime,
     durTime,
     fsBtn,
     fsIcon,
     progWrap,
     progFill,
-    progHover,
     progBuf,
     progThumb,
     qualMenu,
@@ -127,17 +123,12 @@ export async function mountPlayer(meta, base) {
     menuBackdrop,
   } = ctx;
 
-  const menus = [
-    { menu: qualMenu, button: ctx.qualBtn },
-    { menu: speedMenu, button: ctx.speedBtn },
-    { menu: ccMenu, button: ctx.ccBtn },
-  ];
-  menus.forEach(({ menu, button }) => {
-    menu.hidden = true;
-    menu.inert = true;
-    button.setAttribute("aria-controls", menu.id);
-    button.setAttribute("aria-expanded", "false");
-  });
+  const frameStepper = createFrameStepper(video, { getFrameRate: getPlaybackFrameRate });
+  const settings = createSettings({ wrap, onActivity: showUI });
+  const isAnyMenuOpen = () => settings.isOpen;
+  const closeAllMenus = (restoreFocus = false) => settings.close(restoreFocus);
+  const updateMenuBounds = () => settings.resize();
+  document.getElementById("settings-panel").addEventListener("aida:settings-settled", showUI);
 
   function setDragging(v) {
     isDragging = v;
@@ -155,9 +146,8 @@ export async function mountPlayer(meta, base) {
   }
 
   function applyProgress(frac) {
-    const w = progWrap.getBoundingClientRect().width;
     progFill.style.width = frac * 100 + "%";
-    progThumb.style.left = frac * w + "px";
+    progThumb.style.left = frac * 100 + "%";
     progThumb.style.right = "auto";
   }
 
@@ -172,106 +162,12 @@ export async function mountPlayer(meta, base) {
 
   function seekTo(time) {
     if (!Number.isFinite(video.duration) || !video.duration) return;
+    frameStepper.reset();
     video.currentTime = Math.max(0, Math.min(video.duration, time));
     applyProgress(video.currentTime / video.duration);
     curTime.textContent = fmt(video.currentTime);
     syncProgressAccessibility();
   }
-
-  function setHoverPreview(frac) {
-    progHover.style.width = frac * 100 + "%";
-  }
-
-  function clearHoverPreview() {
-    progHover.style.width = "0%";
-  }
-
-  function isAnyMenuOpen() {
-    return (
-      qualMenu.classList.contains("open") ||
-      speedMenu.classList.contains("open") ||
-      ccMenu.classList.contains("open")
-    );
-  }
-
-  function closeAllMenus(restoreFocus = false) {
-    const open = menus.find(({ menu }) => menu.classList.contains("open"));
-    const focusInMenu = open?.menu.contains(document.activeElement);
-    if ((restoreFocus || focusInMenu) && open) open.button.focus();
-    menus.forEach(({ menu, button }) => {
-      menu.classList.remove("open");
-      menu.hidden = true;
-      menu.inert = true;
-      button.setAttribute("aria-expanded", "false");
-    });
-    menuBackdrop?.classList.remove("open");
-    wrap.classList.remove("menu-open");
-    syncBigPlayOverlay();
-  }
-
-  function toggleMenu(menu, focusMenu = false) {
-    const isOpen = menu.classList.contains("open");
-    closeAllMenus();
-    if (!isOpen) {
-      updateMenuBounds();
-      menu.hidden = false;
-      menu.inert = false;
-      menu.classList.add("open");
-      menus.find((entry) => entry.menu === menu).button.setAttribute("aria-expanded", "true");
-      wrap.classList.add("menu-open");
-      if (shouldShowMenuBackdrop(getProfile())) menuBackdrop?.classList.add("open");
-      requestAnimationFrame(() => {
-        if (!menu.classList.contains("open")) return;
-        menu.scrollTop = 0;
-        if (focusMenu || isMobileLayout(getProfile())) {
-          menu.querySelector(".active:not(:disabled), button:not(:disabled), input")?.focus();
-        }
-      });
-      showUI();
-    }
-  }
-
-  function updateMenuBounds() {
-    const controlHeight = document.getElementById("controls").getBoundingClientRect().height;
-    wrap.style.setProperty("--menu-max-height", `${Math.max(120, wrap.getBoundingClientRect().height - controlHeight - 16)}px`);
-  }
-
-  function focusableMenuItems(menu) {
-    return [...menu.querySelectorAll("button:not(:disabled), input:not(:disabled), [tabindex='0']")];
-  }
-
-  menus.forEach(({ menu, button }) => {
-    button.addEventListener("keydown", (e) => {
-      if (!["ArrowDown", "ArrowUp"].includes(e.key)) return;
-      e.preventDefault();
-      if (!menu.classList.contains("open")) toggleMenu(menu);
-      const items = focusableMenuItems(menu);
-      (e.key === "ArrowUp" ? items.at(-1) : items[0])?.focus();
-    });
-    menu.addEventListener("keydown", (e) => {
-      if (e.key === "Escape") {
-        e.preventDefault();
-        e.stopPropagation();
-        closeAllMenus(true);
-        return;
-      }
-      const items = focusableMenuItems(menu);
-      const index = items.indexOf(document.activeElement);
-      if (e.key === "Tab" && isMobileLayout(getProfile())) {
-        if ((e.shiftKey && index === 0) || (!e.shiftKey && index === items.length - 1)) {
-          e.preventDefault();
-          (e.shiftKey ? items.at(-1) : items[0])?.focus();
-        }
-        return;
-      }
-      if (e.target.matches("input")) return;
-      if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(e.key)) return;
-      e.preventDefault();
-      const next = e.key === "Home" ? 0 : e.key === "End" ? items.length - 1
-        : (index + (e.key === "ArrowDown" ? 1 : -1) + items.length) % items.length;
-      items[next]?.focus();
-    });
-  });
 
   function cleanupBigPlayFlash() {
     const svg = bigPlay.querySelector("svg");
@@ -348,16 +244,32 @@ export async function mountPlayer(meta, base) {
 
   function showUI() {
     wrap.classList.add("ui-visible", "cursor-visible");
+    if (!isAnyMenuOpen()) {
+      document.getElementById("controls").inert = false;
+    }
     clearTimeout(uiTimer);
     if (!video.paused) uiTimer = setTimeout(hideUI, getAutoHideDelayMs(getProfile()));
     syncBigPlayOverlay();
+    if (!video.paused && !progressFrame) progressFrame = requestAnimationFrame(animateProgress);
+  }
+
+  function animateProgress() {
+    progressFrame = null;
+    if (video.paused || document.hidden || !wrap.classList.contains("ui-visible")) return;
+    if (!isDragging && video.duration > 0) {
+      applyProgress(video.currentTime / video.duration);
+      const label = fmt(video.currentTime);
+      if (curTime.textContent !== label) curTime.textContent = label;
+    }
+    progressFrame = requestAnimationFrame(animateProgress);
   }
 
   function hideUI() {
     clearTimeout(uiTimer);
-    if (isAnyMenuOpen()) return;
+    if (video.paused || video.ended || isDragging || isAnyMenuOpen()) return;
     if (wrap.contains(document.activeElement) && document.activeElement.matches(":focus-visible")) return;
     wrap.classList.remove("ui-visible", "cursor-visible");
+    document.getElementById("controls").inert = true;
     syncBigPlayOverlay();
   }
 
@@ -475,6 +387,7 @@ export async function mountPlayer(meta, base) {
   video.addEventListener("play", () => {
     const firstPlay = !hasStarted;
     hasStarted = true;
+    if (!progressFrame) progressFrame = requestAnimationFrame(animateProgress);
     if (firstPlay && !isMobileLayout(getProfile())) flashBigPlayOverlay(true);
     setPlayIcon(true);
     if (isMobileLayout(getProfile())) {
@@ -490,17 +403,12 @@ export async function mountPlayer(meta, base) {
   });
   video.addEventListener("pause", () => {
     setPlayIcon(false);
-    if (isMobileLayout(getProfile())) {
-      hideUI();
-    } else {
-      showUI();
-    }
+    showUI();
     syncBigPlayOverlay();
   });
   video.addEventListener("ended", () => {
     setPlayIcon(false);
-    if (isMobileLayout(getProfile())) hideUI();
-    else showUI();
+    showUI();
     syncBigPlayOverlay();
   });
 
@@ -529,7 +437,7 @@ export async function mountPlayer(meta, base) {
 
   video.addEventListener("timeupdate", () => {
     syncProgressAccessibility();
-    if (isDragging || isHovering || !video.duration) return;
+    if (isDragging || !video.duration) return;
     applyProgress(video.currentTime / video.duration);
     curTime.textContent = fmt(video.currentTime);
     if (video.buffered.length) {
@@ -569,103 +477,22 @@ export async function mountPlayer(meta, base) {
     showUI();
   });
 
-  bindDesktopProgressInput({
-    ctx,
-    video,
-    fmt,
-    getProgressFrac,
-    applyProgress,
-    setHoverPreview,
-    clearHoverPreview,
-    setDragging,
-    isDragging: getDragging,
-    setHovering,
-    onScrubTo,
-  });
-  bindDesktopVideoInput({ ctx, getProfile, togglePlay, toggleFS });
+  bindProgressInput({ ctx, video, fmt, applyProgress, setDragging, onScrubTo, showUI });
+  bindSurfaceInput({ ctx, showUI, hideUI, togglePlay, toggleFS, skip, isMenuOpen: isAnyMenuOpen });
 
-  bindMobileProgressInput({
-    ctx,
-    getProfile,
-    video,
-    fmt,
-    applyProgress,
-    setDragging,
-    isDragging: getDragging,
-    onScrubTo,
-    showUI,
-  });
-  bindMobileVideoInput({
-    ctx,
-    getProfile,
-    skip,
-    showUI,
-    hideUI,
-    closeAllMenus,
-    isAnyMenuOpen,
-  });
-
-  backBtn.addEventListener("click", () => skip(-10));
-  fwdBtn.addEventListener("click", () => skip(10));
-
-  wrap.addEventListener("mousemove", showUI);
+  wrap.addEventListener("pointermove", (event) => { if (event.pointerType === "mouse") showUI(); });
   wrap.addEventListener("focusin", showUI);
   wrap.addEventListener("pointerdown", (e) => {
-    if (e.target.closest("button, input, a, [role='slider']")) return;
+    if (e.target.closest("button, input, a, summary, #settings-panel, #menu-backdrop, [role='slider']")) return;
     wrap.focus({ preventScroll: true });
   });
   wrap.addEventListener("mouseleave", () => {
     if (!video.paused) hideUI();
   });
 
-  ctx.qualBtn.addEventListener("click", (e) => {
-    e.stopPropagation();
-    toggleMenu(qualMenu, e.detail === 0);
+  qualMenu.addEventListener("click", (event) => {
+    if (event.target.closest(".menu-item[data-id]")) closeAllMenus(true);
   });
-  ctx.speedBtn.addEventListener("click", (e) => {
-    e.stopPropagation();
-    toggleMenu(speedMenu, e.detail === 0);
-  });
-
-  function shouldIgnoreMenuDismissClick(e) {
-    return e.target.closest(
-      ".menu-item, .menu-toggle, .cc-slider, .menu-popup input, .menu-popup label, .menu-wrap",
-    );
-  }
-
-  document.addEventListener("click", (e) => {
-    if (!isAnyMenuOpen()) return;
-    if (shouldIgnoreMenuDismissClick(e)) return;
-    closeAllMenus();
-  });
-
-  document.addEventListener(
-    "touchend",
-    (e) => {
-      if (!isAnyMenuOpen()) return;
-      if (shouldIgnoreMenuDismissClick(e)) return;
-      if (!e.target.closest("#player-wrap")) return;
-      closeAllMenus();
-      showUI();
-    },
-    { passive: true },
-  );
-
-  qualMenu.addEventListener("click", (e) => e.stopPropagation());
-  speedMenu.addEventListener("click", (e) => e.stopPropagation());
-  menuBackdrop?.addEventListener("click", (e) => {
-    e.stopPropagation();
-    closeAllMenus(true);
-    showUI();
-  });
-
-  ctx.ccBtn.addEventListener("click", (e) => {
-    e.stopPropagation();
-    const wasOpen = ccMenu.classList.contains("open");
-    toggleMenu(ccMenu, e.detail === 0);
-    if (!wasOpen && ccMenu.classList.contains("open")) markCcBannerMenuUsed(ctx.wrap);
-  });
-  ccMenu.addEventListener("click", (e) => e.stopPropagation());
 
   ctx.ccOff.addEventListener("click", () => setCcEnabled(false, video, ctx));
   ctx.ccOn.addEventListener("click", () => setCcEnabled(true, video, ctx));
@@ -702,6 +529,7 @@ export async function mountPlayer(meta, base) {
       item.setAttribute("aria-pressed", String(active));
     });
     ctx.speedBtn.setAttribute("aria-label", `Playback speed: ${video.playbackRate === 1 ? "normal" : `${video.playbackRate} times`}`);
+    document.getElementById("speed-label").textContent = video.playbackRate === 1 ? "Normal" : `${video.playbackRate}×`;
     persistPlaybackPrefs({ speed: video.playbackRate });
   }
   video.addEventListener("ratechange", syncSpeed);
@@ -722,6 +550,19 @@ export async function mountPlayer(meta, base) {
     if (e.key === "Escape" && isAnyMenuOpen()) {
       e.preventDefault();
       closeAllMenus(true);
+      return;
+    }
+    if (isAnyMenuOpen()) return;
+    if ([",", "."].includes(e.key) && !e.shiftKey && !e.isComposing && !e.target.closest("input, textarea, select, a, [contenteditable], [role='slider']")) {
+      e.preventDefault();
+      void frameStepper.step(e.key === "," ? -1 : 1).then(result => {
+        if (result.ok) {
+          applyProgress(result.time / video.duration);
+          curTime.textContent = fmt(result.time);
+          syncProgressAccessibility();
+        } else if (result.reason === "unknown-frame-rate") showToast("Frame rate unavailable for this video");
+      });
+      showUI();
       return;
     }
     if (e.target.closest("input, textarea, select, button, a, [contenteditable], [role='slider']")) return;
@@ -784,6 +625,9 @@ export async function mountPlayer(meta, base) {
     }
   });
 
+  window.addEventListener("aida:playback-ready", () => frameStepper.reset());
+  window.addEventListener("aida:playback-error", () => closeAllMenus());
+  window.visualViewport?.addEventListener("resize", updateMenuBounds);
   await initPlayback(meta, base, ctx, profile);
   volSlider.value = video.muted ? 0 : video.volume;
   updateVolIcon();

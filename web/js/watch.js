@@ -1,9 +1,9 @@
 import {
   fetchCatalog, mediaBase, watchUrl, formatDate, formatDuration,
   renderVideoCard, detectDisplayHdr, attachThumbnailFallbacks, videoVisibility,
-} from "./catalog.js?v=prechat-20261016-dd37ee5";
-import { loadMetadata, VideoLoadError } from "./loader.js?v=prechat-20261016-dd37ee5";
-import { mountPlayer } from "./player/shell.js?v=prechat-20261016-dd37ee5";
+} from "./catalog.js?v=controls-review-v2";
+import { loadMetadata, VideoLoadError } from "./loader.js?v=controls-review-v2";
+import { mountPlayer } from "./player/shell.js?v=progress-hover-removed-v4";
 
 const id = new URLSearchParams(location.search).get("v") || "0";
 const local = typeof window.shouldUseLocalCmaf === "function" && window.shouldUseLocalCmaf();

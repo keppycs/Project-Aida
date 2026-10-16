@@ -1,239 +1,46 @@
-/*
- * Mobile-only player styling, scoped entirely under #player-wrap.is-mobile
- * (see capabilities.js / chrome.js for how that class gets applied).
- * Loaded after player.css so these rules win. Keep desktop-default styling
- * out of this file — it belongs in player.css.
- */
-
-/* ── Double-tap seek ripple ── */
-.seek-ripple {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  width: 50%;
-  pointer-events: none;
-  z-index: 6;
-  overflow: hidden;
-}
-#seek-ripple-left {
-  left: 0;
-}
-#seek-ripple-right {
-  right: 0;
-}
-.seek-ripple::before {
-  content: "";
-  position: absolute;
-  top: 50%;
-  width: 140px;
-  height: 140px;
-  margin-top: -70px;
-  border-radius: 50%;
-  background: rgba(255, 255, 255, 0.22);
-  transform: scale(0);
-  opacity: 0;
-}
-#seek-ripple-left::before {
-  left: 30%;
-  margin-left: -70px;
-}
-#seek-ripple-right::before {
-  right: 30%;
-  margin-right: -70px;
-}
-.seek-ripple.flash::before {
-  animation: seek-ripple-pulse 0.5s var(--ease) forwards;
-}
-@keyframes seek-ripple-pulse {
-  0% {
-    transform: scale(0);
-    opacity: 0.65;
-  }
-  100% {
-    transform: scale(2.8);
-    opacity: 0;
-  }
-}
-
-/* ── Bottom-sheet menu backdrop ── */
-.menu-backdrop {
-  display: none;
-  position: fixed;
-  inset: 0;
-  z-index: 12;
-  background: rgba(0, 0, 0, 0.5);
-  pointer-events: auto;
-  touch-action: none;
-}
-
-.menu-backdrop.open {
-  display: block;
-}
-
-#player-wrap.is-mobile {
-  overflow: visible;
-  --ctrl-h: 44px;
-  --bar-h: 3px;
-}
-
-#player-wrap.is-mobile #controls {
-  padding: 0 max(10px, env(safe-area-inset-right)) max(8px, env(safe-area-inset-bottom))
-    max(10px, env(safe-area-inset-left));
-}
-
-#player-wrap.is-mobile.menu-open #controls {
-  z-index: 20;
-  pointer-events: none;
-}
-
-#player-wrap.is-mobile.menu-open .menu-popup.open {
-  pointer-events: auto;
-}
-
-#player-wrap.is-mobile .menu-backdrop {
-  z-index: 16;
-}
-
-#player-wrap.is-mobile #progress-wrap {
-  height: 28px;
-  margin-bottom: 2px;
-}
-
-#player-wrap.is-mobile #title-bar {
-  padding: max(8px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-right)) 8px
-    max(12px, env(safe-area-inset-left));
-  gap: 6px;
-}
-
-#player-wrap.is-mobile #title-text {
-  font-size: 13px;
-}
-
-#player-wrap.is-mobile .badge-accent {
-  font-size: 9px;
-  padding: 1px 4px;
-}
-
-#player-wrap.is-mobile #ctrl-row {
-  overflow-x: auto;
-  overflow-y: hidden;
-  flex-wrap: nowrap;
-  -webkit-overflow-scrolling: touch;
-  scrollbar-width: none;
-  gap: 2px;
-  height: var(--ctrl-h);
-}
-
-#player-wrap.is-mobile #ctrl-row::-webkit-scrollbar {
-  display: none;
-}
-
-/* Center #big-play is the only play/pause control on mobile; bar duplicates hidden */
+/* Touch controls use the same geometry in portrait, landscape, and fullscreen. */
+#player-wrap.is-mobile { overflow: visible; --player-notice-bottom: 72px; }
+#player-wrap.is-mobile #controls { left: max(8px, env(safe-area-inset-left)); right: max(8px, env(safe-area-inset-right)); }
+#player-wrap.is-mobile #ctrl-row { gap: 0; }
 #player-wrap.is-mobile #play-btn,
-#player-wrap.is-mobile #back-btn,
-#player-wrap.is-mobile #fwd-btn {
-  display: none;
-}
-
-#player-wrap.is-mobile .ctrl-btn {
-  width: 44px;
-  height: 44px;
-  min-width: 44px;
-  min-height: 44px;
-  border-radius: 6px;
-}
-
-#player-wrap.is-mobile #time-display {
-  font-size: 11px;
-  letter-spacing: -0.02em;
-}
-
-#player-wrap.is-mobile #quality-btn {
-  padding: 0 4px;
-  gap: 4px;
-}
-
-#player-wrap.is-mobile #quality-label {
-  max-width: 88px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-#player-wrap.is-mobile #quality-label {
-  font-size: 10px;
-}
-
-#player-wrap.is-mobile #cc-btn {
-  font-size: 10px;
-  padding: 0 5px;
-}
-
-/*
- * Mobile big-play: above the fixed bottom sheet (z-index 20).
- * Container is inset:0 for centering; pointer-events:none so only the SVG receives taps.
- */
-#player-wrap.is-mobile #big-play {
-  pointer-events: none;
-  z-index: 25;
-}
-
-#player-wrap.is-mobile #big-play svg {
-  width: 72px;
-  height: 72px;
-  opacity: 0;
-  transform: scale(0.82);
-  transition:
-    opacity 0.38s var(--ease),
-    transform 0.42s cubic-bezier(0.34, 1.15, 0.64, 1);
-}
-
-#player-wrap.is-mobile #big-play.show > svg {
-  opacity: 1;
-  transform: scale(1);
-  pointer-events: auto;
-  cursor: pointer;
-}
-
-#player-wrap.is-mobile .menu-popup.open {
+#player-wrap.is-mobile #vol-cluster { display: none; }
+#player-wrap.is-mobile #time-display { padding: 0 4px; font-size: 12px; }
+#player-wrap.is-mobile #title-bar { display: none; }
+#player-wrap.is-mobile .grad-top { display: none; }
+#player-wrap.is-mobile .grad-bot { height: 64px; }
+#player-wrap.is-mobile #progress-thumb { opacity: 1; }
+#player-wrap.is-mobile #time-tooltip { display: none; }
+#player-wrap.is-mobile #progress-wrap.scrubbing #time-tooltip { display: block; }
+#player-wrap.is-mobile.menu-open #big-play { opacity: 0; pointer-events: none; }
+#player-wrap.is-mobile .menu-backdrop { position: fixed; background: #0005; pointer-events: auto; }
+#player-wrap.is-mobile .player-settings {
   position: fixed;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  top: auto;
-  width: 100%;
-  min-width: 0;
-  max-height: min(72vh, 520px);
-  overflow-y: auto;
-  border-radius: 12px 12px 0 0;
-  transform: none;
-  padding-left: max(12px, env(safe-area-inset-left));
-  padding-right: max(12px, env(safe-area-inset-right));
-  padding-bottom: max(12px, env(safe-area-inset-bottom));
-  z-index: 20;
-  box-sizing: border-box;
-  overscroll-behavior: contain;
+  left: max(8px, env(safe-area-inset-left));
+  right: max(8px, env(safe-area-inset-right));
+  bottom: max(8px, env(safe-area-inset-bottom));
+  width: auto;
+  max-width: 480px;
+  max-height: min(70dvh, 520px);
+  margin-inline: auto;
+  border-radius: 18px;
+  transform-origin: bottom center;
 }
+#player-wrap.is-mobile .settings-header { height: 52px; }
+#player-wrap.is-mobile .settings-page { padding-block: 6px !important; }
+#player-wrap.is-mobile.fullscreen,
+#player-wrap.is-mobile:fullscreen { overflow: hidden; }
 
-#player-wrap.is-mobile .menu-toggle {
-  min-height: 44px;
-}
-
-#player-wrap.is-mobile .cc-slider-row {
-  min-height: 44px;
-}
-
-#player-wrap.is-mobile.fullscreen {
-  overflow: hidden;
-}
-
+/* Double-tap feedback is visual only and never participates in hit testing. */
+.seek-ripple { position: absolute; top: 0; bottom: 0; width: 50%; pointer-events: none; z-index: 6; overflow: hidden; }
+#seek-ripple-left { left: 0; }
+#seek-ripple-right { right: 0; }
+.seek-ripple::before { content: ""; position: absolute; top: 50%; left: 50%; width: 120px; height: 120px; margin: -60px 0 0 -60px; border-radius: 50%; background: #ffffff25; transform: scale(.5); opacity: 0; }
+.seek-ripple.flash::before { animation: seek-ripple-pulse 420ms var(--ease) forwards; }
+@keyframes seek-ripple-pulse { from { transform: scale(.5); opacity: .65; } to { transform: scale(2.2); opacity: 0; } }
 @media (max-height: 440px) and (orientation: landscape) {
-  #player-wrap.is-mobile .menu-popup.open {
-    max-height: calc(100dvh - 20px);
-  }
+  #player-wrap.is-mobile .player-settings { max-height: calc(100dvh - 16px); }
 }
-
-@media (pointer: coarse) {
-  #player-wrap.is-mobile #progress-track {
-    height: 4px;
-  }
+@media (prefers-reduced-motion: reduce) {
+  .seek-ripple.flash::before { animation: seek-ripple-reduced 280ms ease-out forwards; transform: none; }
 }
+@keyframes seek-ripple-reduced { from { opacity: .35; } to { opacity: 0; } }
