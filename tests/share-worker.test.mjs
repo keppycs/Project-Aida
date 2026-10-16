@@ -12,12 +12,14 @@ const imageBytes = new Uint8Array([0, 255, 2, 128, 13, 10, 0, 77]);
 const title = 'Title </title><script>alert("x")</script> & café';
 const description = 'Description " onload="alert(1) <img src=x> & more';
 const escapedTitle = "Title &lt;/title&gt;&lt;script&gt;alert(&quot;x&quot;)&lt;/script&gt; &amp; café";
-const escapedDescription = "Description &quot; onload=&quot;alert(1) &lt;img src=x&gt; &amp; more";
-const metadata = { id, title, description, visibility: "public", frameRate: 120 };
+const summary = "1440p120 • 0:25";
+const metadata = { id, title, description, visibility: "public", height: 4320, frameRate: 120, duration: 25.963, codecs: ["AV1", "HEVC"] };
+const manifest = (video = '<Representation height="1440" frameRate="120/1"/>', adaptation = 'contentType="video"') => `<MPD><Period><AdaptationSet ${adaptation}>${video}</AdaptationSet><AdaptationSet contentType="audio"><Representation height="9999" frameRate="999"/></AdaptationSet></Period></MPD>`;
 
 function fixture({ meta = metadata, raw, metadataStatus = 200, metadataThrows = false,
   images = ["thumbnail_share.jpg"], imageGetStatus = 200, imageGetThrows = false,
-  originStatus = 200, originHtml = template } = {}) {
+  originStatus = 200, originHtml = template,
+  manifests = { AV1: manifest(), HEVC: manifest() } } = {}) {
   const calls = [];
   const fetcher = async (input, init = {}) => {
     assert.notEqual(init.redirect, "error", "Cloudflare fetch supports follow or manual redirects");
@@ -27,6 +29,10 @@ function fixture({ meta = metadata, raw, metadataStatus = 200, metadataThrows = 
     if (url === `${cdn}/${id}/metadata.json`) {
       if (metadataThrows) throw new Error("Metadata offline");
       return new Response(raw ?? JSON.stringify(meta), { status: metadataStatus });
+    }
+    for (const codec of ["AV1", "HEVC"]) {
+      if (url !== `${cdn}/${id}/${codec}/manifest.mpd`) continue;
+      return new Response(manifests[codec] ?? "Missing manifest", { status: manifests[codec] == null ? 404 : 200 });
     }
     if (url.startsWith(`${cdn}/${id}/thumbnail_`)) {
       assert.ok(method === "HEAD" || method === "GET");
@@ -72,6 +78,12 @@ function contents(html, key) {
     .map((match) => match[1]);
 }
 
+function assertDescriptions(html, expected) {
+  for (const key of ["description", "og:description", "twitter:description"]) {
+    assert.deepEqual(contents(html, key), expected ? [expected] : [], key);
+  }
+}
+
 function assertSafeHeaders(response) {
   assert.equal(response.headers.get("cache-control"), "no-store");
   assert.equal(response.headers.get("x-content-type-options"), "nosniff");
@@ -89,7 +101,7 @@ for (const path of ["/watch", "/watch.html"]) {
       assert.equal(response.status, 200);
       assert.equal(body(html), body(template));
       assert.deepEqual(contents(html, "og:title"), [escapedTitle]);
-      assert.deepEqual(contents(html, "og:description"), [escapedDescription]);
+      assertDescriptions(html, summary);
       assert.deepEqual(contents(html, "og:url"), [`${site}/watch?v=${id}`]);
       assert.deepEqual(contents(html, "og:image"), [previewImageUrl]);
       assert.deepEqual(contents(html, "og:image:secure_url"), [previewImageUrl]);
@@ -120,6 +132,96 @@ for (const path of ["/watch", "/watch.html"]) {
   }
 }
 
+test("share summaries use the highest actual rendition and its rate, with the player's duration format", async (t) => {
+  for (const [name, options, expected] of [
+    ["source height is not an encoded tier", {}, summary],
+    ["highest tier across codecs", { manifests: { AV1: manifest(), HEVC: manifest('<Representation height="2160" frameRate="120"/>') }, meta: { ...metadata, duration: 602.391 } }, "2160p120 • 10:02"],
+    ["inherited rational frame rate", { manifests: { AV1: manifest('<Representation height="1440"/>', 'mimeType="video/mp4" frameRate="120000/1001"') } }, "1440p119.88 • 0:25"],
+    ["representation rate overrides inherited rate", { manifests: { AV1: manifest('<Representation height="1440" frameRate="119.5"/>', 'contentType="video" frameRate="120"') } }, "1440p119.5 • 0:25"],
+    ["inherited height and hour duration", { manifests: { HEVC: manifest('<Representation frameRate="120"/>', 'contentType="video" height="2160"') }, meta: { ...metadata, duration: 3662.99 } }, "2160p120 • 1:01:02"],
+    ["subsecond duration", { meta: { ...metadata, duration: .5 } }, "1440p120 • 0:00"],
+    ["numeric string duration", { meta: { ...metadata, duration: "26.9" } }, "1440p120 • 0:26"],
+  ]) {
+    await t.test(name, async () => {
+      const { calls, fetcher } = fixture(options);
+      for (const path of ["/watch", "/watch.html", "/embed"]) {
+        const html = await (await handleRequest(request(`${path}?v=${id}`), {}, fetcher)).text();
+        assertDescriptions(html, expected);
+        assert.deepEqual(contents(html, "og:title"), [escapedTitle]);
+        assert.deepEqual(contents(html, "og:image"), [previewImageUrl]);
+        assert.deepEqual(contents(html, "og:video"), [`${site}/embed?v=${id}`]);
+        assert.match(html, /rel="alternate" type="application\/json\+oembed"/);
+        assert.equal(body(html), body(template));
+        assert.doesNotMatch(html, /Description &quot;|Watch Keppy's videos/);
+      }
+      const lookups = calls.filter(call => call.url.endsWith("/manifest.mpd"));
+      assert.ok(lookups.length > 0);
+      for (const lookup of lookups) {
+        assert.equal(lookup.init.cache, "no-store");
+        assert.equal(lookup.init.redirect, "manual");
+      }
+    });
+  }
+});
+
+test("unknown, zero or malformed summary fields omit the summary without losing the preview", async (t) => {
+  const lower = '<Representation height="1080" frameRate="120"/>';
+  for (const [name, options] of [
+    ...[undefined, null, 0, -1, "", "bad", "Infinity", true, []].map(duration => [`invalid duration ${JSON.stringify(duration)}`, { meta: { ...metadata, duration } }]),
+    ...["", "0", "NaN", "Infinity", "120/0", "0/1", "120/1/1"].map(rate => [`invalid maximum-tier rate ${rate}`, { manifests: { AV1: manifest(`${lower}<Representation height="2160" frameRate="${rate}"/>`) } }]),
+    ["missing maximum-tier rate", { manifests: { AV1: manifest(`${lower}<Representation height="2160"/>`) } }],
+    ...["", "0", "-1", "1440.5", "bad"].map(height => [`invalid height ${height}`, { manifests: { AV1: manifest(`<Representation height="${height}" frameRate="120"/>`) } }]),
+    ["missing manifest", { manifests: {} }],
+    ["malformed manifest", { manifests: { AV1: '<MPD><AdaptationSet contentType="video"><Representation height="1440" frameRate="120"/>' } }],
+    ["oversized manifest", { manifests: { AV1: " ".repeat(256001) } }],
+    ["missing codecs", { meta: { ...metadata, codecs: undefined } }],
+    ["non-array codecs", { meta: { ...metadata, codecs: "AV1" } }],
+  ]) {
+    await t.test(name, async () => {
+      const { fetcher } = fixture(options);
+      const html = await (await handleRequest(request(`/watch?v=${id}`), {}, fetcher)).text();
+      assertDescriptions(html, null);
+      assert.deepEqual(contents(html, "og:title"), [escapedTitle]);
+      assert.deepEqual(contents(html, "og:image"), [previewImageUrl]);
+      assert.deepEqual(contents(html, "og:video"), [`${site}/embed?v=${id}`]);
+      assert.equal(body(html), body(template));
+    });
+  }
+});
+
+test("summary lookups only use distinct declared supported codecs and skip image/oEmbed routes", async () => {
+  const { calls, fetcher } = fixture({ meta: { ...metadata, codecs: ["HEVC", "HEVC", "../private", "AVC"] } });
+  await handleRequest(request(`/preview-image?v=${id}`), {}, fetcher);
+  const oembed = await (await handleRequest(request(oembedPath()), {}, fetcher)).json();
+  assert.equal(oembed.title, title);
+  assert.equal(Object.hasOwn(oembed, "description"), false);
+  assert.equal(calls.some(call => call.url.endsWith("/manifest.mpd")), false);
+  const html = await (await handleRequest(request(`/watch?v=${id}`), {}, fetcher)).text();
+  assertDescriptions(html, summary);
+  assert.deepEqual(calls.filter(call => call.url.endsWith("/manifest.mpd")).map(call => call.url), [`${cdn}/${id}/HEVC/manifest.mpd`]);
+});
+
+test("stalled manifest bodies time out without removing title, thumbnail or player", async (t) => {
+  const realTimeout = globalThis.setTimeout;
+  t.mock.method(globalThis, "setTimeout", (callback, delay) => realTimeout(callback, Math.min(delay, 10)));
+  const { fetcher } = fixture();
+  let aborted = 0;
+  const stalledFetch = async (url, init) => {
+    if (String(url).endsWith("/manifest.mpd")) return new Response(new ReadableStream({
+      start(controller) {
+        init.signal.addEventListener("abort", () => { aborted += 1; controller.error(new Error("Manifest body read aborted")); }, { once: true });
+      },
+    }));
+    return fetcher(url, init);
+  };
+  const html = await (await handleRequest(request(`/watch?v=${id}`), {}, stalledFetch)).text();
+  assert.equal(aborted, 2);
+  assertDescriptions(html, null);
+  assert.deepEqual(contents(html, "og:title"), [escapedTitle]);
+  assert.deepEqual(contents(html, "og:image"), [previewImageUrl]);
+  assert.deepEqual(contents(html, "og:video"), [`${site}/embed?v=${id}`]);
+});
+
 test("head rewriting replaces duplicate metadata and keeps unrelated template assets", () => {
   const duplicated = template.replace("</head>", `
     <TITLE>Outdated duplicate</TITLE><meta charset='latin1'>
@@ -127,10 +229,12 @@ test("head rewriting replaces duplicate metadata and keeps unrelated template as
     <meta content="Outdated image" property=og:image>
     <meta name='twitter:card' content='summary'>
     <meta name=description content="Outdated description">
+    <meta content='Outdated social description' property='og:description'>
+    <meta name=twitter:description content='Outdated Twitter description'>
     <link rel='canonical' href='https://example.invalid/'>
     <link type='application/json+oembed' href='https://example.invalid/oembed'>
     </head>`);
-  const data = { id, title, description, url: `${site}/watch?v=${id}`,
+  const data = { id, title, description: summary, url: `${site}/watch?v=${id}`,
     player: `${site}/embed?v=${id}`, image: { url: `${cdn}/${id}/thumbnail_share.jpg`, type: "image/jpeg" } };
   const result = rewriteWatchHtml(duplicated, data);
   assert.equal(body(result), body(template));
@@ -139,11 +243,21 @@ test("head rewriting replaces duplicate metadata and keeps unrelated template as
   assert.equal(result.match(/rel="canonical"/g).length, 1);
   assert.equal(result.match(/application\/json\+oembed/g).length, 1);
   assert.deepEqual(contents(result, "og:title"), [escapedTitle]);
-  assert.deepEqual(contents(result, "description"), [escapedDescription]);
+  assertDescriptions(result, summary);
   assert.doesNotMatch(result, /Outdated|example\.invalid|latin1/);
   assert.match(result, /name="viewport"/);
   assert.match(result, /rel="icon"/);
   assert.match(result, /shaka-player@/);
+});
+
+test("missing share data removes stale descriptions while preserving visible page copy", () => {
+  const original = '<html><head><title>Old title</title><meta name="description" content="Old description"><meta property="og:description" content="Old social description"><meta name="twitter:description" content="Old Twitter description"></head><body><p id="watch-description">Visible video description</p><video id="video"></video></body></html>';
+  const result = rewriteWatchHtml(original, null);
+  assertDescriptions(result, null);
+  assert.deepEqual(contents(result, "og:title"), ["Aida"]);
+  assert.deepEqual(contents(result, "og:image"), []);
+  assert.deepEqual(contents(result, "og:video"), []);
+  assert.equal(body(result), body(original));
 });
 
 test("old uploads fall back from JPEG to existing WebP thumbnails", async (t) => {
@@ -236,6 +350,7 @@ for (const [name, options, status] of failures) {
     assert.deepEqual(contents(html, "og:title"), ["Aida"]);
     assert.deepEqual(contents(html, "og:image"), []);
     assert.deepEqual(contents(html, "og:video"), []);
+    assertDescriptions(html, null);
     assert.equal(body(html), body(template));
     assert.doesNotMatch(html, /SECRET_TITLE|SECRET_DESCRIPTION|<script>alert\(/);
     for (const path of [`/embed?v=${id}`, oembedPath(), `/preview-image?v=${id}`]) {
