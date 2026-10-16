@@ -7,7 +7,7 @@ import {
   renderVideoCard,
   detectDisplayHdr,
   attachThumbnailFallbacks,
-} from "./catalog.js?v=ux-stability-v14";
+} from "./catalog.js?v=clean-watch-v37";
 
 const searchInput = document.getElementById("search-input");
 const searchClear = document.getElementById("search-clear");

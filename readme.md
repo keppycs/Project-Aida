@@ -98,7 +98,7 @@ Located in `/web`, the frontend is minimal and fast:
 - 🎨 **Styling**
   - Vanilla CSS with a clean, modern look⁵
 
-**Local CMAF playback (not in git):** Encode output goes under `web/local/{video_id}/` (ignored by `.gitignore`). Serve `web/` as the document root, for example with `py -B -m http.server 8000 --directory web`, and open **`watch.html`** over HTTP. Links use explicit **`watch.html?v=…`** in markup/JS; if you use Cloudflare or another reverse proxy, you can rewrite to a clean URL such as `/watch` while the repo stays file-based.
+**Local CMAF playback (not in git):** Encode output goes under `web/local/{video_id}/` (ignored by `.gitignore`). Serve `web/` as the document root, for example with `py -B -m http.server 8000 --directory web`, and open **`watch.html`** over HTTP. Video links on `keppy.dev` and `www.keppy.dev` use **`/watch?v=…`**, served by the existing Cloudflare route. Local and preview hosts use **`watch.html?v=…`** so file-based development servers keep working.
 
 On the **production** host (`keppy.dev` / `www.keppy.dev` in `web/js/site-env.js`), playback always uses the **CDN**; `?local=` is ignored.
 

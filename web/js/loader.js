@@ -1,4 +1,4 @@
-import { videoVisibility } from "./catalog.js?v=ux-stability-v14";
+import { videoVisibility } from "./catalog.js?v=clean-watch-v37";
 
 export class VideoLoadError extends Error {
   constructor(kind, message) {

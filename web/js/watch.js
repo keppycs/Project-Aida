@@ -1,8 +1,8 @@
 import {
   fetchCatalog, mediaBase, formatDate,
   renderVideoCard, detectDisplayHdr, attachThumbnailFallbacks,
-} from "./catalog.js?v=ux-stability-v14";
-import { loadMetadata, VideoLoadError } from "./loader.js?v=ux-stability-v14";
+} from "./catalog.js?v=clean-watch-v37";
+import { loadMetadata, VideoLoadError } from "./loader.js?v=clean-watch-v37";
 import { mountPlayer } from "./player/shell.js?v=overlay-scrollbar-v36";
 
 const id = new URLSearchParams(location.search).get("v") || "0";
