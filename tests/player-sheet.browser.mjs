@@ -177,7 +177,9 @@ async function centerInMenu(current, paused, mobile) {
     return { page: document.querySelector("#settings-panel").dataset.page,
       show: button.classList.contains("show"), opacity: Number(getComputedStyle(button).opacity), svgOpacity: Number(getComputedStyle(svg).opacity),
       pointerEvents: getComputedStyle(button).pointerEvents, tabIndex: button.tabIndex, ariaHidden: button.getAttribute("aria-hidden"),
-      label: button.getAttribute("aria-label"), paths: svg.querySelectorAll("path").length, bars: svg.querySelectorAll("rect").length,
+      label: button.getAttribute("aria-label"),
+      glyph: Object.fromEntries([["tip", 50, 36], ["gap", 36, 36], ["leftBar", 28, 36], ["rightBar", 43, 36]]
+        .map(([name, x, y]) => [name, svg.querySelector("[data-morph-path]")?.isPointInFill(new DOMPoint(x, y)) ?? false])),
       inert: !!button.closest("[inert]"), focused: document.activeElement === button, hit: hit?.id ?? hit?.localName,
       hitCenter: button.contains(hit), point, pointInViewport: point.x > 0 && point.x < innerWidth && point.y > 0 && point.y < innerHeight,
       coveredBySheet: point.x >= sheet.left && point.x <= sheet.right && point.y >= sheet.top && point.y <= sheet.bottom };
@@ -185,7 +187,7 @@ async function centerInMenu(current, paused, mobile) {
   assert.equal(value.show, true, "Opening Settings must preserve the existing center visual");
   assert.ok(value.opacity * value.svgOpacity > .98, "The center icon must remain painted behind Settings, including physically covered states");
   assert.equal(value.label, paused ? "Play video" : "Pause video");
-  assert.equal(value.paths, paused ? 1 : 0); assert.equal(value.bars, paused ? 0 : 2);
+  assert.deepEqual(value.glyph, { tip: paused, gap: paused, leftBar: true, rightBar: true }, "The painted center geometry must match the intended playback state");
   assert.equal(value.pointerEvents, "none", "A visible background icon must not steal modal pointer input");
   assert.equal(value.tabIndex, -1); assert.equal(value.ariaHidden, "true");
   assert.equal(value.focused, false); assert.equal(value.hitCenter, false);

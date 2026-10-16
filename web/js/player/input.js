@@ -1,11 +1,31 @@
 /** Pointer events choose the input behavior; viewport size only chooses composition. */
 export function bindProgressInput({ ctx, video, fmt, applyProgress, setDragging, onScrubTo, showUI, beforeScrub }) {
-  const { progWrap, timeTip, curTime } = ctx;
-  let activePointer = null, resume = false;
+  const { progWrap, progTouchTarget, timeTip, curTime } = ctx;
+  let activePointer = null, resume = false, ownedClick = null;
+  ctx.wrap.addEventListener("pointerdown", () => { if (activePointer === null) ownedClick = null; }, true);
+  ctx.wrap.addEventListener("click", event => {
+    const fromScrub = ownedClick !== null && (event.pointerId === ownedClick
+      || (!("pointerId" in event) && event.isTrusted && event.detail > 0));
+    if (!fromScrub) return;
+    ownedClick = null;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+  }, true);
   const fraction = event => {
     const bounds = progWrap.getBoundingClientRect();
     return Math.max(0, Math.min(1, (event.clientX - bounds.left) / bounds.width));
   };
+  const withinMouseStrip = event => {
+    const bounds = progWrap.getBoundingClientRect();
+    return event.clientX >= bounds.left && event.clientX <= bounds.right
+      && event.clientY >= bounds.top && event.clientY <= bounds.bottom;
+  };
+  function updateHover(event) {
+    const hovered = event.pointerType === "mouse" && withinMouseStrip(event);
+    progWrap.classList.toggle("mouse-hover", hovered);
+    if (progTouchTarget) progTouchTarget.style.cursor = hovered ? "pointer" : "";
+    return hovered;
+  }
   function preview(event) {
     const bounds = progWrap.getBoundingClientRect();
     const value = fraction(event);
@@ -13,11 +33,15 @@ export function bindProgressInput({ ctx, video, fmt, applyProgress, setDragging,
     timeTip.style.left = `${Math.max(24, Math.min(bounds.width - 24, event.clientX - bounds.left))}px`;
     if (activePointer !== null) { applyProgress(value); curTime.textContent = fmt(value * video.duration); }
   }
-  progWrap.addEventListener("pointerdown", event => {
-    if (!event.isPrimary || event.button !== 0 || !(video.duration > 0)) return;
+  function start(event) {
+    updateHover(event);
+    if (event.pointerType === "mouse" && !withinMouseStrip(event)) return;
+    if (activePointer !== null || !event.isPrimary || event.button !== 0 || !(video.duration > 0)) return;
     event.preventDefault();
+    event.stopPropagation();
     progWrap.focus({ preventScroll: true });
     activePointer = event.pointerId;
+    ownedClick = activePointer;
     progWrap.setPointerCapture(activePointer);
     resume = beforeScrub ? beforeScrub() : !video.paused;
     setDragging(true);
@@ -25,9 +49,19 @@ export function bindProgressInput({ ctx, video, fmt, applyProgress, setDragging,
     progWrap.classList.add("scrubbing");
     preview(event);
     showUI();
+  }
+  progWrap.addEventListener("pointerdown", start);
+  progTouchTarget?.addEventListener("pointerdown", start);
+  progTouchTarget?.addEventListener("pointermove", event => {
+    if (activePointer === null && updateHover(event)) preview(event);
+  });
+  progTouchTarget?.addEventListener("pointerleave", () => {
+    progWrap.classList.remove("mouse-hover");
+    progTouchTarget.style.cursor = "";
   });
   progWrap.addEventListener("pointermove", event => {
     if (activePointer !== null && activePointer !== event.pointerId) return;
+    updateHover(event);
     if (event.pointerType === "mouse" || activePointer !== null) preview(event);
   });
   function finish(event, cancel) {
@@ -36,6 +70,7 @@ export function bindProgressInput({ ctx, video, fmt, applyProgress, setDragging,
     activePointer = null;
     setDragging(false);
     progWrap.classList.remove("scrubbing");
+    updateHover(event);
     if (!cancel) onScrubTo(fraction(event));
     else applyProgress(video.currentTime / video.duration);
     if (progWrap.hasPointerCapture(pointer)) progWrap.releasePointerCapture(pointer);
@@ -60,6 +95,7 @@ export function bindSurfaceInput({ ctx, showUI, hideUI, togglePlay, toggleFS, sk
       return;
     }
     if (event.pointerType === "mouse" || event.button !== 0 || isMenuOpen()) return;
+    if (event.target.closest("#progress-touch-target")) return;
     const control = event.target.closest("#big-play, #fs-btn");
     if (event.target.closest(ignore) && !control) return;
     const fullscreen = document.fullscreenElement === ctx.wrap;

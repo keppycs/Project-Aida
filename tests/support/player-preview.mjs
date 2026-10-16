@@ -16,7 +16,7 @@ const MIME = {
   ".avif": "image/avif", ".ico": "image/x-icon", ".woff2": "font/woff2",
 };
 
-// This fixture describes a public CDN video. It never reads the local media library.
+// This fixture describes a public CDN video. It never reads the local media files.
 const PUBLIC_METADATA = {
   id: PUBLIC_VIDEO_ID, title: "ive got nuts of steel", createdAt: 1774446542,
   duration: 25.963, frameRate: 120, width: 2560, height: 1440,

@@ -5,7 +5,8 @@ html:has(#player-wrap.is-mobile.menu-open) { overflow: hidden; }
 #player-wrap.is-mobile { overflow: visible; --player-notice-bottom: 72px; }
 /* The viewport sheet and backdrop must paint above later page thumbnails. */
 #player-wrap.is-mobile.menu-open { z-index: 1; }
-#player-wrap.is-mobile #controls { left: max(8px, env(safe-area-inset-left)); right: max(8px, env(safe-area-inset-right)); }
+#player-wrap.is-mobile #controls,
+#player-wrap.is-mobile #progress-touch-target { left: max(8px, env(safe-area-inset-left)); right: max(8px, env(safe-area-inset-right)); }
 #player-wrap.is-mobile #ctrl-row { gap: 0; }
 #player-wrap.is-mobile #play-btn,
 #player-wrap.is-mobile #vol-cluster { display: none; }

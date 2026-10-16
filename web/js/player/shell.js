@@ -4,10 +4,11 @@ import {
   loadPlayerPrefs, persistPlaybackPrefs, getPlaybackFrameRate,
 } from "./engine.js?v=quality-labels-v26";
 import { getAutoHideDelayMs, getBigPlayState, shouldShowMenuBackdrop } from "./chrome.js?v=progress-hover-removed-v4";
-import { bindProgressInput, bindSurfaceInput } from "./input.js?v=volume-space-v23";
-import { createSettings } from "./settings.js?v=quality-sheet-v18";
+import { bindProgressInput, bindSurfaceInput } from "./input.js?v=compact-hit-v27";
+import { createSettings } from "./settings.js?v=overlay-scrollbar-v36";
 import { createFrameStepper } from "./frame-step.js?v=progress-hover-removed-v4";
 import { createSmoothPause } from "./smooth-pause.js?v=motion-smooth-v13";
+import { createPlayerIcons } from "./icon-morph.js?v=icon-morph-v31";
 
 function collectContext() {
   const wrap = document.getElementById("player-wrap");
@@ -30,6 +31,7 @@ function collectContext() {
     fsBtn: document.getElementById("fs-btn"),
     fsIcon: document.getElementById("fs-icon"),
     progWrap: document.getElementById("progress-wrap"),
+    progTouchTarget: document.getElementById("progress-touch-target"),
     progFill: document.getElementById("progress-fill"),
     progBuf: document.getElementById("progress-buffer"),
     progThumb: document.getElementById("progress-thumb"),
@@ -66,22 +68,6 @@ function fmt(s) {
   if (h) return `${h}:${String(m).padStart(2, "0")}:${String(sec).padStart(2, "0")}`;
   return `${m}:${String(sec).padStart(2, "0")}`;
 }
-
-const PLAY_SVG = '<polygon points="5,3 19,12 5,21"/>';
-const PAUSE_SVG =
-  '<rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/>';
-
-const BIG_PLAY_SVG_CIRCLE = '<circle cx="36" cy="36" r="35" fill="rgba(0,0,0,.55)"/>';
-const BIG_PLAY_SVG_PLAY = `${BIG_PLAY_SVG_CIRCLE}<path d="M26.5 21.5 L52.5 36 L26.5 50.5 Z" fill="rgba(255,255,255,0.88)"/>`;
-const BIG_PLAY_SVG_PAUSE = `${BIG_PLAY_SVG_CIRCLE}<rect x="24" y="22" width="9" height="28" rx="2.5" fill="rgba(255,255,255,0.88)"/><rect x="39" y="22" width="9" height="28" rx="2.5" fill="rgba(255,255,255,0.88)"/>`;
-
-const VOL_FULL = `<polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>
-  <path d="M19.07 4.93a10 10 0 0 1 0 14.14"/>
-  <path d="M15.54 8.46a5 5 0 0 1 0 7.07"/>`;
-const VOL_MUTE = `<polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>
-  <line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/>`;
-const VOL_LOW = `<polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>
-  <path d="M15.54 8.46a5 5 0 0 1 0 7.07"/>`;
 
 const FS_ENTER = `<polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/>
   <line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/>`;
@@ -127,6 +113,8 @@ export async function mountPlayer(meta, base) {
 
   const frameStepper = createFrameStepper(video, { getFrameRate: getPlaybackFrameRate });
   const savedPrefs = loadPlayerPrefs() || {};
+  // Restore mute before initial icon paint or queued volumechange events.
+  video.muted = savedPrefs.muted ?? false;
   const smoothPause = createSmoothPause(video, {
     enabled: savedPrefs.smoothPause ?? false,
     onStateChange: () => {
@@ -145,6 +133,11 @@ export async function mountPlayer(meta, base) {
   });
   smoothPause.setRate(savedPrefs.speed ?? 1);
   smoothPause.setVolume(getProfile().hideVolumeChrome ? 1 : (savedPrefs.volume ?? 0.5));
+  const icons = createPlayerIcons({
+    playIcon, bigPlay, volumeIcon: document.getElementById("vol-icon"),
+    playing: !smoothPause.intendedPaused,
+    volumeState: video.muted || smoothPause.nominalVolume === 0 ? "muted" : smoothPause.nominalVolume < 0.5 ? "low" : "full",
+  });
   let lastSyncedVolume, lastSyncedMuted, lastSyncedRate;
   const settings = createSettings({ wrap, onActivity: showUI });
   const isAnyMenuOpen = () => settings.isOpen;
@@ -215,7 +208,7 @@ export async function mountPlayer(meta, base) {
     const fromOpacity = painted ? Math.max(0, Math.min(1, Number(painted.opacity))) : 0;
     const fromTransform = reducedMotion ? "scale(1)" : (painted?.transform ?? small);
     cleanupBigPlayFlash();
-    svg.innerHTML = playing ? BIG_PLAY_SVG_PAUSE : BIG_PLAY_SVG_PLAY;
+    icons.setCenterPlaying(playing);
     bigPlay.classList.remove("initial-play");
     bigPlay.classList.add("show", "flash-brief");
     bigPlay.tabIndex = -1;
@@ -255,7 +248,7 @@ export async function mountPlayer(meta, base) {
       bigPlay.tabIndex = interactive ? 0 : -1;
       bigPlay.setAttribute("aria-hidden", String(!interactive));
       bigPlay.setAttribute("aria-label", "Play video");
-      svg.innerHTML = BIG_PLAY_SVG_PLAY;
+      icons.setCenterPlaying(false);
       return;
     }
     bigPlay.classList.remove("initial-play");
@@ -277,7 +270,7 @@ export async function mountPlayer(meta, base) {
     bigPlay.tabIndex = interactive ? 0 : -1;
     bigPlay.setAttribute("aria-hidden", String(!interactive));
     bigPlay.setAttribute("aria-label", showPause ? "Pause video" : "Play video");
-    svg.innerHTML = showPause ? BIG_PLAY_SVG_PAUSE : BIG_PLAY_SVG_PLAY;
+    icons.setCenterPlaying(showPause);
   }
 
   function showUI() {
@@ -326,7 +319,7 @@ export async function mountPlayer(meta, base) {
   }
 
   function setPlayIcon(playing) {
-    playIcon.innerHTML = playing ? PAUSE_SVG : PLAY_SVG;
+    icons.setPlaying(playing);
     playBtn.setAttribute("aria-label", playing ? "Pause video" : "Play video");
     playBtn.title = playing ? "Pause (k)" : "Play (k)";
   }
@@ -354,10 +347,7 @@ export async function mountPlayer(meta, base) {
     muteBtn.setAttribute("aria-label", m || v === 0 ? "Unmute" : "Mute");
     muteBtn.title = m || v === 0 ? "Unmute (m)" : "Mute (m)";
     volSlider.setAttribute("aria-valuetext", m ? "Muted" : `${Math.round(v * 100)} percent`);
-    document.getElementById("vol-icon").innerHTML =
-      m || v === 0 ? VOL_MUTE
-      : v < 0.5 ? VOL_LOW
-      : VOL_FULL;
+    icons.setVolume(m || v === 0 ? "muted" : v < 0.5 ? "low" : "full");
   }
 
   function toggleMute() {

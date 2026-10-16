@@ -44,14 +44,14 @@ async function paintedCenterInSettings(page, { paused, touch, state }) {
       svgOpacity: Number(getComputedStyle(svg).opacity), pointerEvents: getComputedStyle(button).pointerEvents,
       tabIndex: button.tabIndex, ariaHidden: button.getAttribute("aria-hidden"), label: button.getAttribute("aria-label"),
       inert: !!button.closest("[inert]"), focused: document.activeElement === button,
-      paths: svg.querySelectorAll("path").length, bars: svg.querySelectorAll("rect").length,
+      glyph: Object.fromEntries([["tip", 50, 36], ["gap", 36, 36], ["leftBar", 28, 36], ["rightBar", 43, 36]]
+        .map(([name, x, y]) => [name, svg.querySelector("[data-morph-path]")?.isPointInFill(new DOMPoint(x, y)) ?? false])),
       centerHit: hit?.id ?? hit?.localName, hitCenterControl: button.contains(hit) };
   });
   assert.equal(value.show, true, `${state}: Settings must not remove the existing center visual`);
   assert.ok(value.opacity * value.svgOpacity > .98, `${state}: the center icon must stay painted behind Settings`);
   assert.equal(value.label, paused ? "Play video" : "Pause video");
-  assert.equal(value.bars, paused ? 0 : 2, `${state}: center glyph must match the intended playback state`);
-  assert.equal(value.paths, paused ? 1 : 0);
+  assert.deepEqual(value.glyph, { tip: paused, gap: paused, leftBar: true, rightBar: true }, `${state}: center glyph geometry must match the intended playback state`);
   assert.equal(value.pointerEvents, "none", `${state}: a painted background control must not receive pointer input`);
   assert.equal(value.tabIndex, -1); assert.equal(value.ariaHidden, "true");
   assert.equal(value.focused, false); assert.equal(value.hitCenterControl, false);
@@ -125,6 +125,53 @@ async function visibleKeyboardFocus(page, selector) {
   }
   assert.notDeepEqual(focus.feedback, baseline.feedback, `${selector}: keyboard focus needs visible fill, text, icon, or slider feedback`);
   return { selector, baseline, focus };
+}
+
+async function caretOnlySearchFocus(page, session, touch) {
+  const input = page.locator("#search-input"), modes = [];
+  const geometry = element => {
+    const rect = element.getBoundingClientRect();
+    return { x: rect.x, y: rect.y + scrollY, width: rect.width, height: rect.height };
+  };
+  for (const mode of ["pointer", "keyboard", ...(touch ? ["touch"] : [])]) {
+    await input.scrollIntoViewIfNeeded();
+    await input.evaluate(element => element.blur());
+    await page.mouse.move(0, 0);
+    await page.waitForTimeout(240);
+    const baseline = await input.evaluate(focusFeedback), beforeRect = await input.evaluate(geometry);
+    if (mode === "pointer") await input.click();
+    else if (mode === "keyboard") { await page.keyboard.press("Tab"); await input.focus(); }
+    else {
+      const rect = await input.boundingBox();
+      await session.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 }] });
+      await page.waitForTimeout(100);
+      await session.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+    }
+    await page.waitForTimeout(240);
+    const focus = await input.evaluate(focusFeedback), afterRect = await input.evaluate(geometry);
+    assert.equal(focus.focused, true, `${mode}: search must retain native focus`);
+    assert.ok(focus.outlineStyle === "none" || focus.outlineWidth === 0, `${mode}: search must not acquire an outline`);
+    assert.deepEqual(focus.border, baseline.border, `${mode}: search focus must not change its border`);
+    assert.equal(focus.boxShadow, baseline.boxShadow, `${mode}: search focus must not acquire a ring/shadow`);
+    assert.deepEqual(focus.feedback, baseline.feedback, `${mode}: search focus must not highlight its fill or text`);
+    for (const key of Object.keys(beforeRect)) assert.ok(Math.abs(afterRect[key] - beforeRect[key]) < .2, `${mode}: search focus changed ${key}`);
+    const caret = await input.evaluate(element => ({ color: getComputedStyle(element).caretColor,
+      background: getComputedStyle(element).backgroundColor }));
+    const channels = color => (color.match(/[\d.]+/g) || []).map(Number);
+    const ink = channels(caret.color), surface = channels(caret.background);
+    assert.ok(ink.length >= 3 && (ink.length < 4 || ink[3] > 0), `${mode}: search caret must remain visible`);
+    assert.ok(Math.max(...ink.slice(0, 3).map((value, index) => Math.abs(value - surface[index]))) >= 100,
+      `${mode}: search caret must contrast with its unchanged background`);
+    assert.equal(await input.isEditable(), true);
+    const value = await input.inputValue();
+    await page.keyboard.press("End"); await page.keyboard.insertText("x");
+    assert.equal(await input.inputValue(), `${value}x`, `${mode}: focused search must remain editable`);
+    await page.keyboard.press("Backspace");
+    assert.equal(await input.inputValue(), value);
+    assert.equal(await input.evaluate(element => element.selectionStart === element.selectionEnd), true);
+    modes.push({ mode, baseline, focus, caret });
+  }
+  return { selector: "#search-input", caretOnly: true, modes };
 }
 
 async function spaceTransport(page, name, { repeat = false } = {}) {
@@ -507,14 +554,11 @@ try {
         fullscreen = "passed";
       }
       focusedControls.push(await visibleKeyboardFocus(page, ".back-link"));
-      if (await page.locator("#theatre-btn").isVisible()) {
-        focusedControls.push(await visibleKeyboardFocus(page, "#theatre-btn"));
-      }
       await page.goto(`${preview.origin}/index.html`, { waitUntil: "domcontentloaded" });
       await page.waitForFunction(() => !document.querySelector("#search-input").disabled);
-      tapHighlights.push(await transparentTapFeedback(page, "ready library"));
-      focusedControls.push(await visibleKeyboardFocus(page, "#search-input"));
-      await page.screenshot({ path: `${artifacts}/${label}-search-focus.png` });
+      tapHighlights.push(await transparentTapFeedback(page, "ready videos page"));
+      focusedControls.push(await caretOnlySearchFocus(page, session, touch));
+      await page.screenshot({ path: `${artifacts}/${label}-search-focus.png`, caret: "initial" });
       assert.deepEqual(errors, []);
       results.push({ label, passed: true, fullscreen, forward, focusedControls, tapHighlights, centerSettings, volumeRange, spaceControls, errors });
       console.log(`PASS ${label}: transparent native tap feedback, wrapper focus, controls, keyboard, settings, frame stepping; fullscreen ${fullscreen}`);

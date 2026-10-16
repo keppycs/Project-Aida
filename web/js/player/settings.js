@@ -1,3 +1,5 @@
+import { createOverlayScrollbar } from "./scrollbar.js?v=overlay-scrollbar-v36";
+
 /** One mounted settings surface. Motion never owns values, focus, or page state. */
 export function createSettings({ wrap, onActivity }) {
   const panel = document.getElementById("settings-panel");
@@ -32,6 +34,10 @@ export function createSettings({ wrap, onActivity }) {
   let reopenPointer = null;
   let openerPress = null;
   const isolation = new Map();
+  const scrollbar = createOverlayScrollbar({
+    body, thumb: document.getElementById("settings-scroll-thumb"), onActivity,
+    onHiddenFocus: () => { if (open) heading.focus({ preventScroll: true }); },
+  });
   const mobile = () => wrap.classList.contains("is-mobile");
   const pose = element => {
     const style = getComputedStyle(element);
@@ -154,6 +160,7 @@ export function createSettings({ wrap, onActivity }) {
     panel.style.setProperty("--settings-max-height", maxHeight);
     panel.setAttribute("aria-modal", String(isMobile));
     if (resized && !panel.hidden) {
+      scrollbar.setEnabled(false);
       // A resize changes the coordinate space. Settle once into its new bounds,
       // rather than continuing a gesture or keyframe with obsolete endpoints.
       generation += 1;
@@ -172,10 +179,12 @@ export function createSettings({ wrap, onActivity }) {
     }
   }
   function settled() {
+    scrollbar.setEnabled(open && !panel.hidden);
     panel.dispatchEvent(new CustomEvent("aida:settings-settled", { bubbles: true }));
   }
   function navigate(next, { animate = true, focus = true } = {}) {
     if (!pages.has(next)) return;
+    scrollbar.setEnabled(false);
     const outgoing = pages.get(page);
     const incoming = pages.get(next);
     const oldHeight = visibleHeight();
@@ -304,6 +313,7 @@ export function createSettings({ wrap, onActivity }) {
   }
   function close(restoreFocus = true) {
     if (panel.hidden || (!open && panel.dataset.phase === "closing")) return;
+    scrollbar.setEnabled(false);
     const token = ++generation;
     const from = pose(panel);
     closeRestoreFocus = restoreFocus;
@@ -368,7 +378,7 @@ export function createSettings({ wrap, onActivity }) {
   backdrop.addEventListener("click", () => close());
   panel.addEventListener("click", event => event.stopPropagation());
   panel.addEventListener("pointerdown", event => {
-    const control = event.target.closest("button, input, summary");
+    const control = event.target.closest("button, input, summary, [role='scrollbar']");
     if (!event.isPrimary || event.button !== 0 || !control) return;
     const movingPanel = panelMotion?.playState === "running";
     const movingPages = panel.classList.contains("page-transitioning")
@@ -513,7 +523,9 @@ export function createSettings({ wrap, onActivity }) {
   }, true);
   panel.addEventListener("keydown", event => {
     if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); close(); return; }
-    const items = visibleItems();
+    // The scrollbar has its own arrow keys; menu arrows still visit options.
+    // It remains in the mobile Tab cycle when there is scroll travel.
+    const items = visibleItems().filter(element => event.key === "Tab" || element.getAttribute("role") !== "scrollbar");
     const index = items.indexOf(document.activeElement);
     if (event.key === "Tab" && wrap.classList.contains("is-mobile")) {
       if (index < 0 || (event.shiftKey ? index === 0 : index === items.length - 1)) {

@@ -1,7 +1,6 @@
 .watch-main { max-width: 1120px; }
 .watch-navigation { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px; margin-bottom: 16px; }
 .back-link { display: inline-flex; align-items: center; min-height: 44px; min-width: 0; gap: 10px; color: var(--text-dim); font-size: 0.875rem; text-decoration: none; overflow-wrap: anywhere; }
-#theatre-btn { min-inline-size: 12em; }
 .watch-stage { position: relative; background: #000; border: 1px solid var(--border, rgba(255,255,255,.1)); border-radius: 14px; }
 .watch-stage #player-wrap { width: 100%; border-radius: 14px; box-shadow: none; }
 .watch-status { position: absolute; inset: 0; display: flex; align-items: flex-start; justify-content: center; padding: 24px; overflow: auto; overscroll-behavior: contain; scrollbar-gutter: stable; border-radius: inherit; z-index: 30; background: var(--surface); text-align: center; }
@@ -25,18 +24,12 @@
   .watch-tags a:hover, .text-link:hover { color: var(--accent); }
 }
 @supports not (scrollbar-gutter: stable) { .watch-status { overflow-y: scroll; } }
-.theatre-mode .watch-main { width: calc(100% - 2 * var(--page-gutter, 32px)); max-width: 1600px; }
-.theatre-mode .watch-stage { margin-inline: calc(-1 * var(--page-gutter, 32px)); border-radius: 0; }
-.theatre-mode .watch-stage #player-wrap { border-radius: 0; max-height: calc(100svh - 164px); min-height: 260px; aspect-ratio: 16 / 9; }
-.theatre-mode .watch-info, .theatre-mode .more-videos { max-width: 1120px; margin-inline: auto; }
 .watch-stage #player-wrap:fullscreen { border-radius: 0; width: 100vw; height: 100dvh; max-height: none; min-height: 0; }
 
 @media (max-width: 700px) {
   .watch-navigation { margin-bottom: 16px; }
-  #theatre-btn { display: none; }
-  .watch-stage, .theatre-mode .watch-stage { margin-inline: calc(-1 * var(--page-gutter, 20px)); border-left: 0; border-right: 0; border-radius: 0; }
+  .watch-stage { margin-inline: calc(-1 * var(--page-gutter, 20px)); border-left: 0; border-right: 0; border-radius: 0; }
   .watch-stage #player-wrap { border-radius: 0; }
-  .theatre-mode .watch-stage #player-wrap { max-height: none; min-height: 0; }
   .watch-info { padding-top: 24px; padding-bottom: 28px; }
   .watch-info h1 { font-size: 1.6875rem; }
   .watch-meta { font-size: 0.6875rem; gap: 6px 12px; }
