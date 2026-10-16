@@ -29,6 +29,8 @@ export function createSettings({ wrap, onActivity }) {
   let drag = null;
   let lastViewport = null;
   let closeRestoreFocus = true;
+  let reopenPointer = null;
+  let openerPress = null;
   const isolation = new Map();
   const mobile = () => wrap.classList.contains("is-mobile");
   const pose = element => {
@@ -145,9 +147,11 @@ export function createSettings({ wrap, onActivity }) {
     lastViewport = viewport;
     const visibleHeight = Math.min(player.bottom, viewportHeight) - Math.max(player.top, 0);
     // CSS resolves the real safe-area inset against the visual viewport cap.
-    panel.style.maxHeight = isMobile
-      ? `min(560px, calc(${viewportHeight}px - max(12px, env(safe-area-inset-top))))`
+    const maxHeight = isMobile
+      ? `calc(${viewportHeight}px - max(12px, env(safe-area-inset-top)))`
       : `${Math.max(96, Math.min(520, visibleHeight - 64))}px`;
+    panel.style.maxHeight = maxHeight;
+    panel.style.setProperty("--settings-max-height", maxHeight);
     panel.setAttribute("aria-modal", String(isMobile));
     if (resized && !panel.hidden) {
       // A resize changes the coordinate space. Settle once into its new bounds,
@@ -324,7 +328,36 @@ export function createSettings({ wrap, onActivity }) {
       finishClose(restoreFocus);
     }, () => {});
   }
-  opener.addEventListener("click", event => { event.stopPropagation(); open ? close() : show(); });
+  const toggle = () => open ? close() : show();
+  opener.addEventListener("click", event => {
+    event.stopPropagation();
+    // Touch/pen taps use their delivered pointer sequence. Browsers can omit
+    // the compatibility click after a swipe, and keyboard/mouse still use it.
+    if (event.pointerType === "touch" || event.pointerType === "pen") return;
+    toggle();
+  });
+  opener.addEventListener("pointerdown", event => {
+    if (!event.isPrimary || event.button !== 0
+      || (event.pointerType !== "touch" && event.pointerType !== "pen")) return;
+    openerPress = { pointer: event.pointerId, x: event.clientX, y: event.clientY, moved: false };
+  });
+  document.addEventListener("pointermove", event => {
+    if (event.pointerId !== openerPress?.pointer) return;
+    if (Math.hypot(event.clientX - openerPress.x, event.clientY - openerPress.y) > 12) openerPress.moved = true;
+  });
+  document.addEventListener("pointerup", event => {
+    if (event.pointerId !== openerPress?.pointer) return;
+    const press = openerPress;
+    openerPress = null;
+    reopenPointer = event.pointerId;
+    const target = opener.getBoundingClientRect();
+    if (press.moved || !opener.contains(event.target)
+      || event.clientX < target.left || event.clientX > target.right
+      || event.clientY < target.top || event.clientY > target.bottom) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    toggle();
+  });
   document.getElementById("settings-close").addEventListener("click", () => close());
   back.addEventListener("click", () => {
     const previous = page;
@@ -375,6 +408,11 @@ export function createSettings({ wrap, onActivity }) {
   }
   document.addEventListener("pointerup", releaseMotion);
   document.addEventListener("pointercancel", releaseMotion);
+  document.addEventListener("pointercancel", event => {
+    if (event.pointerId === openerPress?.pointer) openerPress = null;
+    if (event.pointerId !== reopenPointer) return;
+    reopenPointer = null;
+  });
   document.addEventListener("lostpointercapture", releaseMotion);
 
   header.addEventListener("pointerdown", event => {
@@ -431,6 +469,28 @@ export function createSettings({ wrap, onActivity }) {
   });
   document.addEventListener("pointerdown", event => {
     suppressClick = false;
+    reopenPointer = null;
+    openerPress = null;
+    if (mobile() && !open && panel.dataset.phase === "closing"
+      && event.isPrimary && event.button === 0) {
+      const target = opener.getBoundingClientRect();
+      const stage = panel.getBoundingClientRect(), painted = surface.getBoundingClientRect();
+      const sheetCoversPress = event.clientX >= Math.max(stage.left, painted.left)
+        && event.clientX <= Math.min(stage.right, painted.right)
+        && event.clientY >= Math.max(stage.top, painted.top)
+        && event.clientY <= Math.min(stage.bottom, painted.bottom);
+      if (event.clientX >= target.left && event.clientX <= target.right
+        && event.clientY >= target.top && event.clientY <= target.bottom && !sheetCoversPress) {
+        // The fading scrim and inert background still own hit testing until
+        // exit completes. Route only a fresh press on the visible opener back
+        // into the reversible motion; never release the rest of the page.
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        reopenPointer = event.pointerId;
+        show();
+        return;
+      }
+    }
     if (open && !panel.contains(event.target) && !opener.contains(event.target)) {
       // Capture dismissal so the same press cannot also play or seek the picture.
       close();
@@ -440,8 +500,14 @@ export function createSettings({ wrap, onActivity }) {
     }
   }, true);
   document.addEventListener("click", event => {
-    if (!suppressClick) return;
+    // Older WebKit emits a MouseEvent compatibility click without pointer ID.
+    // Only a trusted pointer-style click can complete this pending sequence;
+    // keyboard clicks have detail 0 and a new pointerdown clears the pending ID.
+    const openerClick = reopenPointer !== null && (event.pointerId === reopenPointer
+      || (!("pointerId" in event) && event.isTrusted && event.detail > 0));
+    if (!suppressClick && !openerClick) return;
     suppressClick = false;
+    reopenPointer = null;
     event.preventDefault();
     event.stopImmediatePropagation();
   }, true);

@@ -3,6 +3,7 @@
   box-sizing: border-box;
   margin: 0;
   padding: 0;
+  -webkit-tap-highlight-color: transparent;
 }
 
 #player-wrap {
@@ -46,9 +47,13 @@
   height: 100%;
   object-fit: contain;
 }
+/* The fullscreen picture owns its exit gesture; controls and Settings retain
+   their own touch actions and native scrolling. */
+#player-wrap:fullscreen #video,
+#player-wrap:fullscreen #big-play { touch-action: none; }
 #player-wrap button,
 #player-wrap input { font: inherit; }
-#player-wrap button { -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
+#player-wrap button { touch-action: manipulation; }
 
 /* A small readability scrim follows the visible controls, without creating a deck. */
 .grad-top,
@@ -131,6 +136,7 @@
 #big-play.initial-play svg,
 #player-wrap.is-mobile #big-play svg { opacity: 1; }
 #big-play.show { opacity: 1; pointer-events: auto; }
+#player-wrap.menu-open #big-play { pointer-events: none; }
 #big-play.flash-brief { pointer-events: none; transition: none; }
 #big-play.flash-brief svg { transform-origin: 50% 50%; }
 /* Only the 44px utility row consumes visible height. The scrub target extends upward. */
@@ -357,12 +363,35 @@
 .menu-header { padding: 12px 16px 6px !important; color: var(--text-dim); font-size: 0.75rem; font-weight: 500; }
 .menu-badge { margin-left: auto !important; color: var(--text-dim); font-size: 0.6875rem; white-space: nowrap; }
 .menu-hint { padding: 8px 16px !important; color: var(--text-dim); font-size: 0.75rem; line-height: 1.5; }
-.playback-advanced { border-top: 1px solid #ffffff18; margin-top: 6px; }
-.playback-advanced > summary { display: flex; align-items: center; min-height: 44px; padding: 8px 16px !important; list-style: none; cursor: pointer; color: var(--text-dim); font-size: 0.8125rem; }
-.playback-advanced > summary::-webkit-details-marker { display: none; }
-.playback-advanced > summary::after { content: "›"; margin-left: auto; font-size: 1.25rem; }
-.playback-advanced[open] > summary::after { content: "⌄"; }
-.quality-fps { margin-left: 4px; font-size: 0.6875rem; font-weight: 400; color: var(--text-dim); }
+.playback-advanced {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 5.5rem), 1fr));
+  gap: 12px;
+  padding: 8px 16px !important;
+  border-top: 1px solid #ffffff0d;
+  border-bottom: 1px solid #ffffff14;
+}
+.playback-choice { display: flex; flex-direction: column; min-width: 0; gap: 4px; padding: 0 !important; }
+.playback-choice-label { min-width: 0; color: var(--text-dim); font-size: .75rem; line-height: 1rem; overflow-wrap: anywhere; }
+.playback-choice .menu-toggle-row { min-width: 0; gap: 0; padding: 0 !important; border-radius: 10px; overflow: hidden; background: #ffffff06; }
+.playback-choice .menu-toggle {
+  display: grid;
+  place-items: center;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0 4px !important;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: .75rem;
+  line-height: 1rem;
+  overflow-wrap: anywhere;
+  transition: background-color 150ms, color 150ms;
+}
+.playback-choice .menu-toggle + .menu-toggle { border-left: 1px solid #ffffff1a; }
+.playback-choice .menu-toggle.active { background: #e8ff471a; color: var(--accent); }
+.quality-resolution-heading { font-weight: 600; }
 .menu-toggle-row { display: flex; gap: 6px; padding: 4px 12px 8px !important; }
 .menu-toggle {
   flex: 1;
@@ -434,6 +463,8 @@
   .player-notice-close:hover { background: #ffffff1a; }
   .menu-item:hover { background: #ffffff12; }
   .menu-toggle:hover:not(:disabled) { background: #ffffff12; }
+  .playback-choice .menu-toggle:hover:not(:disabled) { background: #ffffff0a; }
+  .playback-choice .menu-toggle.active:hover:not(:disabled) { background: #e8ff4726; color: #f0ff85; }
   #progress-wrap:hover #progress-track { height: var(--bar-h-hover); }
   #progress-wrap:hover #progress-thumb,
   #progress-wrap:hover #time-tooltip { opacity: 1; }

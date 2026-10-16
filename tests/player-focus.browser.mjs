@@ -36,6 +36,51 @@ async function wrapperCheck(page, baseline, action) {
   assert.equal(actual.boxShadow, baseline.boxShadow, `${action}: focus changed the player shadow`);
 }
 
+async function paintedCenterInSettings(page, { paused, touch, state }) {
+  const value = await page.locator("#big-play").evaluate(button => {
+    const svg = button.querySelector("svg"), rect = button.getBoundingClientRect();
+    const hit = document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2);
+    return { show: button.classList.contains("show"), opacity: Number(getComputedStyle(button).opacity),
+      svgOpacity: Number(getComputedStyle(svg).opacity), pointerEvents: getComputedStyle(button).pointerEvents,
+      tabIndex: button.tabIndex, ariaHidden: button.getAttribute("aria-hidden"), label: button.getAttribute("aria-label"),
+      inert: !!button.closest("[inert]"), focused: document.activeElement === button,
+      paths: svg.querySelectorAll("path").length, bars: svg.querySelectorAll("rect").length,
+      centerHit: hit?.id ?? hit?.localName, hitCenterControl: button.contains(hit) };
+  });
+  assert.equal(value.show, true, `${state}: Settings must not remove the existing center visual`);
+  assert.ok(value.opacity * value.svgOpacity > .98, `${state}: the center icon must stay painted behind Settings`);
+  assert.equal(value.label, paused ? "Play video" : "Pause video");
+  assert.equal(value.bars, paused ? 0 : 2, `${state}: center glyph must match the intended playback state`);
+  assert.equal(value.paths, paused ? 1 : 0);
+  assert.equal(value.pointerEvents, "none", `${state}: a painted background control must not receive pointer input`);
+  assert.equal(value.tabIndex, -1); assert.equal(value.ariaHidden, "true");
+  assert.equal(value.focused, false); assert.equal(value.hitCenterControl, false);
+  if (touch) assert.equal(value.inert, true, `${state}: the mobile modal must keep its background inert`);
+  return { state, ...value };
+}
+
+async function transparentTapFeedback(page, state) {
+  const result = await page.evaluate(() => {
+    const nodes = [...document.querySelectorAll("*")];
+    const unstyled = [];
+    const failures = nodes.flatMap(element => {
+      const style = getComputedStyle(element);
+      const color = style.webkitTapHighlightColor;
+      // Media <source> nodes can expose an empty tap property and no painted box.
+      if (color === "" && !element.getClientRects().length) {
+        unstyled.push(element.localName);
+        return [];
+      }
+      const transparent = color === "transparent" || /^rgba\([^,]+,[^,]+,[^,]+,\s*0(?:\.0+)?\s*\)$/.test(color);
+      return transparent ? [] : [{ element: `${element.localName}${element.id ? `#${element.id}` : ""}`, color }];
+    });
+    return { checked: nodes.length - unstyled.length, unstyled, failures };
+  });
+  assert.ok(result.checked > 0, `${state}: tap feedback audit found no elements`);
+  assert.deepEqual(result.failures, [], `${state}: native tap highlights must be transparent on every element`);
+  return { state, checked: result.checked, unstyled: result.unstyled };
+}
+
 const focusFeedback = element => {
   const style = getComputedStyle(element);
   const visual = node => {
@@ -293,6 +338,7 @@ try {
       await page.waitForFunction(() => document.querySelector("#watch-status").hidden && !document.querySelector("#player-wrap").inert && document.querySelector("video").readyState >= 2 && !document.querySelector("#spinner").classList.contains("show"), null, { timeout: 45000 });
       await page.locator("#player-wrap").scrollIntoViewIfNeeded();
       const baseline = await page.locator("#player-wrap").evaluate(decoration);
+      const tapHighlights = [await transparentTapFeedback(page, "ready watch")];
       const session = touch ? await context.newCDPSession(page) : null;
       const pressPoint = async (x, y) => {
         if (!touch) return page.mouse.click(x, y);
@@ -304,6 +350,24 @@ try {
         if (!touch) return page.locator(selector).click();
         const rect = await page.locator(selector).boundingBox();
         return pressPoint(rect.x + rect.width / 2, rect.y + rect.height / 2);
+      };
+      const heldTouch = async (selector, name, fraction = .5) => {
+        const rect = await page.locator(selector).boundingBox();
+        const before = await page.locator(selector).evaluate(decoration);
+        await session.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: rect.x + rect.width * fraction,
+          y: rect.y + rect.height / 2, radiusX: 3, radiusY: 3, force: 1 }] });
+        try {
+          await page.waitForTimeout(100);
+          tapHighlights.push(await transparentTapFeedback(page, `held touch ${name}`));
+          const pressed = await page.locator(selector).evaluate(decoration);
+          assert.ok(pressed.outlineStyle === "none" || pressed.outlineWidth === 0, `${name}: held touch added an outline`);
+          assert.deepEqual(pressed.border, before.border, `${name}: held touch changed the perimeter border`);
+          assert.equal(pressed.boxShadow, before.boxShadow, `${name}: held touch added a perimeter shadow`);
+          await wrapperCheck(page, baseline, `held touch ${name}`);
+          await page.screenshot({ path: `${artifacts}/${label}-${name}-touch-held.png` });
+        } finally {
+          await session.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+        }
       };
 
       // Programmatic wrapper focus must inherit keyboard modality without outlining the picture.
@@ -322,6 +386,29 @@ try {
       });
       await page.waitForFunction(() => Number(getComputedStyle(document.querySelector("#controls")).opacity) > .99 && !document.querySelector("#spinner").classList.contains("show"));
       await page.screenshot({ path: `${artifacts}/${label}-wrapper-focus.png` });
+      if (touch) {
+        await heldTouch("#progress-wrap", "seekbar", .25);
+        await page.waitForFunction(() => !document.querySelector("video").seeking && !document.querySelector("#spinner").classList.contains("show"));
+      }
+
+      const centerSettings = [];
+      await activate("#settings-btn");
+      await page.waitForFunction(() => document.querySelector("#settings-panel").dataset.phase === "open");
+      centerSettings.push(await paintedCenterInSettings(page, { paused: true, touch, state: "initial home" }));
+      await page.screenshot({ path: `${artifacts}/${label}-initial-center-settings.png` });
+      await activate("#quality-btn");
+      await page.waitForFunction(() => document.querySelector("#settings-panel").dataset.page === "quality"
+        && !document.querySelector("#settings-panel").getAnimations({ subtree: true }).some(animation => animation.playState === "running"));
+      centerSettings.push(await paintedCenterInSettings(page, { paused: true, touch, state: "initial quality" }));
+      await activate("#settings-back");
+      await page.waitForFunction(() => document.querySelector("#settings-panel").dataset.page === "home"
+        && !document.querySelector("#settings-panel").getAnimations({ subtree: true }).some(animation => animation.playState === "running"));
+      const center = await page.locator("#big-play").boundingBox();
+      await pressPoint(center.x + center.width / 2, center.y + center.height / 2);
+      await page.waitForFunction(() => document.querySelector("#settings-panel").hidden);
+      assert.equal(await page.locator("video").evaluate(video => video.paused), true,
+        "Pressing the painted center behind Settings must only dismiss the menu");
+      assert.equal(await page.evaluate(() => document.activeElement.id), "settings-btn");
 
       await activate("#big-play");
       await page.waitForFunction(() => !document.querySelector("video").paused);
@@ -362,8 +449,35 @@ try {
 
       await activate("#settings-btn");
       await page.waitForFunction(() => document.querySelector("#settings-panel").dataset.phase === "open");
+      if (touch) centerSettings.push(await paintedCenterInSettings(page, { paused: true, touch, state: "paused home" }));
+      else assert.equal(await page.locator("#big-play").evaluate(button => button.classList.contains("show")), false,
+        "Opening desktop Settings after playback must not create a new permanent center cue");
+      tapHighlights.push(await transparentTapFeedback(page, "settings home"));
       focusedControls.push(await visibleKeyboardFocus(page, "#speed-btn"));
       await page.screenshot({ path: `${artifacts}/${label}-menu-focus.png` });
+      if (touch) await heldTouch("#speed-btn", "settings-speed");
+      else await activate("#speed-btn");
+      await page.waitForFunction(() => document.querySelector("#settings-panel").dataset.phase === "open" && document.querySelector("#settings-panel").dataset.page === "speed");
+      tapHighlights.push(await transparentTapFeedback(page, "settings speed"));
+      await activate("#settings-back");
+      await page.waitForFunction(() => document.querySelector("#settings-panel").dataset.phase === "open" && document.querySelector("#settings-panel").dataset.page === "home");
+      await activate("#quality-btn");
+      await page.waitForFunction(() => document.querySelector("#settings-panel").dataset.phase === "open" && document.querySelector("#settings-panel").dataset.page === "quality" && document.querySelector("#quality-menu-content button"));
+      if (touch) centerSettings.push(await paintedCenterInSettings(page, { paused: true, touch, state: "paused quality" }));
+      assert.equal(await page.locator("#quality-menu-content details, #quality-menu-content summary").count(), 0,
+        "Quality controls must not hide behind a disclosure");
+      assert.equal(await page.locator("#quality-menu-content > :first-child").evaluate(element =>
+        element.matches("section.playback-advanced") && element.getAttribute("aria-label") === "Playback format"
+          && !element.textContent.includes("Advanced playback")), true,
+      "Compact playback format controls belong at the top, without the removed Advanced playback heading");
+      for (const selector of ['.playback-advanced button[aria-label="AV1 codec"]', '.playback-advanced button[aria-label="DASH streaming protocol"]']) {
+        assert.equal(await page.locator(selector).isVisible(), true, `${selector}: static playback controls must be immediately visible`);
+        focusedControls.push(await visibleKeyboardFocus(page, selector));
+      }
+      if (touch) await heldTouch('.playback-advanced button[aria-label="AV1 codec"]', "quality-codec");
+      tapHighlights.push(await transparentTapFeedback(page, "settings dynamic quality and advanced controls"));
+      await activate("#settings-back");
+      await page.waitForFunction(() => document.querySelector("#settings-panel").dataset.phase === "open" && document.querySelector("#settings-panel").dataset.page === "home");
       await page.keyboard.press("Escape");
       await page.waitForFunction(() => document.querySelector("#settings-panel").hidden);
       assert.equal(await page.evaluate(() => document.activeElement.id), "settings-btn");
@@ -398,11 +512,12 @@ try {
       }
       await page.goto(`${preview.origin}/index.html`, { waitUntil: "domcontentloaded" });
       await page.waitForFunction(() => !document.querySelector("#search-input").disabled);
+      tapHighlights.push(await transparentTapFeedback(page, "ready library"));
       focusedControls.push(await visibleKeyboardFocus(page, "#search-input"));
       await page.screenshot({ path: `${artifacts}/${label}-search-focus.png` });
       assert.deepEqual(errors, []);
-      results.push({ label, passed: true, fullscreen, forward, focusedControls, volumeRange, spaceControls, errors });
-      console.log(`PASS ${label}: wrapper focus, controls, keyboard, settings, frame stepping; fullscreen ${fullscreen}`);
+      results.push({ label, passed: true, fullscreen, forward, focusedControls, tapHighlights, centerSettings, volumeRange, spaceControls, errors });
+      console.log(`PASS ${label}: transparent native tap feedback, wrapper focus, controls, keyboard, settings, frame stepping; fullscreen ${fullscreen}`);
     } catch (error) {
       await page.screenshot({ path: `${artifacts}/${label}-failure.png` }).catch(() => {});
       results.push({ label, passed: false, error: error.message });
