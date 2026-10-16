@@ -4,15 +4,13 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="description" content="Explore the Aida video library. High frame rates, vivid detail, and a player built for watching." />
-    <meta name="theme-color" content="#080a08" />
+    <meta name="theme-color" content="#101112" />
     <title>Aida — Video library</title>
     <link rel="icon" href="assets/favicons/flushed.svg" type="image/svg+xml" />
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
-    <link rel="stylesheet" href="css/site.css?v=prechat-20261016-dd37ee5" />
-    <link rel="stylesheet" href="css/index.css?v=prechat-20261016-dd37ee5" />
-    <script defer src="js/site-env.js?v=prechat-20261016-dd37ee5"></script>
-    <script type="module" src="js/index.js?v=prechat-20261016-dd37ee5"></script>
+    <link rel="stylesheet" href="css/site.css?v=ux-stability-v14" />
+    <link rel="stylesheet" href="css/index.css?v=ux-stability-v14" />
+    <script defer src="js/site-env.js?v=ux-stability-v14"></script>
+    <script type="module" src="js/index.js?v=ux-stability-v14"></script>
   </head>
   <body>
     <a class="skip-link" href="#main-content">Skip to content</a>
@@ -27,7 +25,7 @@
       </nav>
     </header>
 
-    <main class="site-main library-main" id="main-content">
+    <main class="site-main library-main" id="main-content" tabindex="-1">
       <section id="hero" class="featured-section" aria-label="Latest video" aria-busy="true">
         <div id="hero-skeleton" class="featured-skeleton" aria-hidden="true">
           <div class="skeleton-block featured-skeleton-image"></div>
@@ -51,12 +49,14 @@
 
       <section id="videos" class="library-section" aria-labelledby="library-title" aria-busy="true">
         <div class="library-toolbar">
-          <div class="library-heading"><p class="eyebrow">The collection</p><h2 id="library-title">Video library <span id="library-count" class="library-count"></span></h2></div>
+          <div class="library-heading"><h2 id="library-title">Video library <span id="library-count" class="library-count"></span></h2></div>
           <form id="search-form" class="search-wrap" role="search">
-            <label class="sr-only" for="search-input">Search video titles, descriptions, and tags</label>
+            <label class="search-label" for="search-input">Search library</label>
+            <div class="search-field">
             <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><circle cx="10.5" cy="10.5" r="7" /><path d="m16 16 4.5 4.5" /></svg>
-            <input type="search" id="search-input" placeholder="Search the library" autocomplete="off" spellcheck="false" disabled />
+            <input type="search" id="search-input" placeholder="Title, description, or tag" autocomplete="off" spellcheck="false" disabled />
             <button id="search-clear" class="search-clear" type="button" aria-label="Clear search" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18" /></svg></button>
+            </div>
           </form>
         </div>
         <p id="results-summary" class="results-summary" role="status" aria-live="polite">Loading the library…</p>
@@ -75,6 +75,5 @@
       <noscript><div class="status-panel"><h2>JavaScript is needed to browse</h2><p>Enable JavaScript to load the video library and player.</p></div></noscript>
     </main>
 
-    <footer class="site-footer"><span>aida <span class="footer-byline">by keppy</span></span><span>Made for watching.</span></footer>
   </body>
 </html>

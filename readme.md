@@ -107,6 +107,14 @@ On the **production** host (`keppy.dev` / `www.keppy.dev` in `web/js/site-env.js
 
 On **any other host** (localhost, LAN, preview), add **`&local=1`** to the watch URL (e.g. `watch.html?v=0&local=1`) to load **`./local/{id}`** CMAF instead of the CDN. A **LOCAL** badge appears when that folder is used. Favicons: **flushed** on the live site, **bug** off-live (`site-env.js`).
 
+**Smooth Pause:** The player Settings menu has an optional, saved Smooth Pause switch, off by default. When enabled, play/pause eases playback speed and audio over 140 ms while retaining the selected speed, volume and mute settings. Scrubbing and comma/period frame stepping stay immediate. This changes transport presentation, not the source's frame rate or video renditions.
+
+Player interaction checks live in `tests/player-*.browser.mjs`. Settings motion has a traced layout budget and native touch interruption checks in `tests/player-settings-performance.browser.mjs`; Smooth Pause has unit and browser checks. Use the local preview and review the UI before publishing.
+
+The library and watch page share neutral surfaces, system fonts and native scrollbars with reserved gutters. Search filters the collection without removing the featured content above the search field, and the query stays in the URL. Local previews load the optional mobile debug console only with `&debug=1`.
+
+Run `node tests/site-ux.browser.mjs` for shared UI changes. It checks real classic/overlay scrollbar modes, loading/search/empty/error states, short and long pages, player Settings overflow, enlarged text, touch targets and native scrolling. `AIDA_PLAYWRIGHT_MODULE`, `AIDA_BROWSER_EXECUTABLE` and `AIDA_REVIEW_DIR` can select the test runtime, browser and artifact directory. Keep `tests/player-focus.browser.mjs` and the player motion tests alongside this check.
+
 ### GitHub Pages
 
 The static site is published from `web/` by [the Pages workflow](.github/workflows/pages.yml). The artifact contains the contents of `web/` at its root, preserving public URLs such as `/watch.html`, `/css/` and `/js/`. Local encodes in `web/local/` and saved pages in `web/youtube reference/` are excluded from the artifact. `docs/` is project documentation and is not part of the website artifact.
@@ -115,7 +123,7 @@ The static site is published from `web/` by [the Pages workflow](.github/workflo
 
 ### Shared-link thumbnails and embeds
 
-`edge/share-worker.mjs` adds video-specific Open Graph and Twitter card metadata to the **initial HTML** of `/watch?v=VIDEO_ID` and `/watch.html?v=VIDEO_ID`. Chat crawlers can read the title, description and thumbnail without running the frontend's JavaScript. Existing watch links and the Copy link button keep working.
+`edge/share-worker.mjs` adds video-specific Open Graph and Twitter card metadata to the **initial HTML** of `/watch?v=VIDEO_ID` and `/watch.html?v=VIDEO_ID`. Chat crawlers can read the title, description and thumbnail without running the frontend's JavaScript. Existing watch links keep working.
 
 GitHub Pages cannot generate different HTML for different `?v=` values. This feature therefore needs a **Cloudflare Worker Route in front of the existing site**, rather than just adding JavaScript meta tags. The website and video storage can stay where they are. Only the watch, embed, oEmbed and preview-image paths use the Worker; the CDN is unaffected. See [Cloudflare's route documentation](https://developers.cloudflare.com/workers/configuration/routing/routes/) and the [Open Graph specification](https://ogp.me/).
 

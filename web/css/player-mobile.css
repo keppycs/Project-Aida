@@ -1,4 +1,7 @@
 /* Touch controls use the same geometry in portrait, landscape, and fullscreen. */
+/* Inert prevents activation, not native backdrop scrolling. Keep the viewport
+   locked through the sheet's exit; the root's stable gutters retain its width. */
+html:has(#player-wrap.is-mobile.menu-open) { overflow: hidden; }
 #player-wrap.is-mobile { overflow: visible; --player-notice-bottom: 72px; }
 /* The viewport sheet and backdrop must paint above later page thumbnails. */
 #player-wrap.is-mobile.menu-open { z-index: 1; }
@@ -6,7 +9,7 @@
 #player-wrap.is-mobile #ctrl-row { gap: 0; }
 #player-wrap.is-mobile #play-btn,
 #player-wrap.is-mobile #vol-cluster { display: none; }
-#player-wrap.is-mobile #time-display { padding: 0 4px; font-size: 12px; }
+#player-wrap.is-mobile #time-display { padding: 0 4px; font-size: .75rem; }
 #player-wrap.is-mobile #title-bar { display: none; }
 #player-wrap.is-mobile .grad-top { display: none; }
 #player-wrap.is-mobile .grad-bot { height: 64px; }
@@ -14,20 +17,45 @@
 #player-wrap.is-mobile #time-tooltip { display: none; }
 #player-wrap.is-mobile #progress-wrap.scrubbing #time-tooltip { display: block; }
 #player-wrap.is-mobile.menu-open #big-play { opacity: 0; pointer-events: none; }
-#player-wrap.is-mobile .menu-backdrop { position: fixed; background: #0005; pointer-events: auto; }
+#player-wrap.is-mobile .menu-backdrop { position: fixed; background: #0009; pointer-events: auto; }
 #player-wrap.is-mobile .player-settings {
   position: fixed;
-  left: max(8px, env(safe-area-inset-left));
-  right: max(8px, env(safe-area-inset-right));
-  bottom: max(8px, env(safe-area-inset-bottom));
+  left: 0;
+  right: 0;
+  bottom: 0;
   width: auto;
-  max-width: 480px;
-  max-height: min(70dvh, 520px);
-  margin-inline: auto;
-  border-radius: 18px;
+  max-width: none;
+  max-height: calc(100dvh - max(12px, env(safe-area-inset-top)));
+  margin: 0;
+  border-radius: 20px 20px 0 0;
   transform-origin: bottom center;
 }
-#player-wrap.is-mobile .settings-header { height: 52px; }
+#player-wrap.is-mobile .settings-surface {
+  padding-inline: env(safe-area-inset-left) env(safe-area-inset-right);
+  padding-bottom: env(safe-area-inset-bottom);
+  border: 0;
+  box-shadow: none;
+}
+#player-wrap.is-mobile .player-settings.page-transitioning::after { display: none; }
+#player-wrap.is-mobile .settings-header {
+  position: relative;
+  flex-basis: 64px;
+  height: 64px;
+  padding: 15px 6px 4px !important;
+  touch-action: none;
+}
+#player-wrap.is-mobile .settings-header::before {
+  content: "";
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  width: 36px;
+  height: 4px;
+  border-radius: 2px;
+  background: #ffffff45;
+  transform: translateX(-50%);
+  pointer-events: none;
+}
 #player-wrap.is-mobile .settings-page { padding-block: 6px !important; }
 #player-wrap.is-mobile.fullscreen,
 #player-wrap.is-mobile:fullscreen { overflow: hidden; }
@@ -39,9 +67,6 @@
 .seek-ripple::before { content: ""; position: absolute; top: 50%; left: 50%; width: 120px; height: 120px; margin: -60px 0 0 -60px; border-radius: 50%; background: #ffffff25; transform: scale(.5); opacity: 0; }
 .seek-ripple.flash::before { animation: seek-ripple-pulse 420ms var(--ease) forwards; }
 @keyframes seek-ripple-pulse { from { transform: scale(.5); opacity: .65; } to { transform: scale(2.2); opacity: 0; } }
-@media (max-height: 440px) and (orientation: landscape) {
-  #player-wrap.is-mobile .player-settings { max-height: calc(100dvh - 16px); }
-}
 @media (prefers-reduced-motion: reduce) {
   .seek-ripple.flash::before { animation: seek-ripple-reduced 280ms ease-out forwards; transform: none; }
 }

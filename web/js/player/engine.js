@@ -66,6 +66,7 @@ export function loadPlayerPrefs() {
     if (typeof o.volume === "number" && Number.isFinite(o.volume) && o.volume >= 0 && o.volume <= 1)
       prefs.volume = o.volume;
     if (typeof o.muted === "boolean") prefs.muted = o.muted;
+    if (typeof o.smoothPause === "boolean") prefs.smoothPause = o.smoothPause;
     if (typeof o.speed === "number" && PLAYBACK_SPEEDS.has(o.speed))
       prefs.speed = o.speed;
     return Object.keys(prefs).length ? prefs : null;
@@ -307,6 +308,7 @@ async function loadSource(meta, base, preferCodec, preferProtocol, ctx, { preser
   codecBadge.classList.add("show");
   protocolBadge.classList.add("show");
 
+  window.dispatchEvent(new CustomEvent("aida:source-changing"));
   const playbackRate = PLAYBACK_SPEEDS.has(ctx.video.playbackRate)
     ? ctx.video.playbackRate : (loadPlayerPrefs()?.speed ?? 1);
   const previous = preservePlayback ? {

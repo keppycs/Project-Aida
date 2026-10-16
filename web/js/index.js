@@ -7,7 +7,7 @@ import {
   renderVideoCard,
   detectDisplayHdr,
   attachThumbnailFallbacks,
-} from "./catalog.js?v=prechat-20261016-dd37ee5";
+} from "./catalog.js?v=ux-stability-v14";
 
 const searchInput = document.getElementById("search-input");
 const searchClear = document.getElementById("search-clear");
@@ -74,14 +74,19 @@ function renderGrid(videos) {
 function clearSearch() {
   searchInput.value = "";
   renderResults();
-  searchInput.focus();
+  searchInput.focus({ preventScroll: true });
 }
 
 function renderResults() {
   if (loadState !== "ready") return;
+  const url = new URL(location.href);
+  if (searchInput.value) url.searchParams.set("q", searchInput.value);
+  else url.searchParams.delete("q");
+  if (url.href !== location.href) history.replaceState(history.state, "", url);
   const query = searchInput.value.trim().toLocaleLowerCase();
   searchClear.hidden = !searchInput.value;
-  hero.hidden = Boolean(query) || !allVideos.length;
+  // Filtering must not remove the featured area above the focused search field.
+  hero.hidden = !allVideos.length;
   statusPanel.hidden = true;
 
   if (!allVideos.length) {
@@ -108,6 +113,14 @@ function renderResults() {
 }
 
 async function load() {
+  const retryControl = statusPanel.contains(document.activeElement) ? document.activeElement : null;
+  let focusMoved = false;
+  const trackFocus = (event) => {
+    if (event.target !== retryControl && event.target !== document.body) focusMoved = true;
+  };
+  const canRestoreFocus = () => retryControl && !focusMoved
+    && [document.body, retryControl].includes(document.activeElement);
+  if (retryControl) document.addEventListener("focusin", trackFocus);
   loadState = "loading";
   searchInput.disabled = true;
   searchClear.hidden = true;
@@ -128,6 +141,7 @@ async function load() {
     searchInput.disabled = false;
     if (allVideos.length) renderHero(allVideos[0]);
     renderResults();
+    if (canRestoreFocus()) searchInput.focus({ preventScroll: true });
   } catch (error) {
     loadState = "error";
     allVideos = [];
@@ -135,8 +149,10 @@ async function load() {
     videosGrid.replaceChildren();
     resultsSummary.textContent = "The library couldn't be loaded.";
     showStatus("The library is out of reach", "We couldn’t load the videos. Check your connection and try again.", "Try again", load, "!");
+    if (canRestoreFocus()) statusAction.focus({ preventScroll: true });
     console.warn("Unable to load the Aida catalogue:", error);
   } finally {
+    if (retryControl) document.removeEventListener("focusin", trackFocus);
     hero.setAttribute("aria-busy", "false");
     library.setAttribute("aria-busy", "false");
   }
@@ -151,4 +167,8 @@ searchInput.addEventListener("keydown", (event) => {
   }
 });
 searchClear.addEventListener("click", clearSearch);
+window.addEventListener("popstate", () => {
+  searchInput.value = new URLSearchParams(location.search).get("q") || "";
+  renderResults();
+});
 load();

@@ -151,7 +151,8 @@ export function renderShareHead(data, { embed = false } = {}) {
     '<meta name="robots" content="noindex" />',
     // Reuse the actual player, including its codec selection and 120 fps streams.
     `<style>
-      html, body { width: 100%; height: 100%; margin: 0; padding: 0; overflow: hidden; background: #000; }
+      /* This clipped viewport has no page scroller. Override later site rules. */
+      html:root, html:root body { width: 100%; height: 100%; margin: 0; padding: 0; overflow: hidden; scrollbar-gutter: auto; background: #000; }
       body > .skip-link, .site-header, .site-footer, .watch-navigation,
       .watch-info, .shortcut-guide, .more-videos { display: none !important; }
       body .watch-main, body.theatre-mode .watch-main { position: fixed; inset: 0; width: 100%; max-width: none; margin: 0; padding: 0; }
