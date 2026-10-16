@@ -2,11 +2,12 @@ import { getPlayerProfile, watchProfile, isMobileLayout } from "./capabilities.j
 import {
   initPlayback, applyCcSliderChange, setCcEnabled,
   loadPlayerPrefs, persistPlaybackPrefs, getPlaybackFrameRate,
-} from "./engine.js?v=progress-hover-removed-v4";
+} from "./engine.js?v=motion-smooth-v13";
 import { getAutoHideDelayMs, getBigPlayState, shouldShowMenuBackdrop } from "./chrome.js?v=progress-hover-removed-v4";
-import { bindProgressInput, bindSurfaceInput } from "./input.js?v=progress-hover-removed-v4";
-import { createSettings } from "./settings.js?v=progress-hover-removed-v4";
+import { bindProgressInput, bindSurfaceInput } from "./input.js?v=motion-smooth-v13";
+import { createSettings } from "./settings.js?v=bottom-sheet-v15";
 import { createFrameStepper } from "./frame-step.js?v=progress-hover-removed-v4";
+import { createSmoothPause } from "./smooth-pause.js?v=motion-smooth-v13";
 
 function collectContext() {
   const wrap = document.getElementById("player-wrap");
@@ -99,10 +100,11 @@ export async function mountPlayer(meta, base) {
   applyLayoutClass(ctx.wrap, profile);
 
   let uiTimer;
-  let bigPlayFlashTimer;
+  let bigPlayMotion;
   let isDragging = false;
   let isHovering = false;
   let hasStarted = false;
+  let initialCenterSuppressed = false;
   let progressFrame;
 
   const { wrap, video, bigPlay, seekFlash, kbToast, playBtn, playIcon } = ctx;
@@ -124,11 +126,34 @@ export async function mountPlayer(meta, base) {
   } = ctx;
 
   const frameStepper = createFrameStepper(video, { getFrameRate: getPlaybackFrameRate });
+  const savedPrefs = loadPlayerPrefs() || {};
+  const smoothPause = createSmoothPause(video, {
+    enabled: savedPrefs.smoothPause ?? false,
+    onStateChange: () => {
+      setPlayIcon(!smoothPause.intendedPaused);
+      showUI();
+    },
+    onError: (error) => {
+      console.error("Playback did not start", error);
+      if (!hasStarted) {
+        initialCenterSuppressed = false;
+        cleanupBigPlayFlash();
+      }
+      showToast("Press play to try again");
+      showUI();
+    },
+  });
+  smoothPause.setRate(savedPrefs.speed ?? 1);
+  smoothPause.setVolume(getProfile().hideVolumeChrome ? 1 : (savedPrefs.volume ?? 0.5));
+  let lastSyncedVolume, lastSyncedMuted, lastSyncedRate;
   const settings = createSettings({ wrap, onActivity: showUI });
   const isAnyMenuOpen = () => settings.isOpen;
   const closeAllMenus = (restoreFocus = false) => settings.close(restoreFocus);
   const updateMenuBounds = () => settings.resize();
-  document.getElementById("settings-panel").addEventListener("aida:settings-settled", showUI);
+  document.getElementById("settings-panel").addEventListener("aida:settings-settled", () => {
+    if (!isAnyMenuOpen()) syncTimeline();
+    showUI();
+  });
 
   function setDragging(v) {
     isDragging = v;
@@ -162,6 +187,7 @@ export async function mountPlayer(meta, base) {
 
   function seekTo(time) {
     if (!Number.isFinite(video.duration) || !video.duration) return;
+    smoothPause.cancel({ pause: smoothPause.intendedPaused });
     frameStepper.reset();
     video.currentTime = Math.max(0, Math.min(video.duration, time));
     applyProgress(video.currentTime / video.duration);
@@ -170,14 +196,12 @@ export async function mountPlayer(meta, base) {
   }
 
   function cleanupBigPlayFlash() {
-    const svg = bigPlay.querySelector("svg");
-    clearTimeout(bigPlayFlashTimer);
-    bigPlayFlashTimer = null;
+    bigPlayMotion?.cancel();
+    bigPlayMotion = null;
     if (document.activeElement === bigPlay) wrap.focus({ preventScroll: true });
     bigPlay.classList.remove("show", "flash-brief");
     bigPlay.tabIndex = -1;
     bigPlay.setAttribute("aria-hidden", "true");
-    if (svg) svg.style.animation = "none";
   }
 
   function flashBigPlayOverlay(playing) {
@@ -185,32 +209,46 @@ export async function mountPlayer(meta, base) {
     const svg = bigPlay.querySelector("svg");
     if (!svg) return;
 
+    const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const small = reducedMotion ? "scale(1)" : "scale(.94)";
+    const painted = bigPlayMotion ? getComputedStyle(svg) : null;
+    const fromOpacity = painted ? Math.max(0, Math.min(1, Number(painted.opacity))) : 0;
+    const fromTransform = reducedMotion ? "scale(1)" : (painted?.transform ?? small);
     cleanupBigPlayFlash();
-    svg.style.animation = "none";
-    void svg.offsetWidth;
-
     svg.innerHTML = playing ? BIG_PLAY_SVG_PAUSE : BIG_PLAY_SVG_PLAY;
+    bigPlay.classList.remove("initial-play");
     bigPlay.classList.add("show", "flash-brief");
     bigPlay.tabIndex = -1;
     bigPlay.setAttribute("aria-hidden", "true");
-    svg.style.removeProperty("animation");
-
-    const onEnd = (e) => {
-      if (e.target !== svg || e.animationName !== "big-play-flash") return;
-      svg.removeEventListener("animationend", onEnd);
-      cleanupBigPlayFlash();
-    };
-    svg.addEventListener("animationend", onEnd);
-    bigPlayFlashTimer = setTimeout(() => {
-      svg.removeEventListener("animationend", onEnd);
-      cleanupBigPlayFlash();
-    }, 950);
+    const enterMs = 60 * (1 - fromOpacity);
+    const holdMs = 400;
+    const fadeMs = reducedMotion ? 80 : 150;
+    const duration = enterMs + holdMs + fadeMs;
+    // Only this noninteractive cue scales; its button and the live controls
+    // keep their geometry. Segment easing leaves the full opaque hold intact.
+    const motion = svg.animate([
+      { opacity: fromOpacity, transform: fromTransform, offset: 0, easing: "cubic-bezier(.2,.8,.2,1)" },
+      { opacity: 1, transform: "scale(1)", offset: enterMs / duration },
+      { opacity: 1, transform: "scale(1)", offset: (enterMs + holdMs) / duration, easing: "cubic-bezier(.4,0,1,1)" },
+      { opacity: 0, transform: small, offset: 1 },
+    ], { duration, easing: "linear", fill: "both" });
+    bigPlayMotion = motion;
+    motion.finished.then(() => {
+      if (bigPlayMotion === motion) cleanupBigPlayFlash();
+    }, () => {});
   }
 
   function syncBigPlayOverlay() {
     const svg = bigPlay.querySelector("svg");
     if (!svg) return;
     if (!hasStarted) {
+      if (bigPlayMotion) return;
+      if (initialCenterSuppressed) {
+        bigPlay.classList.remove("initial-play", "show");
+        bigPlay.tabIndex = -1;
+        bigPlay.setAttribute("aria-hidden", "true");
+        return;
+      }
       const visible = !isAnyMenuOpen();
       bigPlay.classList.add("initial-play");
       bigPlay.classList.toggle("show", visible);
@@ -230,7 +268,7 @@ export async function mountPlayer(meta, base) {
     }
     const { show, showPause } = getBigPlayState(
       getProfile(),
-      video,
+      { paused: smoothPause.intendedPaused },
       wrap.classList.contains("ui-visible"),
     );
     const visible = show && !isAnyMenuOpen();
@@ -248,14 +286,14 @@ export async function mountPlayer(meta, base) {
       document.getElementById("controls").inert = false;
     }
     clearTimeout(uiTimer);
-    if (!video.paused) uiTimer = setTimeout(hideUI, getAutoHideDelayMs(getProfile()));
+    if (!smoothPause.intendedPaused) uiTimer = setTimeout(hideUI, getAutoHideDelayMs(getProfile()));
     syncBigPlayOverlay();
     if (!video.paused && !progressFrame) progressFrame = requestAnimationFrame(animateProgress);
   }
 
   function animateProgress() {
     progressFrame = null;
-    if (video.paused || document.hidden || !wrap.classList.contains("ui-visible")) return;
+    if (video.paused || document.hidden || isAnyMenuOpen() || !wrap.classList.contains("ui-visible")) return;
     if (!isDragging && video.duration > 0) {
       applyProgress(video.currentTime / video.duration);
       const label = fmt(video.currentTime);
@@ -266,7 +304,7 @@ export async function mountPlayer(meta, base) {
 
   function hideUI() {
     clearTimeout(uiTimer);
-    if (video.paused || video.ended || isDragging || isAnyMenuOpen()) return;
+    if (smoothPause.intendedPaused || video.ended || isDragging || isAnyMenuOpen()) return;
     if (wrap.contains(document.activeElement) && document.activeElement.matches(":focus-visible")) return;
     wrap.classList.remove("ui-visible", "cursor-visible");
     document.getElementById("controls").inert = true;
@@ -293,17 +331,15 @@ export async function mountPlayer(meta, base) {
     playBtn.title = playing ? "Pause (k)" : "Play (k)";
   }
 
-  function togglePlay() {
-    const willPlay = video.paused;
-    if (willPlay) {
-      void video.play().catch((error) => {
-        console.error("Playback did not start", error);
-        showToast("Press play to try again");
-        showUI();
-      });
+  function togglePlay({ feedback = true } = {}) {
+    const willPlay = smoothPause.intendedPaused;
+    const desktop = !isMobileLayout(getProfile());
+    if (desktop) {
+      initialCenterSuppressed = true;
+      if (!feedback) cleanupBigPlayFlash();
     }
-    else video.pause();
-    if (hasStarted && !isMobileLayout(getProfile())) flashBigPlayOverlay(willPlay);
+    void smoothPause.toggle();
+    if (desktop && feedback) flashBigPlayOverlay(willPlay);
   }
 
   function skip(sec) {
@@ -313,7 +349,7 @@ export async function mountPlayer(meta, base) {
   }
 
   function updateVolIcon() {
-    const v = video.volume;
+    const v = smoothPause.nominalVolume;
     const m = video.muted;
     muteBtn.setAttribute("aria-label", m || v === 0 ? "Unmute" : "Mute");
     muteBtn.title = m || v === 0 ? "Unmute (m)" : "Mute (m)";
@@ -325,12 +361,34 @@ export async function mountPlayer(meta, base) {
   }
 
   function toggleMute() {
-    if (video.muted || video.volume === 0) {
-      if (video.volume === 0) video.volume = 0.5;
+    if (video.muted || smoothPause.nominalVolume === 0) {
+      if (smoothPause.nominalVolume === 0) smoothPause.setVolume(0.5);
       video.muted = false;
     } else video.muted = true;
-    updateVolIcon();
+    syncVolume();
   }
+
+  function syncVolume() {
+    const volume = smoothPause.nominalVolume;
+    if (lastSyncedVolume === volume && lastSyncedMuted === video.muted) return;
+    lastSyncedVolume = volume;
+    lastSyncedMuted = video.muted;
+    volSlider.value = video.muted ? 0 : volume;
+    updateVolIcon();
+    persistPlaybackPrefs({ ...(getProfile().hideVolumeChrome ? {} : { volume }), muted: video.muted });
+  }
+
+  const smoothPauseButton = document.getElementById("smooth-pause-toggle");
+  function syncSmoothPause() {
+    smoothPauseButton.setAttribute("aria-checked", String(smoothPause.enabled));
+    document.getElementById("smooth-pause-value").textContent = smoothPause.enabled ? "On" : "Off";
+  }
+  smoothPauseButton.addEventListener("click", () => {
+    smoothPause.setEnabled(!smoothPause.enabled);
+    persistPlaybackPrefs({ smoothPause: smoothPause.enabled });
+    syncSmoothPause();
+  });
+  syncSmoothPause();
 
   let fsTransitionPending = false;
   if (typeof wrap.requestFullscreen !== "function" && typeof video.webkitEnterFullscreen !== "function") {
@@ -370,25 +428,26 @@ export async function mountPlayer(meta, base) {
   syncBigPlayOverlay();
 
   watchProfile((next) => {
+    const keepMobileSheet = isMobileLayout(profile) && isMobileLayout(next);
+    if (bigPlayMotion && isMobileLayout(next)) cleanupBigPlayFlash();
     profile = next;
     applyLayoutClass(wrap, profile);
     updateMenuBounds();
     syncBigPlayOverlay();
     if (profile.hideVolumeChrome) {
       ctx.volCluster.style.display = "none";
-      video.volume = 1;
+      smoothPause.setVolume(1);
     } else {
       ctx.volCluster.style.display = "";
-      video.volume = loadPlayerPrefs()?.volume ?? 0.5;
+      smoothPause.setVolume(loadPlayerPrefs()?.volume ?? 0.5);
     }
-    closeAllMenus();
+    // Rotation and viewport-height changes resize the same phone sheet in place.
+    if (!keepMobileSheet) closeAllMenus();
   });
 
   video.addEventListener("play", () => {
-    const firstPlay = !hasStarted;
     hasStarted = true;
     if (!progressFrame) progressFrame = requestAnimationFrame(animateProgress);
-    if (firstPlay && !isMobileLayout(getProfile())) flashBigPlayOverlay(true);
     setPlayIcon(true);
     if (isMobileLayout(getProfile())) {
       if (wrap.classList.contains("ui-visible")) {
@@ -413,7 +472,7 @@ export async function mountPlayer(meta, base) {
   });
 
   playBtn.addEventListener("click", () => {
-    togglePlay();
+    togglePlay({ feedback: false });
   });
   bigPlay.addEventListener("click", (e) => {
     e.stopPropagation();
@@ -422,20 +481,14 @@ export async function mountPlayer(meta, base) {
 
   muteBtn.addEventListener("click", toggleMute);
   volSlider.addEventListener("input", () => {
-    video.volume = parseFloat(volSlider.value);
-    video.muted = video.volume === 0;
-    updateVolIcon();
+    const volume = parseFloat(volSlider.value);
+    smoothPause.setVolume(volume);
+    video.muted = volume === 0;
+    syncVolume();
   });
-  video.addEventListener("volumechange", () => {
-    volSlider.value = video.muted ? 0 : video.volume;
-    updateVolIcon();
-    persistPlaybackPrefs({
-      ...(getProfile().hideVolumeChrome ? {} : { volume: video.volume }),
-      muted: video.muted,
-    });
-  });
+  video.addEventListener("volumechange", syncVolume);
 
-  video.addEventListener("timeupdate", () => {
+  function syncTimeline() {
     syncProgressAccessibility();
     if (isDragging || !video.duration) return;
     applyProgress(video.currentTime / video.duration);
@@ -444,6 +497,9 @@ export async function mountPlayer(meta, base) {
       progBuf.style.width =
         (video.buffered.end(video.buffered.length - 1) / video.duration) * 100 + "%";
     }
+  }
+  video.addEventListener("timeupdate", () => {
+    if (!isAnyMenuOpen()) syncTimeline();
   });
 
   video.addEventListener("loadedmetadata", () => {
@@ -477,7 +533,11 @@ export async function mountPlayer(meta, base) {
     showUI();
   });
 
-  bindProgressInput({ ctx, video, fmt, applyProgress, setDragging, onScrubTo, showUI });
+  bindProgressInput({ ctx, video, fmt, applyProgress, setDragging, onScrubTo, showUI, beforeScrub: () => {
+    const resume = !smoothPause.intendedPaused;
+    smoothPause.cancel({ pause: true });
+    return resume;
+  } });
   bindSurfaceInput({ ctx, showUI, hideUI, togglePlay, toggleFS, skip, isMenuOpen: isAnyMenuOpen });
 
   wrap.addEventListener("pointermove", (event) => { if (event.pointerType === "mouse") showUI(); });
@@ -509,7 +569,8 @@ export async function mountPlayer(meta, base) {
   speedMenu.querySelectorAll(".menu-item[data-speed]").forEach((item) => {
     item.addEventListener("click", () => {
       const spd = parseFloat(item.dataset.speed);
-      video.playbackRate = spd;
+      smoothPause.setRate(spd);
+      syncSpeed();
       speedMenu.querySelectorAll(".menu-item").forEach((i) => {
         i.classList.remove("active");
         i.setAttribute("aria-pressed", "false");
@@ -521,16 +582,19 @@ export async function mountPlayer(meta, base) {
     });
   });
   function syncSpeed() {
+    const rate = smoothPause.nominalRate;
+    if (lastSyncedRate === rate) return;
     const items = [...speedMenu.querySelectorAll(".menu-item[data-speed]")];
-    if (!items.some((item) => Number(item.dataset.speed) === video.playbackRate)) return;
+    if (!items.some((item) => Number(item.dataset.speed) === rate)) return;
+    lastSyncedRate = rate;
     items.forEach((item) => {
-      const active = Number(item.dataset.speed) === video.playbackRate;
+      const active = Number(item.dataset.speed) === rate;
       item.classList.toggle("active", active);
       item.setAttribute("aria-pressed", String(active));
     });
-    ctx.speedBtn.setAttribute("aria-label", `Playback speed: ${video.playbackRate === 1 ? "normal" : `${video.playbackRate} times`}`);
-    document.getElementById("speed-label").textContent = video.playbackRate === 1 ? "Normal" : `${video.playbackRate}×`;
-    persistPlaybackPrefs({ speed: video.playbackRate });
+    ctx.speedBtn.setAttribute("aria-label", `Playback speed: ${rate === 1 ? "normal" : `${rate} times`}`);
+    document.getElementById("speed-label").textContent = rate === 1 ? "Normal" : `${rate}×`;
+    persistPlaybackPrefs({ speed: rate });
   }
   video.addEventListener("ratechange", syncSpeed);
 
@@ -555,6 +619,7 @@ export async function mountPlayer(meta, base) {
     if (isAnyMenuOpen()) return;
     if ([",", "."].includes(e.key) && !e.shiftKey && !e.isComposing && !e.target.closest("input, textarea, select, a, [contenteditable], [role='slider']")) {
       e.preventDefault();
+      smoothPause.cancel({ pause: true });
       void frameStepper.step(e.key === "," ? -1 : 1).then(result => {
         if (result.ok) {
           applyProgress(result.time / video.duration);
@@ -572,7 +637,7 @@ export async function mountPlayer(meta, base) {
       case "k":
         e.preventDefault();
         togglePlay();
-        showToast(video.paused ? "Paused" : "Playing");
+        showToast(smoothPause.intendedPaused ? "Paused" : "Playing");
         break;
       case "j":
         skip(-10);
@@ -590,14 +655,14 @@ export async function mountPlayer(meta, base) {
         break;
       case "ArrowUp":
         e.preventDefault();
-        video.volume = Math.min(1, video.volume + 0.1);
+        smoothPause.setVolume(Math.min(1, smoothPause.nominalVolume + 0.1));
         video.muted = false;
-        showToast(`Volume ${Math.round(video.volume * 100)}%`);
+        showToast(`Volume ${Math.round(smoothPause.nominalVolume * 100)}%`);
         break;
       case "ArrowDown":
         e.preventDefault();
-        video.volume = Math.max(0, video.volume - 0.1);
-        showToast(`Volume ${Math.round(video.volume * 100)}%`);
+        smoothPause.setVolume(Math.max(0, smoothPause.nominalVolume - 0.1));
+        showToast(`Volume ${Math.round(smoothPause.nominalVolume * 100)}%`);
         break;
       case "m":
         toggleMute();
@@ -626,11 +691,11 @@ export async function mountPlayer(meta, base) {
   });
 
   window.addEventListener("aida:playback-ready", () => frameStepper.reset());
+  window.addEventListener("aida:source-changing", () => smoothPause.cancel({ pause: smoothPause.intendedPaused }));
   window.addEventListener("aida:playback-error", () => closeAllMenus());
   window.visualViewport?.addEventListener("resize", updateMenuBounds);
   await initPlayback(meta, base, ctx, profile);
-  volSlider.value = video.muted ? 0 : video.volume;
-  updateVolIcon();
+  syncVolume();
   syncSpeed();
   syncProgressAccessibility();
   durTime.textContent = fmt(video.duration || 0);

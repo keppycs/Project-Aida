@@ -1,9 +1,9 @@
 import {
-  fetchCatalog, mediaBase, watchUrl, formatDate, formatDuration,
-  renderVideoCard, detectDisplayHdr, attachThumbnailFallbacks, videoVisibility,
-} from "./catalog.js?v=controls-review-v2";
-import { loadMetadata, VideoLoadError } from "./loader.js?v=controls-review-v2";
-import { mountPlayer } from "./player/shell.js?v=progress-hover-removed-v4";
+  fetchCatalog, mediaBase, formatDate, formatDuration,
+  renderVideoCard, detectDisplayHdr, attachThumbnailFallbacks,
+} from "./catalog.js?v=ux-stability-v14";
+import { loadMetadata, VideoLoadError } from "./loader.js?v=ux-stability-v14";
+import { mountPlayer } from "./player/shell.js?v=bottom-sheet-v15";
 
 const id = new URLSearchParams(location.search).get("v") || "0";
 const local = typeof window.shouldUseLocalCmaf === "function" && window.shouldUseLocalCmaf();
@@ -14,11 +14,9 @@ const video = document.getElementById("video");
 const status = document.getElementById("watch-status");
 const retryButton = document.getElementById("watch-retry");
 const theatreButton = document.getElementById("theatre-btn");
-const shareButton = document.getElementById("share-btn");
 let currentMeta = null;
 let catalog = [];
 let playbackFailed = false;
-let shareTimer;
 
 function showFailure(kind, message) {
   const playerHadFocus = playerWrap.contains(document.activeElement);
@@ -87,7 +85,6 @@ function renderDetails(meta) {
     }
   }
   tagList.hidden = !tagList.childElementCount;
-  shareButton.hidden = videoVisibility(meta) === "private";
 }
 
 async function renderMoreVideos() {
@@ -113,18 +110,6 @@ theatreButton.addEventListener("click", () => {
 });
 retryButton.addEventListener("click", () => location.reload());
 window.addEventListener("aida:playback-error", (event) => showFailure(event.detail?.kind || "playback", event.detail?.message));
-shareButton.addEventListener("click", async () => {
-  clearTimeout(shareTimer);
-  try {
-    await navigator.clipboard.writeText(new URL(watchUrl(id, { local }), location.href).href);
-    shareButton.textContent = "Link copied";
-    document.getElementById("share-status").textContent = "Video link copied to clipboard.";
-  } catch {
-    shareButton.textContent = "Copy from address bar";
-    document.getElementById("share-status").textContent = "Couldn't copy automatically. Copy the link from your address bar.";
-  }
-  shareTimer = setTimeout(() => { shareButton.textContent = "Copy link"; }, 4000);
-});
 
 void fetchCatalog({ local }).then((items) => {
   catalog = items;

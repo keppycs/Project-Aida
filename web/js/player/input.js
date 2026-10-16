@@ -1,5 +1,5 @@
 /** Pointer events choose the input behavior; viewport size only chooses composition. */
-export function bindProgressInput({ ctx, video, fmt, applyProgress, setDragging, onScrubTo, showUI }) {
+export function bindProgressInput({ ctx, video, fmt, applyProgress, setDragging, onScrubTo, showUI, beforeScrub }) {
   const { progWrap, timeTip, curTime } = ctx;
   let activePointer = null, resume = false;
   const fraction = event => {
@@ -18,7 +18,7 @@ export function bindProgressInput({ ctx, video, fmt, applyProgress, setDragging,
     event.preventDefault();
     activePointer = event.pointerId;
     progWrap.setPointerCapture(activePointer);
-    resume = !video.paused;
+    resume = beforeScrub ? beforeScrub() : !video.paused;
     setDragging(true);
     video.pause();
     progWrap.classList.add("scrubbing");
@@ -48,7 +48,7 @@ export function bindProgressInput({ ctx, video, fmt, applyProgress, setDragging,
 
 export function bindSurfaceInput({ ctx, showUI, hideUI, togglePlay, toggleFS, skip, isMenuOpen }) {
   const ignore = "button, input, a, summary, #controls, #settings-panel, #menu-backdrop, .player-notice";
-  let press = null, tap = null, singleClick;
+  let press = null, tap = null, surfaceClickToggled = false;
   ctx.wrap.addEventListener("pointerdown", event => {
     press = null;
     if (event.pointerType === "mouse" || event.target.closest(ignore) || isMenuOpen()) return;
@@ -74,9 +74,21 @@ export function bindSurfaceInput({ ctx, showUI, hideUI, togglePlay, toggleFS, sk
   });
   ctx.wrap.addEventListener("click", event => {
     if (event.pointerType === "touch" || event.pointerType === "pen" || event.sourceCapabilities?.firesTouchEvents) return;
-    if (event.defaultPrevented || event.target.closest(ignore) || isMenuOpen()) return;
-    clearTimeout(singleClick);
-    if (event.detail === 2) toggleFS();
-    else if (event.detail < 2) singleClick = setTimeout(togglePlay, 200);
+    // Transport feedback can replace the clicked SVG before this event bubbles.
+    // The original route still contains its button, even if event.target is detached.
+    if (event.defaultPrevented || event.composedPath().some(node => node instanceof Element && node.matches(ignore)) || isMenuOpen()) {
+      surfaceClickToggled = false;
+      return;
+    }
+    // First-click transport feedback is immediate; a double-click reverses
+    // only this surface's first toggle before entering fullscreen.
+    if (event.detail === 2) {
+      if (surfaceClickToggled) togglePlay();
+      surfaceClickToggled = false;
+      toggleFS();
+    } else if (event.detail < 2) {
+      surfaceClickToggled = event.detail === 1;
+      togglePlay();
+    }
   });
 }

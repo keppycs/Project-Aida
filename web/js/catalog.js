@@ -70,7 +70,7 @@ export async function detectDisplayHdr() {
     const result = await Promise.race([
       navigator.mediaCapabilities.decodingInfo({
         type: "media-source",
-        video: { contentType: 'video/mp4; codecs="hvc1"', width: 1920, height: 1080, bitrate: 10000000, framerate: 60, transferFunction: "pq", colorGamut: "rec2020" },
+        video: { contentType: 'video/mp4; codecs="hvc1"', width: 1920, height: 1080, bitrate: 10000000, framerate: 120, transferFunction: "pq", colorGamut: "rec2020" },
       }),
       new Promise((resolve) => { timer = setTimeout(() => resolve(null), 1200); }),
     ]);

@@ -1,10 +1,12 @@
 /** One mounted settings surface. Motion never owns values, focus, or page state. */
 export function createSettings({ wrap, onActivity }) {
   const panel = document.getElementById("settings-panel");
+  const surface = document.getElementById("settings-surface");
   const body = document.getElementById("settings-body");
   const opener = document.getElementById("settings-btn");
   const back = document.getElementById("settings-back");
   const heading = document.getElementById("settings-heading");
+  const header = panel.querySelector(".settings-header");
   const backdrop = document.getElementById("menu-backdrop");
   const pages = new Map([
     ["home", document.getElementById("settings-home")],
@@ -17,7 +19,68 @@ export function createSettings({ wrap, onActivity }) {
   const reduced = window.matchMedia("(prefers-reduced-motion: reduce)");
   let open = false, page = "home", generation = 0, panelMotion, suppressClick = false;
   let pageMotions = [];
+  let heldPointer = null;
+  let heldMotions = null;
+  let heldStart = null;
+  let heldMoved = false;
+  let heldControl = null;
+  let heldPanelMotion = false;
+  let heldGeneration = 0;
+  let drag = null;
+  let lastViewport = null;
+  let closeRestoreFocus = true;
   const isolation = new Map();
+  const mobile = () => wrap.classList.contains("is-mobile");
+  const pose = element => {
+    const style = getComputedStyle(element);
+    return { opacity: Number(style.opacity), transform: style.transform };
+  };
+  const translateY = () => {
+    const transform = getComputedStyle(panel).transform;
+    return transform === "none" ? 0 : new DOMMatrixReadOnly(transform).m42;
+  };
+  const travel = () => panel.getBoundingClientRect().height;
+
+  function freezePanel() {
+    const from = pose(panel);
+    panelMotion?.cancel();
+    panelMotion = null;
+    Object.assign(panel.style, from);
+    return from;
+  }
+  function stopBackdrop() {
+    const style = getComputedStyle(backdrop);
+    const opacity = backdrop.hidden || style.display === "none" ? 0 : Number(style.opacity);
+    for (const animation of backdrop.getAnimations()) animation.cancel();
+    backdrop.style.opacity = String(opacity);
+    return opacity;
+  }
+  function fadeBackdrop(target, duration) {
+    const from = stopBackdrop();
+    if (!mobile()) {
+      backdrop.hidden = true;
+      backdrop.classList.remove("open");
+      return;
+    }
+    backdrop.hidden = false;
+    backdrop.classList.add("open");
+    backdrop.animate([{ opacity: from }, { opacity: target }], { duration, fill: "both" });
+  }
+  function releaseCapture(control, pointer) {
+    if (control?.hasPointerCapture(pointer)) control.releasePointerCapture(pointer);
+  }
+  function clearHeld() {
+    const control = heldControl, pointer = heldPointer;
+    heldPointer = heldMotions = heldStart = heldControl = null;
+    heldPanelMotion = false;
+    releaseCapture(control, pointer);
+  }
+  function clearDrag() {
+    if (!drag) return;
+    const pointer = drag.pointer;
+    drag = null;
+    releaseCapture(header, pointer);
+  }
 
   function visibleItems() {
     return [...panel.querySelectorAll("button:not(:disabled), input:not(:disabled), summary, [tabindex='0']")]
@@ -43,20 +106,66 @@ export function createSettings({ wrap, onActivity }) {
   function cancelPages() {
     for (const animation of pageMotions) animation.cancel();
     pageMotions = [];
-    body.style.height = "";
+    panel.style.height = "";
+    panel.classList.remove("page-transitioning");
+    surface.style.height = "";
+    surface.style.transform = "";
     for (const [name, element] of pages) {
       element.hidden = name !== page;
       element.inert = name !== page;
       element.style.cssText = "";
     }
   }
+  function visibleHeight() {
+    const stage = panel.getBoundingClientRect();
+    const painted = surface.getBoundingClientRect();
+    return Math.max(0, Math.min(stage.bottom, painted.bottom) - Math.max(stage.top, painted.top));
+  }
+  function freezePages() {
+    // Retain the painted pose while an interrupted page change exits or reverses.
+    const poses = [...new Set(pageMotions.map(animation => animation.effect.target))]
+      .map(element => {
+        const style = getComputedStyle(element);
+        return { element, opacity: style.opacity, transform: style.transform };
+      });
+    for (const animation of pageMotions) animation.cancel();
+    pageMotions = [];
+    for (const { element, opacity, transform } of poses) {
+      element.style.opacity = opacity;
+      element.style.transform = transform;
+    }
+  }
   function bounds() {
     const viewportHeight = window.visualViewport?.height ?? window.innerHeight;
     const player = wrap.getBoundingClientRect();
-    const mobile = wrap.classList.contains("is-mobile");
+    const isMobile = mobile();
+    const viewport = { width: window.innerWidth, height: viewportHeight, mobile: isMobile };
+    const resized = lastViewport && (Math.abs(viewport.width - lastViewport.width) > .5
+      || Math.abs(viewport.height - lastViewport.height) > .5 || viewport.mobile !== lastViewport.mobile);
+    lastViewport = viewport;
     const visibleHeight = Math.min(player.bottom, viewportHeight) - Math.max(player.top, 0);
-    panel.style.maxHeight = `${Math.max(120, mobile ? Math.min(520, viewportHeight - 24) : Math.min(520, visibleHeight - 64))}px`;
-    panel.setAttribute("aria-modal", String(mobile));
+    // CSS resolves the real safe-area inset against the visual viewport cap.
+    panel.style.maxHeight = isMobile
+      ? `min(560px, calc(${viewportHeight}px - max(12px, env(safe-area-inset-top))))`
+      : `${Math.max(96, Math.min(520, visibleHeight - 64))}px`;
+    panel.setAttribute("aria-modal", String(isMobile));
+    if (resized && !panel.hidden) {
+      // A resize changes the coordinate space. Settle once into its new bounds,
+      // rather than continuing a gesture or keyframe with obsolete endpoints.
+      generation += 1;
+      clearHeld();
+      clearDrag();
+      freezePanel();
+      cancelPages();
+      panel.style.opacity = panel.style.transform = "";
+      if (!open) finishClose(closeRestoreFocus);
+      else {
+        panel.dataset.phase = "open";
+        isolate();
+        fadeBackdrop(1, 0);
+        settled();
+      }
+    }
   }
   function settled() {
     panel.dispatchEvent(new CustomEvent("aida:settings-settled", { bubbles: true }));
@@ -65,7 +174,8 @@ export function createSettings({ wrap, onActivity }) {
     if (!pages.has(next)) return;
     const outgoing = pages.get(page);
     const incoming = pages.get(next);
-    const oldHeight = body.getBoundingClientRect().height;
+    const oldHeight = visibleHeight();
+    const oldScroll = body.scrollTop;
     const outgoingStyle = getComputedStyle(outgoing);
     const outgoingStart = { opacity: outgoingStyle.opacity, transform: outgoingStyle.transform };
     const incomingStyle = getComputedStyle(incoming);
@@ -81,20 +191,30 @@ export function createSettings({ wrap, onActivity }) {
       element.hidden = name !== page;
       element.inert = name !== page;
     }
-    incoming.scrollTop = 0;
-    const newHeight = incoming.getBoundingClientRect().height;
-    if (animate && outgoing !== incoming && !reduced.matches) {
-      // Both pages keep their live nodes; the outgoing page stops accepting input now.
-      outgoing.hidden = false;
-      outgoing.inert = true;
-      Object.assign(outgoing.style, { position: "absolute", inset: "0", width: "100%" });
+    body.scrollTop = outgoing === incoming ? oldScroll : 0;
+    const newHeight = surface.getBoundingClientRect().height;
+    if (animate && !reduced.matches) {
+      // Measure once. A translated, clipped surface morphs the visible height;
+      // live text and touch targets are never scaled or laid out on every frame.
+      const stageHeight = Math.max(oldHeight, newHeight);
+      panel.style.height = `${stageHeight}px`;
+      surface.style.height = `${stageHeight}px`;
+      panel.classList.add("page-transitioning");
       const direction = backwards ? -1 : 1;
       const options = { duration: 220, easing: "cubic-bezier(.2,.8,.2,1)", fill: "both" };
       pageMotions = [
-        outgoing.animate([outgoingStart, { opacity: 0, transform: `translateX(${-12 * direction}px)` }], options),
+        surface.animate([
+          { transform: `translateY(${stageHeight - oldHeight}px)` },
+          { transform: `translateY(${stageHeight - newHeight}px)` },
+        ], options),
         incoming.animate([incomingStart ?? { opacity: 0, transform: `translateX(${12 * direction}px)` }, { opacity: 1, transform: "translateX(0)" }], options),
-        body.animate([{ height: `${oldHeight}px` }, { height: `${newHeight}px` }], options),
       ];
+      if (outgoing !== incoming) {
+        outgoing.hidden = false;
+        outgoing.inert = true;
+        Object.assign(outgoing.style, { position: "absolute", top: `${-oldScroll}px`, left: "0", width: "100%" });
+        pageMotions.push(outgoing.animate([outgoingStart, { opacity: 0, transform: `translateX(${-12 * direction}px)` }], options));
+      }
       const token = generation;
       const motion = pageMotions;
       Promise.allSettled(motion.map(animation => animation.finished)).then(() => {
@@ -112,58 +232,81 @@ export function createSettings({ wrap, onActivity }) {
       (preferred ?? (backwards ? visibleItems()[0] : back))?.focus({ preventScroll: true });
     }
   }
+  function animateOpen(from, duration) {
+    const token = generation;
+    panel.dataset.phase = "opening";
+    Object.assign(panel.style, from);
+    const motion = panel.animate([from, { opacity: 1, transform: "translateY(0)" }], {
+      duration, easing: "cubic-bezier(.2,.8,.2,1)", fill: "both",
+    });
+    panelMotion = motion;
+    motion.finished.then(() => {
+      if (generation !== token || !open || panelMotion !== motion) return;
+      panel.style.opacity = panel.style.transform = "";
+      motion.cancel();
+      panelMotion = null;
+      panel.dataset.phase = "open";
+      settled();
+    }, () => {});
+  }
+  function resumeOpen() {
+    const from = pose(panel);
+    const distance = mobile() ? Math.max(1, travel()) : 16;
+    const remaining = Math.max(Math.abs(translateY()) / distance, 1 - from.opacity);
+    animateOpen(from, reduced.matches ? 100 : Math.max(100, Math.min(280, 280 * remaining)));
+  }
   function show() {
-    const token = ++generation;
+    generation += 1;
     const wasHidden = panel.hidden;
-    const from = wasHidden ? { opacity: 0, transform: reduced.matches ? "none" : "translateY(16px)" }
-      : { opacity: getComputedStyle(panel).opacity, transform: getComputedStyle(panel).transform };
+    const from = wasHidden ? null : pose(panel);
+    clearHeld();
+    clearDrag();
     panelMotion?.cancel();
+    panelMotion = null;
     open = true;
     panel.hidden = false;
     panel.inert = false;
     panel.dataset.phase = "opening";
     wrap.classList.add("menu-open", "ui-visible", "cursor-visible");
     opener.setAttribute("aria-expanded", "true");
-    backdrop.classList.add("open");
-    backdrop.hidden = false;
     bounds();
     if (wasHidden) navigate("home", { animate: false, focus: false });
-    else {
-      // Reversing an exit preserves the page and its painted height.
-      const fromHeight = body.getBoundingClientRect().height;
-      const toHeight = pages.get(page).getBoundingClientRect().height;
-      body.style.height = "";
-      const motion = body.animate([{ height: `${fromHeight}px` }, { height: `${toHeight}px` }], {
-        duration: reduced.matches ? 100 : 220, easing: "cubic-bezier(.2,.8,.2,1)", fill: "both",
-      });
-      pageMotions = [motion];
-      motion.finished.catch(() => {}).then(() => {
-        if (generation === token && pageMotions[0] === motion) cancelPages();
-      });
-    }
+    else navigate(page, { focus: false });
     heading.focus({ preventScroll: true });
     isolate();
     const duration = reduced.matches ? 100 : 280;
-    panelMotion = panel.animate([from, { opacity: 1, transform: "translateY(0)" }], { duration, easing: "cubic-bezier(.2,.8,.2,1)", fill: "both" });
-    for (const animation of backdrop.getAnimations()) animation.cancel();
-    backdrop.animate([{ opacity: 0 }, { opacity: 1 }], { duration: reduced.matches ? 100 : 180 });
-    panelMotion.finished.catch(() => {}).then(() => {
-      if (generation !== token || !open) return;
-      panelMotion.cancel();
-      panelMotion = null;
-      panel.dataset.phase = "open";
-      settled();
-    });
+    const initial = from ?? { opacity: mobile() && !reduced.matches ? 1 : 0,
+      transform: reduced.matches ? "none" : `translateY(${mobile() ? travel() : 16}px)` };
+    animateOpen(initial, duration);
+    fadeBackdrop(1, reduced.matches ? 100 : 180);
     onActivity();
+  }
+  function finishClose(restoreFocus) {
+    panel.hidden = true;
+    cancelPages();
+    panel.dataset.phase = "closed";
+    restoreBackground();
+    wrap.classList.remove("menu-open");
+    panel.style.opacity = panel.style.transform = "";
+    panelMotion?.cancel();
+    panelMotion = null;
+    onActivity();
+    if (restoreFocus) opener.focus({ preventScroll: true });
+    backdrop.classList.remove("open");
+    backdrop.hidden = true;
+    for (const animation of backdrop.getAnimations()) animation.cancel();
+    backdrop.style.opacity = "";
+    settled();
   }
   function close(restoreFocus = true) {
     if (panel.hidden || (!open && panel.dataset.phase === "closing")) return;
     const token = ++generation;
-    const from = { opacity: getComputedStyle(panel).opacity, transform: getComputedStyle(panel).transform };
+    const from = pose(panel);
+    closeRestoreFocus = restoreFocus;
+    clearHeld();
+    clearDrag();
     panelMotion?.cancel();
-    const paintedHeight = body.getBoundingClientRect().height;
-    cancelPages();
-    body.style.height = `${paintedHeight}px`;
+    freezePages();
     open = false;
     panel.inert = true;
     panel.dataset.phase = "closing";
@@ -171,24 +314,15 @@ export function createSettings({ wrap, onActivity }) {
     for (const trigger of Object.values(triggers)) trigger.setAttribute("aria-expanded", "false");
     onActivity();
     const duration = reduced.matches ? 100 : 180;
-    panelMotion = panel.animate([from, { opacity: 0, transform: reduced.matches ? "none" : "translateY(12px)" }], { duration, easing: "cubic-bezier(.4,0,1,1)", fill: "both" });
-    backdrop.animate([{ opacity: 1 }, { opacity: 0 }], { duration, fill: "forwards" });
-    panelMotion.finished.catch(() => {}).then(() => {
-      if (token !== generation || open) return;
-      panel.hidden = true;
-      body.style.height = "";
-      panel.dataset.phase = "closed";
-      restoreBackground();
-      wrap.classList.remove("menu-open");
-      onActivity();
-      if (restoreFocus) opener.focus({ preventScroll: true });
-      panelMotion.cancel();
-      panelMotion = null;
-      backdrop.classList.remove("open");
-      backdrop.hidden = true;
-      for (const animation of backdrop.getAnimations()) animation.cancel();
-      settled();
-    });
+    const to = { opacity: mobile() && !reduced.matches ? 1 : 0,
+      transform: reduced.matches ? from.transform : `translateY(${mobile() ? travel() : 12}px)` };
+    const motion = panel.animate([from, to], { duration, easing: "cubic-bezier(.4,0,1,1)", fill: "both" });
+    panelMotion = motion;
+    fadeBackdrop(0, duration);
+    motion.finished.then(() => {
+      if (token !== generation || open || panelMotion !== motion) return;
+      finishClose(restoreFocus);
+    }, () => {});
   }
   opener.addEventListener("click", event => { event.stopPropagation(); open ? close() : show(); });
   document.getElementById("settings-close").addEventListener("click", () => close());
@@ -200,6 +334,98 @@ export function createSettings({ wrap, onActivity }) {
   for (const [name, trigger] of Object.entries(triggers)) trigger.addEventListener("click", () => navigate(name));
   backdrop.addEventListener("click", () => close());
   panel.addEventListener("click", event => event.stopPropagation());
+  panel.addEventListener("pointerdown", event => {
+    const control = event.target.closest("button, input, summary");
+    if (!event.isPrimary || event.button !== 0 || !control) return;
+    const movingPanel = panelMotion?.playState === "running";
+    const movingPages = panel.classList.contains("page-transitioning")
+      || pageMotions.some(animation => animation.playState === "running");
+    if (!movingPanel && !movingPages) return;
+    generation += 1;
+    heldPointer = event.pointerId;
+    heldStart = { x: event.clientX, y: event.clientY };
+    heldMoved = false;
+    heldControl = control;
+    heldPanelMotion = movingPanel;
+    heldGeneration = generation;
+    // Cancelling to the computed pose is synchronous; WAAPI pause() can remain
+    // pending on the compositor for another frame and move a pressed target.
+    if (movingPanel) freezePanel();
+    freezePages();
+    heldMotions = movingPages ? pageMotions : null;
+    control.setPointerCapture(event.pointerId);
+  });
+  panel.addEventListener("pointermove", event => {
+    if (event.pointerId === heldPointer && Math.hypot(event.clientX - heldStart.x, event.clientY - heldStart.y) > 12) heldMoved = true;
+  });
+  function releaseMotion(event) {
+    if (event.pointerId !== heldPointer) return;
+    const motion = heldMotions;
+    const resumePanel = heldPanelMotion;
+    const token = heldGeneration;
+    if (heldMoved) suppressClick = true;
+    clearHeld();
+    // Native click dispatch completes before motion resumes. If that click
+    // navigates or dismisses, it replaces/cancels this exact animation group.
+    requestAnimationFrame(() => {
+      if (generation !== token || !open) return;
+      if (resumePanel) resumeOpen();
+      if (motion && pageMotions === motion) navigate(page, { focus: false });
+    });
+  }
+  document.addEventListener("pointerup", releaseMotion);
+  document.addEventListener("pointercancel", releaseMotion);
+  document.addEventListener("lostpointercapture", releaseMotion);
+
+  header.addEventListener("pointerdown", event => {
+    if (!mobile() || !open || !event.isPrimary || event.button !== 0
+      || event.target.closest("button, input, a, summary")) return;
+    event.preventDefault();
+    event.stopPropagation();
+    generation += 1;
+    clearHeld();
+    const movingPages = panel.classList.contains("page-transitioning")
+      || pageMotions.some(animation => animation.playState === "running");
+    const from = freezePanel();
+    freezePages();
+    const offset = Math.max(0, translateY());
+    drag = { pointer: event.pointerId, startY: event.clientY, offset, y: offset,
+      height: Math.max(1, travel()), backdrop: stopBackdrop(),
+      samples: [{ y: event.clientY, time: event.timeStamp }], motions: movingPages ? pageMotions : null, token: generation };
+    // A direct manipulation remains fully opaque; only the independent scrim
+    // changes strength as the sheet follows the finger.
+    panel.style.opacity = "1";
+    panel.style.transform = from.transform;
+    header.setPointerCapture(event.pointerId);
+  });
+  header.addEventListener("pointermove", event => {
+    if (!drag || drag.pointer !== event.pointerId) return;
+    drag.y = Math.max(0, drag.offset + event.clientY - drag.startY);
+    panel.style.transform = `translateY(${drag.y}px)`;
+    backdrop.style.opacity = String(drag.backdrop * Math.max(0, 1 - (drag.y - drag.offset) / drag.height));
+    drag.samples.push({ y: event.clientY, time: event.timeStamp });
+    while (drag.samples.length > 2 && drag.samples[1].time < event.timeStamp - 80) drag.samples.shift();
+  });
+  function finishDrag(event) {
+    if (!drag || drag.pointer !== event.pointerId) return;
+    const gesture = drag;
+    const first = gesture.samples[0], last = gesture.samples.at(-1);
+    const elapsed = Math.max(1, event.timeStamp - first.time);
+    const velocity = (last.y - first.y) / elapsed;
+    const distance = Math.max(0, gesture.y - gesture.offset);
+    const dismissed = event.type === "pointerup" && (distance >= Math.min(96, gesture.height * .25)
+      || (distance >= 24 && velocity > .6));
+    clearDrag();
+    if (dismissed) { close(); return; }
+    if (!open || generation !== gesture.token) return;
+    resumeOpen();
+    if (gesture.motions && pageMotions === gesture.motions) navigate(page, { focus: false });
+    fadeBackdrop(1, reduced.matches ? 100 : 180);
+    onActivity();
+  }
+  header.addEventListener("pointerup", finishDrag);
+  header.addEventListener("pointercancel", finishDrag);
+  header.addEventListener("lostpointercapture", finishDrag);
   panel.addEventListener("aida:setting-change", () => {
     document.getElementById("cc-label").textContent = triggers.cc.classList.contains("active") ? "On" : "Off";
   });
@@ -239,6 +465,8 @@ export function createSettings({ wrap, onActivity }) {
   panel.hidden = true;
   panel.inert = true;
   panel.dataset.phase = "closed";
+  backdrop.hidden = true;
+  backdrop.classList.remove("open");
   for (const element of pages.values()) { element.hidden = true; element.inert = true; }
   return { get isOpen() { return open || panel.dataset.phase === "closing"; }, open: show, close, resize: bounds };
 }

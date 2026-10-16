@@ -73,13 +73,16 @@ const settingsState = () => {
   const panel = document.querySelector("#settings-panel");
   const body = document.querySelector("#settings-body");
   const style = getComputedStyle(panel);
+  const clip = panel.getBoundingClientRect();
+  const surface = document.querySelector("#settings-surface").getBoundingClientRect();
+  const content = body.getBoundingClientRect();
   const matrix = new DOMMatrixReadOnly(style.transform === "none" ? undefined : style.transform);
   return {
     hidden: panel.hidden, inert: panel.inert, phase: panel.dataset.phase,
     page: panel.dataset.page, opacity: Number(style.opacity),
     transform: style.transform, y: matrix.m42, x: matrix.m41,
-    height: panel.getBoundingClientRect().height,
-    bodyHeight: body.getBoundingClientRect().height,
+    height: Math.max(0, Math.min(clip.bottom, surface.bottom) - Math.max(clip.top, surface.top)),
+    bodyHeight: Math.max(0, Math.min(clip.bottom, content.bottom) - Math.max(clip.top, content.top)),
     focus: document.activeElement?.id || document.activeElement?.tagName,
   };
 };
@@ -102,6 +105,9 @@ async function sampleAfterAction(page, selector, delay = 50) {
           const panel = document.querySelector("#settings-panel");
           const body = document.querySelector("#settings-body");
           const style = getComputedStyle(panel);
+          const clip = panel.getBoundingClientRect();
+          const surface = document.querySelector("#settings-surface").getBoundingClientRect();
+          const content = body.getBoundingClientRect();
           const pages = [...body.querySelectorAll(".settings-page")].map((element) => ({
             id: element.id, hidden: element.hidden, inert: element.inert,
             opacity: Number(getComputedStyle(element).opacity), transform: getComputedStyle(element).transform,
@@ -111,8 +117,8 @@ async function sampleAfterAction(page, selector, delay = 50) {
             opacity: Number(style.opacity), transform: style.transform,
             hidden: panel.hidden, inert: panel.inert, phase: panel.dataset.phase,
             immediatelyInert,
-            height: panel.getBoundingClientRect().height,
-            bodyHeight: body.getBoundingClientRect().height, pages,
+            height: Math.max(0, Math.min(clip.bottom, surface.bottom) - Math.max(clip.top, surface.top)),
+            bodyHeight: Math.max(0, Math.min(clip.bottom, content.bottom) - Math.max(clip.top, content.top)), pages,
           });
         }, delay);
       }, { once: true });

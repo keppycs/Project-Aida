@@ -1,6 +1,6 @@
 /**
  * Live vs dev: favicon + when &local=1 may point CMAF at ./local/{id}.
- * Off-live hosts also load Eruda (mobile console / network / elements) for debugging.
+ * Off-live hosts can opt into Eruda with &debug=1 for mobile debugging.
  * Kept in one file so watch/index stay simple; tracked in git (unlike web/local/ chunks).
  *
  * Add hostnames here if you deploy the static site to another production domain.
@@ -34,9 +34,9 @@ function applyAidaFavicon() {
   }
 }
 
-/** Mobile-friendly devtools when not on the public host (localhost / LAN / preview). */
+/** Explicit devtools opt-in keeps normal localhost/LAN previews clear of overlays. */
 function loadErudaForLocalDev() {
-  if (isAidaLiveSite()) return;
+  if (isAidaLiveSite() || new URLSearchParams(location.search).get("debug") !== "1") return;
   if (window.eruda) return;
   const script = document.createElement("script");
   script.src = ERUDA_DEV_CDN;
