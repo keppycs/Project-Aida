@@ -1,5 +1,7 @@
 # Evoke v6 UI design
 
+> **Project Aida scope:** This is an imported Evoke reference. Aida's site and player keep their loud yellow accent (`#e8ff47`); Evoke's mint palette and product-specific branding do not apply. Follow [AGENTS.md](../AGENTS.md) for Aida's requirements.
+
 The [Characters library](CHARACTERS.md) is a sidebar destination with thumbnail
 cards and a name/description editor. Text is pasted directly into Description.
 The embedded shared Gallery has masonry images, 1–3 columns, reference selection,

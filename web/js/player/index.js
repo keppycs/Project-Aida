@@ -1,4 +1,4 @@
-import { mountPlayer } from "./shell.js?v=bottom-sheet-v15";
+import { mountPlayer } from "./shell.js?v=volume-space-v23";
 
 window.init = (meta, base) => {
   mountPlayer(meta, base);

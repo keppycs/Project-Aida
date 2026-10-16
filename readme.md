@@ -79,7 +79,7 @@ The Python backend manages the full encoding flow:
 
 ## Project documentation
 
-Project documentation lives in `docs/`. The three design references were copied unchanged from Evoke and retain their original product-specific wording:
+Project documentation lives in `docs/`. The three design references were copied from Evoke and retain their original product-specific wording. Aida's scope notes and [AGENTS.md](AGENTS.md) take precedence: the site and player keep their loud yellow accent (`#e8ff47`), not Evoke's mint palette.
 
 - [Design language](docs/DESIGN_LANGUAGE.md)
 - [UI design](docs/UI_DESIGN.md)

@@ -16,6 +16,7 @@ export function bindProgressInput({ ctx, video, fmt, applyProgress, setDragging,
   progWrap.addEventListener("pointerdown", event => {
     if (!event.isPrimary || event.button !== 0 || !(video.duration > 0)) return;
     event.preventDefault();
+    progWrap.focus({ preventScroll: true });
     activePointer = event.pointerId;
     progWrap.setPointerCapture(activePointer);
     resume = beforeScrub ? beforeScrub() : !video.paused;

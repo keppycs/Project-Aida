@@ -1,5 +1,10 @@
 # Project Aida instructions
 
+## Aida color identity
+
+- Keep Aida's loud yellow accent: `#e8ff47`, with `#b8cc2a` for the dim variant and `#f0ff85` for hover, across the site and player.
+- The design documents were copied from Evoke. Apply their shared interaction guidance, but do not import Evoke's mint palette or other product-specific branding. Neutral surfaces do not require a muted accent.
+
 ## Non-negotiable video requirement: 120 fps
 
 120 fps is the central purpose of this project. Apply this requirement to implementation, documentation, recommendations, and performance tradeoffs.

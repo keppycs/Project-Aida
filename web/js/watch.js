@@ -3,7 +3,7 @@ import {
   renderVideoCard, detectDisplayHdr, attachThumbnailFallbacks,
 } from "./catalog.js?v=ux-stability-v14";
 import { loadMetadata, VideoLoadError } from "./loader.js?v=ux-stability-v14";
-import { mountPlayer } from "./player/shell.js?v=bottom-sheet-v15";
+import { mountPlayer } from "./player/shell.js?v=volume-space-v23";
 
 const id = new URLSearchParams(location.search).get("v") || "0";
 const local = typeof window.shouldUseLocalCmaf === "function" && window.shouldUseLocalCmaf();

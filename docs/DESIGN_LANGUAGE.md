@@ -1,5 +1,7 @@
 # Evoke v6 design language
 
+> **Project Aida scope:** This is an imported Evoke reference. Aida keeps its loud yellow accent (`#e8ff47`, dim `#b8cc2a`, hover `#f0ff85`) across the site and player. The mint palette and other Evoke branding below do not apply to Aida. Use the shared interaction guidance with Aida's requirements in [AGENTS.md](../AGENTS.md).
+
 Evoke is a **quiet creative tool inside a familiar LLM-app shell**. The sidebar makes ongoing work easy to find; the selected Roleplay, Story, Generate, or Iterate workspace receives the screen and behaves like a purpose-built tool. Chrome supports the work without competing with it.
 
 This document defines the reusable visual and interaction grammar. `BEHAVIOR.md` owns feature behavior; `UI_DESIGN.md` owns mobile composition and motion contracts.

@@ -4,7 +4,7 @@ import {
   loadPlayerPrefs, persistPlaybackPrefs, getPlaybackFrameRate,
 } from "./engine.js?v=motion-smooth-v13";
 import { getAutoHideDelayMs, getBigPlayState, shouldShowMenuBackdrop } from "./chrome.js?v=progress-hover-removed-v4";
-import { bindProgressInput, bindSurfaceInput } from "./input.js?v=motion-smooth-v13";
+import { bindProgressInput, bindSurfaceInput } from "./input.js?v=volume-space-v23";
 import { createSettings } from "./settings.js?v=bottom-sheet-v15";
 import { createFrameStepper } from "./frame-step.js?v=progress-hover-removed-v4";
 import { createSmoothPause } from "./smooth-pause.js?v=motion-smooth-v13";
@@ -374,6 +374,7 @@ export async function mountPlayer(meta, base) {
     lastSyncedVolume = volume;
     lastSyncedMuted = video.muted;
     volSlider.value = video.muted ? 0 : volume;
+    volSlider.style.setProperty("--volume-fill", `${Number(volSlider.value) * 100}%`);
     updateVolIcon();
     persistPlaybackPrefs({ ...(getProfile().hideVolumeChrome ? {} : { volume }), muted: video.muted });
   }
@@ -609,6 +610,24 @@ export async function mountPlayer(meta, base) {
     updateMenuBounds();
   });
 
+  // Space belongs to transport before focused controls can activate themselves.
+  // Keep their focus and native editing keys; holding Space toggles only once.
+  function handlePlaybackSpace(event) {
+    if ((event.code !== "Space" && event.key !== " ") || event.defaultPrevented
+      || event.altKey || event.ctrlKey || event.metaKey || event.isComposing) return;
+    const target = event.target;
+    if (target.isContentEditable || target.closest("textarea, select, [role='textbox']")
+      || (target instanceof HTMLInputElement && !["range", "button", "submit", "reset", "checkbox", "radio"].includes(target.type))) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (event.type !== "keydown" || event.repeat) return;
+    showUI();
+    togglePlay();
+    showToast(smoothPause.intendedPaused ? "Paused" : "Playing");
+  }
+  wrap.addEventListener("keydown", handlePlaybackSpace, true);
+  wrap.addEventListener("keyup", handlePlaybackSpace, true);
+
   wrap.addEventListener("keydown", (e) => {
     if (e.defaultPrevented || e.altKey || e.ctrlKey || e.metaKey) return;
     if (e.key === "Escape" && isAnyMenuOpen()) {
@@ -633,7 +652,6 @@ export async function mountPlayer(meta, base) {
     if (e.target.closest("input, textarea, select, button, a, [contenteditable], [role='slider']")) return;
     showUI();
     switch (e.key) {
-      case " ":
       case "k":
         e.preventDefault();
         togglePlay();
