@@ -133,7 +133,7 @@
 #big-play.show { opacity: 1; pointer-events: auto; }
 #big-play.flash-brief { pointer-events: none; transition: none; }
 #big-play.flash-brief svg { transform-origin: 50% 50%; }
-/* Only the 44px utility row consumes visible height. The scrub target extends upward. */
+/* The seek target and utility row each own a separate 44px band. */
 #controls {
   position: absolute;
   left: max(12px, env(safe-area-inset-left));
@@ -152,7 +152,7 @@
   transition-delay: 0s;
 }
 #progress-wrap {
-  --progress-center-offset: calc(4px + var(--bar-h) / 2);
+  --progress-center-offset: 50%;
   position: absolute;
   left: 0;
   right: 0;
@@ -206,7 +206,7 @@
 #progress-wrap.scrubbing #progress-track { height: var(--bar-h-hover); }
 #time-tooltip {
   position: absolute;
-  bottom: 20px;
+  bottom: calc(var(--progress-center-offset) + 14.5px);
   transform: translateX(-50%);
   padding: 4px 7px !important;
   border-radius: 5px;
