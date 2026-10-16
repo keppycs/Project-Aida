@@ -21,7 +21,8 @@ export function mediaBase(videoId, { local = defaultLocal() } = {}) {
 }
 
 export function watchUrl(videoId, { local = defaultLocal() } = {}) {
-  return `watch.html?v=${encodeURIComponent(videoId)}${local ? "&local=1" : ""}`;
+  const path = defaultLocal() ? "watch.html" : "/watch";
+  return `${path}?v=${encodeURIComponent(videoId)}${local ? "&local=1" : ""}`;
 }
 
 export async function fetchCatalog({ local = defaultLocal() } = {}) {
