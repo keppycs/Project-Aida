@@ -26,8 +26,8 @@
 .library-count:empty { display: none; }
 .search-wrap { position: relative; width: 330px; flex-shrink: 0; }
 .search-icon { position: absolute; left: 14px; top: 50%; transform: translateY(-50%); width: 18px; height: 18px; color: var(--text-dim); pointer-events: none; }
-#search-input { width: 100%; padding: 13px 44px 13px 42px; color: var(--text); background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); font-size: 14px; transition: border-color .2s; }
-#search-input:focus { border-color: var(--accent); }
+#search-input { width: 100%; padding: 13px 44px 13px 42px; color: var(--text); background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); font-size: 14px; transition: background-color .2s, color .2s; }
+#search-input:focus { background-color: #27312a; color: #fff; }
 #search-input::placeholder { color: var(--text-dim); }
 #search-input:disabled { opacity: .65; }
 #search-input::-webkit-search-cancel-button { display: none; }

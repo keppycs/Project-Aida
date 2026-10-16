@@ -18,7 +18,7 @@
 .watch-description { max-width: 800px; margin-top: 24px; color: #c2c2bb; font-size: 16px; line-height: 1.75; white-space: pre-wrap; overflow-wrap: anywhere; }
 .watch-tags { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 20px; }
 .watch-tags a { padding: 6px 12px; background: var(--surface); border: 1px solid var(--border, rgba(255,255,255,.1)); border-radius: 6px; color: var(--text-dim); text-decoration: none; font-size: 13px; overflow-wrap: anywhere; }
-.watch-tags a:hover { color: var(--accent); border-color: var(--accent-dim); }
+.watch-tags a:hover { color: var(--accent); }
 .shortcut-guide { margin-top: 26px; max-width: 800px; color: var(--text-dim); font-size: 13px; }
 .shortcut-guide summary { cursor: pointer; width: fit-content; padding: 6px 0; }
 .shortcut-guide summary:hover { color: var(--text); }

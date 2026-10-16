@@ -29,8 +29,6 @@ export function bindDesktopProgressInput({
   fmt,
   getProgressFrac,
   applyProgress,
-  setHoverPreview,
-  clearHoverPreview,
   setDragging,
   isDragging,
   setHovering,
@@ -42,7 +40,6 @@ export function bindDesktopProgressInput({
 
   progWrap.addEventListener("mouseleave", () => {
     setHovering(false);
-    clearHoverPreview();
     if (!isDragging() && video.duration) {
       applyProgress(video.currentTime / video.duration);
     }
@@ -53,12 +50,10 @@ export function bindDesktopProgressInput({
     const x = e.clientX - progWrap.getBoundingClientRect().left;
     timeTip.textContent = fmt(frac * (video.duration || 0));
     timeTip.style.left = x + "px";
-    if (!isDragging()) setHoverPreview(frac);
   });
 
   progWrap.addEventListener("mousedown", (e) => {
     setDragging(true);
-    clearHoverPreview();
     applyProgress(getProgressFrac(e));
   });
 

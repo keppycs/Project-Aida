@@ -1,4 +1,5 @@
 import "./warn-shim.js?v=prechat-20261016-dd37ee5";
+import { parseFrameRate } from "./frame-step.js?v=progress-hover-removed-v4";
 
 const AV1_CODEC = 'video/mp4; codecs="av01.0.08H.10.0.110.09.16.09.0"';
 const HEVC_CODEC = 'video/mp4; codecs="hvc1.1.6.H150.B0"';
@@ -96,9 +97,6 @@ function reportPlaybackError(message, kind = "playback") {
 }
 
 const CC_STORAGE_KEY = "aida-color-correction";
-const CC_BANNER_DISMISSED_KEY = "aida-cc-banner-dismissed";
-const CC_BANNER_MENU_USED_KEY = "aida-cc-banner-menu-used";
-const CC_BANNER_AUTO_MS = 30000;
 
 const CC_DEFAULTS = Object.freeze({
   enabled: true,
@@ -108,7 +106,6 @@ const CC_DEFAULTS = Object.freeze({
 });
 
 let ccState = { ...CC_DEFAULTS };
-let ccBannerTimer = null;
 
 function clampCc(n, min, max) {
   return Math.min(max, Math.max(min, n));
@@ -182,6 +179,7 @@ function syncCcUiFromState(ctx) {
   ccSaturationVal.textContent = formatCcParam(ccState.saturation);
   ccBtn.classList.toggle("active", ccState.enabled);
   ccBtn.title = ccState.enabled ? "Color correction: On" : "Color correction: Off";
+  ccBtn.dispatchEvent(new CustomEvent("aida:setting-change", { bubbles: true }));
 }
 
 export function setCcEnabled(on, video, ctx) {
@@ -201,58 +199,8 @@ export function applyCcSliderChange(key, rawValue, video, ctx) {
   persistColorCorrection();
 }
 
-function shouldShowCcBanner() {
-  try {
-    return !localStorage.getItem(CC_BANNER_DISMISSED_KEY) && !localStorage.getItem(CC_BANNER_MENU_USED_KEY);
-  } catch {
-    return false;
-  }
-}
-
-function clearCcBannerTimer() {
-  if (ccBannerTimer != null) {
-    clearTimeout(ccBannerTimer);
-    ccBannerTimer = null;
-  }
-}
-
-function markCcBannerDismissed(wrap) {
-  try {
-    localStorage.setItem(CC_BANNER_DISMISSED_KEY, "1");
-  } catch {}
-  clearCcBannerTimer();
-  wrap.querySelector("#cc-notice")?.remove();
-}
-
 export function markCcBannerMenuUsed(wrap) {
-  try {
-    localStorage.setItem(CC_BANNER_MENU_USED_KEY, "1");
-  } catch {}
-  clearCcBannerTimer();
   wrap.querySelector("#cc-notice")?.remove();
-}
-
-function showColorCorrectionNotice(wrap) {
-  clearCcBannerTimer();
-  const notice = document.createElement("div");
-  notice.id = "cc-notice";
-  notice.className = "player-notice player-notice-timed";
-  notice.style.setProperty("--cc-banner-duration", `${CC_BANNER_AUTO_MS}ms`);
-  notice.innerHTML = `
-    <div class="player-notice-body">
-      <span><strong>Color correction</strong> is enabled to compensate for the HDR video on your non-HDR compatible setup. Please adjust the brightness, contrast, and saturation to taste in the Color menu.</span>
-      <button type="button" class="player-notice-close" aria-label="Dismiss">✕</button>
-    </div>
-    <div class="player-notice-progress" aria-hidden="true">
-      <div class="player-notice-progress-bar"></div>
-    </div>
-  `;
-  wrap.appendChild(notice);
-  notice.querySelector(".player-notice-close").addEventListener("click", () => markCcBannerDismissed(wrap));
-  ccBannerTimer = setTimeout(() => {
-    ccBannerTimer = null;
-    notice.remove();
-  }, CC_BANNER_AUTO_MS);
 }
 
 async function detectHDR() {
@@ -271,7 +219,7 @@ async function detectHDR() {
         width: 1920,
         height: 1080,
         bitrate: 10000000,
-        framerate: 60,
+        framerate: 120,
         transferFunction: "pq",
         colorGamut: "rec2020",
       },
@@ -339,7 +287,7 @@ async function selectSource(meta, base, preferCodec, preferProtocol) {
   return filtered[0];
 }
 
-async function loadSource(meta, base, preferCodec, preferProtocol, ctx) {
+async function loadSource(meta, base, preferCodec, preferProtocol, ctx, { preservePlayback = false } = {}) {
   const chosen = await selectSource(meta, base, preferCodec, preferProtocol);
   if (!chosen) {
     throw reportPlaybackError(
@@ -361,9 +309,17 @@ async function loadSource(meta, base, preferCodec, preferProtocol, ctx) {
 
   const playbackRate = PLAYBACK_SPEEDS.has(ctx.video.playbackRate)
     ? ctx.video.playbackRate : (loadPlayerPrefs()?.speed ?? 1);
+  const previous = preservePlayback ? {
+    time: Number.isFinite(ctx.video.currentTime) ? ctx.video.currentTime : 0,
+    paused: ctx.video.paused,
+  } : null;
   try {
-    await player.load(chosen.src, null, chosen.mime);
+    await player.load(chosen.src, previous?.time ?? null, chosen.mime);
     ctx.video.playbackRate = playbackRate;
+    if (previous) {
+      if (previous.paused) ctx.video.pause();
+      else await ctx.video.play();
+    }
     window.dispatchEvent(new CustomEvent("aida:playback-ready"));
   } catch (e) {
     console.error("Load failed", e);
@@ -446,7 +402,6 @@ export async function initPlayback(meta, base, ctx, profile) {
       syncCcUiFromState(ctx);
       applyColorCorrection(ctx.video);
       ctx.ccWrap.style.display = "";
-      if (shouldShowCcBanner()) showColorCorrectionNotice(ctx.wrap);
     }
   }
 
@@ -462,134 +417,122 @@ export async function initPlayback(meta, base, ctx, profile) {
   await loadSource(meta, base, prefs?.codec ?? null, prefs?.protocol ?? null, ctx);
 }
 
+export function getPlaybackFrameRate() {
+  const active = player?.getVariantTracks().find((track) => track.active);
+  return parseFrameRate(active?.frameRate) ?? parseFrameRate(currentMeta?.frameRate);
+}
+
+function displayFrameRate(rate) {
+  const value = parseFrameRate(rate);
+  return value ? String(Number(value.toFixed(3))) : "";
+}
+
+function settingsChanged(ctx) {
+  ctx.qualLabel.dispatchEvent(new CustomEvent("aida:setting-change", { bubbles: true }));
+}
+
 function buildQualityMenu(ctx) {
   if (!player) return;
 
   const { qualMenu } = ctx;
+  const content = qualMenu.querySelector("#quality-menu-content") || qualMenu;
   const focused = document.activeElement;
-  const focusedLabel = qualMenu.contains(focused) ? focused.getAttribute("aria-label") : null;
-  const focusedId = qualMenu.contains(focused) ? focused.dataset.id : null;
+  const focusedLabel = content.contains(focused) ? focused.getAttribute("aria-label") : null;
+  const focusedId = content.contains(focused) ? focused.dataset.id : null;
+  const advancedWasOpen = content.querySelector("details")?.open ?? false;
   const restoreFocus = () => {
     if (qualMenu.hidden || (!focusedLabel && focusedId == null)) return;
-    [...qualMenu.querySelectorAll("button")].find((button) => focusedLabel
+    [...content.querySelectorAll("button")].find((button) => focusedLabel
       ? button.getAttribute("aria-label") === focusedLabel
       : button.dataset.id === focusedId)?.focus();
   };
-  qualMenu.innerHTML = "";
+  content.replaceChildren();
 
-  const codecHeader = document.createElement("div");
-  codecHeader.className = "menu-header";
-  codecHeader.textContent = "Codec";
-  qualMenu.appendChild(codecHeader);
-
-  const codecRow = document.createElement("div");
-  codecRow.className = "menu-toggle-row";
-
-  const codecs = currentMeta?.codecs || [];
-  [
-    ["AV1", "AV1"],
-    ["HEVC", "HEVC"],
-  ].forEach(([value, label]) => {
-    const btn = document.createElement("button");
-    btn.type = "button";
-    btn.className = "menu-toggle" + (currentCodec === value ? " active" : "");
-    btn.textContent = label;
-    btn.setAttribute("aria-label", `${label} codec`);
-    btn.setAttribute("aria-pressed", String(currentCodec === value));
-    if (!codecs.includes(value)) {
-      btn.disabled = true;
-      btn.classList.add("disabled");
-    }
-    btn.addEventListener("click", async () => {
-      if (btn.disabled || currentCodec === value) return;
-      try { await loadSource(currentMeta, currentBase, value, currentProtocol, ctx); } catch {}
-    });
-    codecRow.appendChild(btn);
-  });
-  qualMenu.appendChild(codecRow);
-
-  const protHeader = document.createElement("div");
-  protHeader.className = "menu-header";
-  protHeader.textContent = "Protocol";
-  qualMenu.appendChild(protHeader);
-
-  const protRow = document.createElement("div");
-  protRow.className = "menu-toggle-row";
-
-  ["DASH", "HLS"].forEach((value) => {
-    const btn = document.createElement("button");
-    btn.type = "button";
-    btn.className = "menu-toggle" + (currentProtocol === value ? " active" : "");
-    btn.textContent = value;
-    btn.setAttribute("aria-label", `${value} streaming protocol`);
-    btn.setAttribute("aria-pressed", String(currentProtocol === value));
-    btn.addEventListener("click", async () => {
-      if (currentProtocol === value) return;
-      try { await loadSource(currentMeta, currentBase, currentCodec, value, ctx); } catch {}
-    });
-    protRow.appendChild(btn);
-  });
-  qualMenu.appendChild(protRow);
-
-  const qualHeader = document.createElement("div");
-  qualHeader.className = "menu-header";
-  qualHeader.textContent = "Quality";
-  qualMenu.appendChild(qualHeader);
-
-  const tracks = player
-    .getVariantTracks()
-    .filter((t) => t.height)
+  const tracks = player.getVariantTracks()
+    .filter((track) => track.height)
     .sort((a, b) => b.height - a.height || b.bandwidth - a.bandwidth);
 
+  const check = '<svg class="check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg>';
   const autoItem = document.createElement("button");
   autoItem.type = "button";
   autoItem.className = "menu-item" + (selectedQuality === -1 ? " active" : "");
   autoItem.dataset.id = "-1";
   autoItem.id = "quality-auto-item";
   autoItem.setAttribute("aria-pressed", String(selectedQuality === -1));
-  autoItem.innerHTML = `
-    <svg class="check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-      <polyline points="20 6 9 17 4 12"/>
-    </svg>
-    Auto
-    <span class="menu-badge" id="quality-auto-badge">ABR</span>`;
+  autoItem.innerHTML = `${check}<span class="quality-option-label">Auto</span><span class="menu-badge" id="quality-auto-badge">ABR</span>`;
   autoItem.addEventListener("click", () => selectQuality(-1, ctx));
-  qualMenu.appendChild(autoItem);
+  content.appendChild(autoItem);
 
   tracks.forEach((track) => {
     const item = document.createElement("button");
     item.type = "button";
     item.className = "menu-item";
     item.dataset.id = String(track.id);
-
     const kbps = Math.round(track.bandwidth / 1000);
-    const fps = Math.round(track.frameRate || currentMeta?.frameRate || 0) || "";
-    const label = `${String(track.height).padStart(4, "\u00A0")}p${fps}`;
+    const fps = displayFrameRate(track.frameRate || currentMeta?.frameRate);
     item.setAttribute("aria-label", `${track.height}p${fps ? ` at ${fps} frames per second` : ""}`);
     item.setAttribute("aria-pressed", "false");
-
-    item.innerHTML = `
-      <svg class="check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-        <polyline points="20 6 9 17 4 12"/>
-      </svg>
-      ${label}
-      <span class="menu-badge">${kbps > 1000 ? (kbps / 1000).toFixed(1) + " Mbps" : kbps + " kbps"}</span>`;
+    item.innerHTML = `${check}<span class="quality-option-label">${track.height}p${fps ? `<span class="quality-fps">${fps} fps</span>` : ""}</span><span class="menu-badge">${kbps > 1000 ? (kbps / 1000).toFixed(1) + " Mbps" : kbps + " kbps"}</span>`;
     item.addEventListener("click", () => selectQuality(track.id, ctx));
-    qualMenu.appendChild(item);
+    content.appendChild(item);
   });
 
+  const advanced = document.createElement("details");
+  advanced.className = "playback-advanced";
+  advanced.open = advancedWasOpen;
+  const summary = document.createElement("summary");
+  summary.textContent = "Advanced playback";
+  advanced.appendChild(summary);
+  const addChoice = (title, choices, selected, enabled, choose) => {
+    const header = document.createElement("div");
+    header.className = "menu-header";
+    header.textContent = title;
+    advanced.appendChild(header);
+    const row = document.createElement("div");
+    row.className = "menu-toggle-row";
+    choices.forEach((value) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "menu-toggle" + (selected === value ? " active" : "");
+      button.textContent = value;
+      button.setAttribute("aria-label", `${value} ${title === "Codec" ? "codec" : "streaming protocol"}`);
+      button.setAttribute("aria-pressed", String(selected === value));
+      button.disabled = !enabled(value);
+      button.addEventListener("click", async () => {
+        if (button.disabled || selected === value) return;
+        row.querySelectorAll("button").forEach((choice) => { choice.disabled = true; });
+        try { await choose(value); } catch {}
+        finally {
+          row.querySelectorAll("button").forEach((choice) => {
+            choice.disabled = !enabled(choice.textContent);
+          });
+        }
+      });
+      row.appendChild(button);
+    });
+    advanced.appendChild(row);
+  };
+  addChoice("Codec", ["AV1", "HEVC"], currentCodec,
+    (value) => (currentMeta?.codecs || []).includes(value),
+    (value) => loadSource(currentMeta, currentBase, value, currentProtocol, ctx, { preservePlayback: true }));
+  addChoice("Protocol", ["DASH", "HLS"], currentProtocol, () => true,
+    (value) => loadSource(currentMeta, currentBase, currentCodec, value, ctx, { preservePlayback: true }));
+  content.appendChild(advanced);
+
   if (selectedHeight !== null) {
-    const target = tracks.find((t) => t.height === selectedHeight);
+    const target = tracks.find((track) => track.height === selectedHeight);
     if (target) {
       selectedQuality = target.id;
       player.configure("abr.enabled", false);
       player.selectVariantTrack(target, true);
       ctx.qualLabel.textContent = trackLabel(target);
-      qualMenu.querySelectorAll(".menu-item").forEach((item) => {
-        item.classList.toggle("active", parseInt(item.dataset.id, 10) === target.id);
-        item.setAttribute("aria-pressed", String(parseInt(item.dataset.id, 10) === target.id));
+      content.querySelectorAll(".menu-item").forEach((item) => {
+        const active = Number(item.dataset.id) === target.id;
+        item.classList.toggle("active", active);
+        item.setAttribute("aria-pressed", String(active));
       });
       persistPlayerPrefs();
+      settingsChanged(ctx);
       restoreFocus();
       return;
     }
@@ -606,8 +549,8 @@ function buildQualityMenu(ctx) {
 }
 
 function trackLabel(track) {
-  const fps = Math.round(track.frameRate || currentMeta?.frameRate || 0);
-  return `${track.height}p${fps || ""}`;
+  const fps = displayFrameRate(track.frameRate || currentMeta?.frameRate);
+  return `${track.height}p${fps ? ` \u00b7 ${fps} fps` : ""}`;
 }
 
 function selectQuality(id, ctx) {
@@ -630,6 +573,7 @@ function selectQuality(id, ctx) {
     item.setAttribute("aria-pressed", String(parseInt(item.dataset.id, 10) === id));
   });
   persistPlayerPrefs();
+  settingsChanged(ctx);
 }
 
 function updateQualityLabel(ctx) {
@@ -639,4 +583,5 @@ function updateQualityLabel(ctx) {
   ctx.qualLabel.textContent = label ? `Auto · ${label}` : "Auto";
   const autoBadge = document.getElementById("quality-auto-badge");
   if (autoBadge) autoBadge.textContent = label ?? "ABR";
+  settingsChanged(ctx);
 }

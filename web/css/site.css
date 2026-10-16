@@ -10,6 +10,8 @@
   --text-muted: #b5bcb0;
   --text-dim: #939b8c;
   --border: rgba(217, 233, 203, .1);
+  --focus-fill: #35403a;
+  --focus-ink: #fff;
   --radius: 10px;
   --radius-lg: 14px;
   --font: "Outfit", sans-serif;
@@ -27,7 +29,7 @@ a { color: inherit; }
 img { display: block; max-width: 100%; }
 button { color: inherit; }
 [hidden] { display: none !important; }
-:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }
+:focus { outline: none; }
 ::selection { color: var(--bg); background: var(--accent); }
 .site-header, .site-main, .site-footer { width: min(1200px, calc(100% - var(--page-gutter) * 2)); margin-inline: auto; }
 .site-header { display: flex; align-items: center; justify-content: space-between; min-height: 104px; gap: 24px; border-bottom: 1px solid var(--border); }
@@ -52,11 +54,11 @@ button { color: inherit; }
 .button-primary { background: var(--accent); color: var(--bg); }
 .button-primary:hover { background: #f0ff85; }
 .button-quiet { background: var(--surface2); color: var(--text); border-color: var(--border); }
-.button-quiet:hover { background: #252c21; border-color: rgba(232, 255, 71, .3); }
+.button-quiet:hover { background: #252c21; }
 .button:disabled { opacity: .5; cursor: default; }
 .video-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 26px 22px; }
 .video-card { display: flex; flex-direction: column; overflow: hidden; border-radius: var(--radius); background: var(--surface); border: 1px solid var(--border); text-decoration: none; transition: border-color .2s, background .2s; }
-.video-card:hover { border-color: rgba(232, 255, 71, .28); background: #161b13; }
+.video-card:hover { background: #161b13; }
 .video-card-thumbnail { position: relative; aspect-ratio: 16 / 9; background: var(--surface2); overflow: hidden; }
 .video-card-thumbnail img { width: 100%; height: 100%; object-fit: cover; transition: transform .3s var(--ease); }
 .video-card:hover .video-card-thumbnail img { transform: scale(1.025); }
@@ -85,6 +87,11 @@ button { color: inherit; }
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 .skip-link { position: absolute; top: 8px; left: 16px; transform: translateY(-150%); z-index: 999; background: var(--accent); color: var(--bg); padding: 10px 14px; border-radius: 6px; font-size: 14px; }
 .skip-link:focus { transform: translateY(0); }
+/* Keyboard feedback fills the actual control; containers never receive a perimeter. */
+body :is(a[href], button, summary, input:not([type="range"]), select, textarea):focus-visible {
+  background-color: var(--focus-fill);
+  color: var(--focus-ink);
+}
 @keyframes shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
 @media (max-width: 900px) { .video-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (max-width: 650px) {

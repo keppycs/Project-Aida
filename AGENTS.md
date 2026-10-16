@@ -11,3 +11,12 @@
 - Do not silently lower the frame rate, duplicate lower-frame-rate frames, or relabel metadata to claim that the 120 fps requirement is satisfied.
 
 These are product requirements, not a claim that the current pipeline already validates every input or output against them.
+
+## No interaction outlines or focus rings
+
+- Never use an outline, focus ring, perimeter glow, or border-like interaction highlight on any UI element, including buttons, links, fields, sliders, menus, and players. This includes native browser outlines and CSS outlines, ring-shaped shadows, and pseudo-element imitations for pointer, keyboard, programmatic, or restored focus.
+- Keep keyboard focus clearly visible with geometry-stable changes to a control's background/fill, text, or icon. Preserve keyboard navigation, focusability, and shortcuts; do not blur elements or hide all focus feedback.
+- Generic accessibility guidance does not authorize an outline or ring exception. Check shared focus styles and native defaults so they cannot reintroduce the rejected treatment. Intentional static borders and icon artwork are not focus indicators and must not be repurposed as a ring workaround.
+- The player container may receive focus for shortcuts, but must not highlight the whole video. Apply non-outline feedback to the actual controls.
+- Before presenting player changes for review, run `tests/player-focus.browser.mjs` and inspect focused desktop and mobile states. Include pointer activation, keyboard shortcuts, menu dismissal, and fullscreen return. Preserve these checks when changing focus behavior or shared focus styles.
+- Show a screenshot or local demo and obtain the user's approval of player UI changes before committing or publishing them.

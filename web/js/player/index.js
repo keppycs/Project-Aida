@@ -1,4 +1,4 @@
-import { mountPlayer } from "./shell.js?v=prechat-20261016-dd37ee5";
+import { mountPlayer } from "./shell.js?v=progress-hover-removed-v4";
 
 window.init = (meta, base) => {
   mountPlayer(meta, base);
