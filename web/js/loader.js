@@ -12,7 +12,7 @@ export async function loadMetadata(base, { allowPrivate = false } = {}) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 15000);
   try {
-    const response = await fetch(`${base}/metadata.json`, { signal: controller.signal });
+    const response = await fetch(`${base}/metadata.json`, { signal: controller.signal, cache: "no-store" });
     if (response.status === 404) throw new VideoLoadError("not_found", "Video not found");
     if (!response.ok) throw new VideoLoadError("network", "Unable to load video");
     let meta;
