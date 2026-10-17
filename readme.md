@@ -112,6 +112,42 @@ The videos page and watch page share neutral surfaces, system fonts and native s
 
 Run `node tests/site-ux.browser.mjs` for shared UI changes. It checks real classic/overlay scrollbar modes, loading/search/empty/error states, short and long pages, player Settings overflow, enlarged text, touch targets and native scrolling. `AIDA_PLAYWRIGHT_MODULE`, `AIDA_BROWSER_EXECUTABLE` and `AIDA_REVIEW_DIR` can select the test runtime, browser and artifact directory. Keep `tests/player-focus.browser.mjs` and the player motion tests alongside this check.
 
+### Local Studio
+
+Install `requirements.txt`, run `launch.bat`, and open `http://127.0.0.1:8765`.
+Studio uses Aida's yellow/dark design. **New upload** selects a source, creates
+120 fps renditions and thumbnails, and can upload privately. Sources below or
+above the 120 fps target are rejected rather than relabelled or duplicated.
+
+**Videos** edits existing titles, descriptions, tags, visibility and thumbnails.
+Choose an image or extract a source frame, then review the thumbnail/card and
+the existing watch-page player. **Save locally** keeps a draft on this PC;
+**Upload changes / Publish changes** sends the reviewed draft to B2. These
+actions never re-encode an existing video. **Refresh online** includes private
+and unlisted uploads, and authenticated local previews work without exposing
+storage credentials to the player. The optional editor on the public website
+is a later step and is not enabled by this local Studio release.
+
+Cloud refreshes and revision checks detect stale forms and changed online
+details. Failed uploads keep a retryable draft. This is a single-owner local
+writer, not an atomic lock against a simultaneous external writer; a future
+live editor must share a central write service before claiming that guarantee.
+The old bulk catalogue-upload button now opens Videos so publication cannot
+bypass review. CLI catalogue uploads merge current remote metadata and retain
+other online entries.
+
+Changed local files are kept in `.agent-trash/` with restore instructions;
+uploads preserve previous B2 versions. The optional archive-after-upload moves
+local transcodes to that recoverable trash after upload verification. It does
+not permanently reclaim their disk space. Uploads include only packaged video
+assets, and publish metadata after media succeeds. Editor state is never sent
+to B2. Studio stays bound to localhost, checks loopback hosts/origins and uses
+a per-process session token for writes. Do not expose its port to the Internet.
+
+Checks: `python -B -m unittest discover -s tests -p 'test_*.py'` and
+`node tests/admin-studio.browser.mjs`. Browser checks use synthetic videos and
+fake storage; they do not run FFmpeg or write to the real bucket.
+
 ### GitHub Pages
 
 The static site is published from `web/` by [the Pages workflow](.github/workflows/pages.yml). The artifact contains the contents of `web/` at its root, preserving public URLs such as `/watch.html`, `/css/` and `/js/`. Local encodes in `web/local/` and saved pages in `web/youtube reference/` are excluded from the artifact. `docs/` is project documentation and is not part of the website artifact.

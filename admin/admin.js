@@ -25,6 +25,7 @@ function setTab(name) {
     const active = tab.dataset.tab === name;
     tab.classList.toggle("active", active);
     tab.setAttribute("aria-selected", String(active));
+    tab.tabIndex = active ? 0 : -1;
   });
   $$(".panel").forEach((panel) => {
     const active = panel.id === `panel-${name}`;
@@ -33,6 +34,7 @@ function setTab(name) {
   });
 
   localStorage.setItem(TAB_KEY, name);
+  window.dispatchEvent(new CustomEvent("aida:tab-change", { detail: { name } }));
 }
 
 function normalizePath(raw) {
@@ -137,9 +139,15 @@ function setStatus(el, text, ok = null) {
 }
 
 async function api(path, options = {}) {
+  const headers = { "Content-Type": "application/json", ...options.headers };
+  if (options.method && !["GET", "HEAD"].includes(options.method.toUpperCase())) {
+    headers["X-Aida-Session"] = document.querySelector('meta[name="aida-session"]')?.content || "";
+  }
   const res = await fetch(path, {
-    headers: { "Content-Type": "application/json", ...options.headers },
     ...options,
+    headers,
+    credentials: "same-origin",
+    cache: "no-store",
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
@@ -170,7 +178,7 @@ async function loadDefaults() {
     const opt = document.createElement("option");
     opt.value = value;
     opt.textContent = value;
-    opt.selected = value === defaults.visibility;
+    opt.selected = value === "private";
     select.appendChild(opt);
   });
 }
@@ -180,6 +188,7 @@ async function loadCredentials() {
     const creds = await api("/api/credentials");
     $("#cr-key").value = creds.key_id;
     $("#cr-secret").value = creds.app_key;
+    $("#cr-secret").placeholder = creds.configured ? "Saved — leave blank to keep" : "Application key";
     $("#cr-bucket").value = creds.bucket;
     $("#cr-endpoint").value = creds.endpoint;
     setStatus(
@@ -324,6 +333,7 @@ function connectEvents() {
     if (event.type === "encode_done") {
       setEncodeBusy(false);
       setStatus("#encode-status", event.message, event.ok);
+      window.dispatchEvent(new CustomEvent("aida:encode-done", { detail: event }));
     }
 
     if (event.type === "maint_start") {
@@ -481,6 +491,15 @@ async function saveCredentials() {
 function bindUi() {
   $$(".tab").forEach((tab) => {
     tab.addEventListener("click", () => setTab(tab.dataset.tab));
+    tab.addEventListener("keydown", (event) => {
+      if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+      event.preventDefault();
+      const tabs = [...$$(".tab")];
+      const index = tabs.indexOf(tab);
+      const next = event.key === "Home" ? 0 : event.key === "End" ? tabs.length - 1 : (index + (event.key === "ArrowRight" ? 1 : -1) + tabs.length) % tabs.length;
+      setTab(tabs[next].dataset.tab);
+      tabs[next].focus();
+    });
   });
 
   $("#opt-thumbnails").addEventListener("change", syncThumbFrameField);
@@ -502,7 +521,7 @@ function bindUi() {
   $("#confirm-delete").addEventListener("click", applyDedupe);
   $("#sync-preview").addEventListener("click", () => syncCatalog("preview"));
   $("#sync-apply").addEventListener("click", () => syncCatalog("apply"));
-  $("#sync-upload").addEventListener("click", () => syncCatalog("upload"));
+  $("#sync-upload").addEventListener("click", () => window.dispatchEvent(new CustomEvent("aida:open-videos")));
   $("#save-creds").addEventListener("click", saveCredentials);
 
   $("#toggle-secret").addEventListener("click", () => {

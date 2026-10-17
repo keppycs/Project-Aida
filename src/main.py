@@ -3,10 +3,8 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 from typing import Callable, Optional
 import argparse
-import json
 import logging
 import math
-import shutil
 import sys
 import time
 
@@ -33,6 +31,7 @@ from transcode import (
 )
 from manifest import patch_hls_stream_inf, patch_bandwidth
 from upload import make_b2_client, is_already_uploaded, upload_folder, upload_index
+from video_library import VideoLibrary
 
 ROOT = Path(__file__).parent.parent
 
@@ -95,6 +94,14 @@ def run_pipeline(
         get_b2_credentials()
 
     video_id = video_id or f"0{int(time.time())}"
+    local_store = VideoLibrary(ROOT, LOCAL_DIR)
+    if local_store._path(video_id, "metadata.json").exists():
+        raise ValueError("That video already exists. Use the video editor to change it.")
+    b2 = bucket = None
+    if upload_to_b2:
+        b2, bucket = make_b2_client()
+        if is_already_uploaded(b2, bucket, video_id, logging.getLogger("transcode")):
+            raise ValueError("That video ID already exists online. Open it in Videos to edit it.")
     title = title.strip() or video_file.stem
     created_at = int(time.time())
     ams = ZoneInfo("Europe/Amsterdam")
@@ -122,6 +129,8 @@ def run_pipeline(
     color_trc       = video_stream.get("color_transfer",  "bt709")
     colorspace      = video_stream.get("color_space",     "bt709")
     fps             = parse_framerate(video_stream.get("r_frame_rate", "60/1"))
+    if fps != 120:
+        raise ValueError("Aida requires a real 120 fps source; this video was not encoded.")
     gop_size        = math.ceil(fps * SEG_DURATION)
     source_height   = int(video_stream.get("height", 2160))
     source_width    = int(video_stream.get("width",  3840))
@@ -268,10 +277,13 @@ def run_pipeline(
         raise RuntimeError(msg)
 
     # ── metadata.json ──────────────────────────────────────────────────────────
+    tags_list = [t.strip() for t in tags.split(",") if t.strip()]
     meta = {
         "id":             video_id,
         "title":          title,
         "description":    description,
+        "tags":           tags_list,
+        "hdr":            is_hdr,
         "createdAt":      created_at,
         "duration":       round(duration, 3),
         "frameRate":      round(fps, 3),
@@ -284,13 +296,8 @@ def run_pipeline(
         "visibility":     visibility,
     }
 
-    meta_local = LOCAL_DIR / video_id / "metadata.json"
-    meta_local.write_text(json.dumps(meta, indent=2), encoding="utf-8")
-    log.info(f"[METADATA]     Written {meta_local}")
-
     # Update web/local/index.json — full local catalogue regardless of upload
     date_str    = datetime.fromtimestamp(created_at, tz=ams).strftime("%d-%m-%Y %H:%M:%S %Z")
-    tags_list   = [t.strip() for t in tags.split(",") if t.strip()]
     entry = {
         "id":          video_id,
         "title":       title,
@@ -306,32 +313,24 @@ def run_pipeline(
         "codecs":      encoded_codecs,
         "visibility":  visibility,
     }
-    LOCAL_DIR.mkdir(parents=True, exist_ok=True)
-    try:
-        index = json.loads(INDEX_PATH.read_text(encoding="utf-8")) if INDEX_PATH.exists() else []
-    except Exception:
-        index = []
-    index = [e for e in index if e.get("id") != video_id]
-    index.insert(0, entry)
-    INDEX_PATH.write_text(json.dumps(index, indent=2), encoding="utf-8")
-    log.info(f"[INDEX]        Updated {INDEX_PATH.relative_to(ROOT)} ({len(index)} entries)")
+    local_store.store_encoded_video(video_id, meta, entry)
+    log.info("[METADATA]     Saved video details and local catalogue with backups")
 
     # ── Upload ─────────────────────────────────────────────────────────────────
     if upload_to_b2:
-        b2, bucket = make_b2_client()
         video_dir = LOCAL_DIR / video_id
         if is_already_uploaded(b2, bucket, video_id, log):
-            log.info(f"[SKIP UPLOAD]  {video_id} — already exists in B2.")
+            raise ValueError("That video ID appeared online during encoding. The local video is kept for review.")
         else:
             log.info(f"[START UPLOAD] {video_id} → b2://{bucket}/{video_id}/")
             upload_cb = (lambda d, t: on_progress("Upload", d, t)) if on_progress else None
             ok = upload_folder(b2, bucket, video_dir, video_id, log, on_progress=upload_cb)
             if ok:
                 upload_index(b2, bucket, INDEX_PATH, log)
+                local_store.mark_uploaded(video_id)
                 if delete_after_upload:
-                    log.info("[CLEAN]  Removing local segments")
-                    for cn in encoded_codecs:
-                        shutil.rmtree(video_dir / cn, ignore_errors=True)
+                    local_store.archive_encoded_media(video_id, encoded_codecs)
+                    log.info("[ARCHIVE]      Local video files moved to .agent-trash")
             else:
                 raise RuntimeError("Upload failed.")
         log.info("All variants transcoded and uploaded.")

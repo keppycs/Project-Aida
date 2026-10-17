@@ -9,13 +9,14 @@ from pathlib import Path
 import asyncio
 import json
 import logging
+import math
 import queue
+import secrets
 import threading
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, StreamingResponse
-from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from pydantic import BaseModel
 
 from config import (
@@ -33,6 +34,8 @@ from config import (
 from dedupe_bucket import DedupeResult, run_dedupe
 from main import probe_source, run_pipeline
 from sync_catalog import SyncResult, format_sync_summary, run_sync
+from admin_editor import editor_html, install_editor, install_local_boundary, safe_file
+from video_library import VIDEO_ID
 
 ROOT = Path(__file__).parent.parent
 ADMIN_DIR = ROOT / "admin"
@@ -54,6 +57,10 @@ _encode_running = False
 _maint_running = False
 _last_dedupe_scan: DedupeResult | None = None
 _last_sync_result: SyncResult | None = None
+
+install_local_boundary(app)
+install_editor(app, ROOT)
+app.state.editor_busy = lambda: _encode_running or _maint_running
 
 STAGES = ("Thumbnails", "AV1", "HEVC", "Upload")
 
@@ -258,7 +265,8 @@ def _run_encode_job(body: PipelineIn) -> None:
             on_progress=on_progress,
             extra_log_handler=handler,
         )
-        emit({"type": "encode_done", "ok": True, "message": "Pipeline complete."})
+        emit({"type": "encode_done", "ok": True, "message": "Video ready to edit.",
+              "video_id": body.video_id, "editor_url": f"/?video={body.video_id}"})
     except Exception as exc:
         emit({"type": "encode_done", "ok": False, "message": f"Pipeline failed: {exc}"})
     finally:
@@ -338,8 +346,8 @@ def _start_thread(target, *args, **kwargs) -> None:
 
 
 @app.get("/")
-def index() -> FileResponse:
-    return FileResponse(ADMIN_DIR / "index.html")
+def index() -> HTMLResponse:
+    return editor_html(app, ADMIN_DIR)
 
 
 @app.get("/api/defaults", response_model=DefaultsOut)
@@ -368,7 +376,7 @@ def get_credentials() -> CredentialsOut:
     creds = get_b2_config()
     return CredentialsOut(
         key_id=creds.get("B2_KEY_ID", ""),
-        app_key=creds.get("B2_APP_KEY", ""),
+        app_key="",
         bucket=creds.get("B2_BUCKET", ""),
         endpoint=creds.get("B2_ENDPOINT", ""),
         configured=b2_configured(),
@@ -377,10 +385,16 @@ def get_credentials() -> CredentialsOut:
 
 @app.post("/api/credentials")
 def post_credentials(body: CredentialsIn) -> dict[str, str]:
+    app_key = body.app_key.strip()
+    if not app_key:
+        previous = get_b2_config()
+        if previous.get("B2_KEY_ID") != body.key_id.strip() or not previous.get("B2_APP_KEY"):
+            raise HTTPException(status_code=400, detail="Enter the application key for this key ID.")
+        app_key = previous["B2_APP_KEY"]
     try:
         save_b2_credentials(
             body.key_id.strip(),
-            body.app_key.strip(),
+            app_key,
             body.bucket.strip(),
             body.endpoint.strip(),
         )
@@ -422,15 +436,33 @@ def post_pipeline(body: PipelineIn) -> dict[str, str]:
     if body.thumbnail_frame is not None and body.thumbnail_frame < 1:
         raise HTTPException(status_code=400, detail="Thumbnail frame must be at least 1.")
 
-    body = body.model_copy(update={"path": normalized})
+    video_id = body.video_id.strip() or secrets.token_urlsafe(9)
+    if not VIDEO_ID.fullmatch(video_id):
+        raise HTTPException(status_code=400, detail="Use letters, numbers, hyphens or underscores for the video ID.")
+    # Existing videos belong in the editor; rerunning an encode must not replace
+    # their saved details or ignored local media behind the user's back.
+    destination = app.state.video_library._path(video_id, "metadata.json").parent
+    if destination.exists():
+        raise HTTPException(status_code=409, detail="That video ID already exists. Open it in Videos to edit it.")
+    if body.visibility not in VALID_VISIBILITIES:
+        raise HTTPException(status_code=400, detail="Choose public, unlisted or private visibility.")
+    try:
+        info = probe_source(Path(normalized))
+    except Exception:
+        raise HTTPException(status_code=400, detail="Could not read the source video.") from None
+    fps = float(info.get("fps") or 0)
+    if not math.isfinite(fps) or fps != 120:
+        raise HTTPException(status_code=400, detail="Aida requires a real 120 fps source. Choose a 120 fps video.")
+
+    body = body.model_copy(update={"path": normalized, "video_id": video_id})
 
     with _job_lock:
-        if _encode_running:
-            raise HTTPException(status_code=409, detail="Pipeline is already running.")
+        if _encode_running or _maint_running or app.state.editor_saving:
+            raise HTTPException(status_code=409, detail="Wait for the current job to finish.")
         _encode_running = True
 
     _start_thread(_run_encode_job, body)
-    return {"message": "Pipeline started."}
+    return {"message": "Pipeline started.", "video_id": video_id}
 
 
 @app.post("/api/dedupe/scan")
@@ -441,7 +473,7 @@ def post_dedupe_scan(body: DedupeScanIn) -> dict[str, str]:
         raise HTTPException(status_code=400, detail="Configure B2 credentials first.")
 
     with _job_lock:
-        if _maint_running:
+        if _maint_running or _encode_running or app.state.editor_saving:
             raise HTTPException(status_code=409, detail="Maintenance job is already running.")
         _maint_running = True
 
@@ -461,7 +493,7 @@ def post_dedupe_apply(body: DedupeApplyIn) -> dict[str, str]:
         raise HTTPException(status_code=400, detail="Prefix changed — scan again before deleting.")
 
     with _job_lock:
-        if _maint_running:
+        if _maint_running or _encode_running or app.state.editor_saving:
             raise HTTPException(status_code=409, detail="Maintenance job is already running.")
         _maint_running = True
 
@@ -486,7 +518,7 @@ def post_sync_preview() -> dict[str, str]:
     global _maint_running
 
     with _job_lock:
-        if _maint_running:
+        if _maint_running or _encode_running or app.state.editor_saving:
             raise HTTPException(status_code=409, detail="Maintenance job is already running.")
         _maint_running = True
 
@@ -499,7 +531,7 @@ def post_sync_apply() -> dict[str, str]:
     global _maint_running
 
     with _job_lock:
-        if _maint_running:
+        if _maint_running or _encode_running or app.state.editor_saving:
             raise HTTPException(status_code=409, detail="Maintenance job is already running.")
         _maint_running = True
 
@@ -509,18 +541,7 @@ def post_sync_apply() -> dict[str, str]:
 
 @app.post("/api/sync/upload")
 def post_sync_upload() -> dict[str, str]:
-    global _maint_running
-
-    if not b2_configured():
-        raise HTTPException(status_code=400, detail="Configure B2 credentials first.")
-
-    with _job_lock:
-        if _maint_running:
-            raise HTTPException(status_code=409, detail="Maintenance job is already running.")
-        _maint_running = True
-
-    _start_thread(_run_sync_job, apply=True, upload=True)
-    return {"message": "Catalog sync and upload started."}
+    raise HTTPException(status_code=410, detail="Open Videos and review each video's changes before uploading.")
 
 
 @app.get("/api/sync/last")
@@ -559,7 +580,11 @@ async def events(request: Request) -> StreamingResponse:
     )
 
 
-app.mount("/static", StaticFiles(directory=ADMIN_DIR), name="static")
+@app.api_route("/static/{asset}", methods=["GET", "HEAD"])
+def admin_static(asset: str) -> FileResponse:
+    if asset not in ("admin.css", "admin.js", "editor.js"):
+        raise HTTPException(status_code=404, detail="File not found.")
+    return FileResponse(safe_file(ADMIN_DIR, asset), media_type="text/css" if asset.endswith(".css") else "text/javascript")
 
 
 if __name__ == "__main__":

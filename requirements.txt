@@ -3,3 +3,4 @@ uvicorn[standard]
 keyring
 python-dotenv
 boto3
+Pillow>=11.3
