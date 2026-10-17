@@ -84,23 +84,80 @@ async function waitMutation(page, fixture, before) {
   assert.ok(countPOST(fixture) > before, "An explicit edit action must issue a mutation");
 }
 
+function selectedURL(page, id) {
+  const url = new URL(page.url());
+  assert.equal(url.searchParams.get("video"), id, "The Studio address must match the successfully opened video");
+  assert.equal(url.searchParams.has("v"), false, "Successful selection must remove the legacy video parameter");
+  assert.equal(url.searchParams.get("keep"), "one two", "Selection must preserve unrelated query parameters");
+  assert.equal(url.hash, "#studio", "Selection must preserve the URL fragment");
+}
+
+async function rejectedSelectionsKeepURL(page, fixture) {
+  const originalURL = page.url();
+  const originalTitle = await page.locator("#edit-title").inputValue();
+  const originalPreview = await page.locator("#editor-player").getAttribute("src");
+  const failurePattern = /\/api\/videos\/studio-003\?/;
+  await page.route(failurePattern, route => route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ detail: "Fixture selection unavailable." }) }));
+  try {
+    await page.locator('.video-row[data-id="studio-003"]').click();
+    await waitText(page, "#library-status", "selection unavailable");
+    assert.equal(page.url(), originalURL, "A failed selection must leave the current video's address intact");
+    assert.equal(await page.locator("#edit-title").inputValue(), originalTitle);
+    assert.equal(await page.locator("#editor-player").getAttribute("src"), originalPreview);
+  } finally { await page.unroute(failurePattern); }
+
+  const abortPattern = /\/api\/videos\/studio-004\?/;
+  let entered, release, complete, routeError;
+  const reached = new Promise(resolveReached => { entered = resolveReached; });
+  const held = new Promise(resolveHeld => { release = resolveHeld; });
+  const completed = new Promise(resolveCompleted => { complete = resolveCompleted; });
+  await page.route(abortPattern, async route => {
+    entered();
+    await held;
+    try { await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(fixture.view("studio-004")) }); }
+    catch (error) { if (!route.request().failure()) routeError = error; }
+    finally { complete(); }
+  });
+  try {
+    await page.locator('.video-row[data-id="studio-004"]').click();
+    await reached;
+    await page.locator("#edit-title").fill("Typing cancels the pending selection");
+    release();
+    await completed;
+    if (routeError) throw routeError;
+    await waitText(page, "#library-status", "Opening cancelled");
+    await painted(page);
+    assert.equal(page.url(), originalURL, "An aborted selection must leave the current video's address intact");
+    assert.equal(await page.locator("#edit-title").inputValue(), "Typing cancels the pending selection");
+    assert.equal(await page.locator("#editor-player").getAttribute("src"), originalPreview);
+    await page.locator("#edit-title").fill(originalTitle);
+  } finally { release(); await page.unroute(abortPattern); }
+}
+
 async function workflow(page, fixture) {
-  await page.goto(fixture.origin);
+  await page.goto(`${fixture.origin}/?keep=one%20two#studio`);
   await page.locator(`.video-row[data-id="${FIRST_VIDEO}"]`).waitFor();
   assert.equal(await page.locator("#tab-videos").getAttribute("aria-selected"), "true");
   assert.equal(fixture.state.requests.some(request => request.search === "?remote=true"), false, "Initial library must not access the cloud");
+  const historyLength = await page.evaluate(() => history.length);
   await page.locator(`.video-row[data-id="${FIRST_VIDEO}"]`).click();
   await waitText(page, "#editor-location", "website");
   await samePreviewLink(page, fixture, FIRST_VIDEO);
+  selectedURL(page, FIRST_VIDEO);
+  assert.equal(await page.evaluate(() => history.length), historyLength, "Selection should update the current address without adding a history entry");
   assert.equal(await page.locator("#editor-card-visibility").textContent(), "Public · 120 fps", "A 120 fps label must reflect actual numeric metadata");
   await page.locator(`.video-row[data-id="${SECOND_VIDEO}"]`).click();
   await page.waitForFunction(() => document.querySelector("#edit-title").value === "Motion study 2");
+  selectedURL(page, SECOND_VIDEO);
   assert.equal(await page.locator("#editor-card-visibility").textContent(), "Private · 120 fps required", "Lower-frame-rate metadata must never be relabeled as 120 fps");
   await page.locator('.video-row[data-id="studio-002"]').click();
   await page.waitForFunction(() => document.querySelector("#edit-title").value === "Motion study 3");
+  selectedURL(page, "studio-002");
   assert.equal(await page.locator("#editor-card-visibility").textContent(), "Private · 120 fps required", "Missing frame-rate metadata must not claim 120 fps");
   await page.locator(`.video-row[data-id="${FIRST_VIDEO}"]`).click();
   await page.waitForFunction(() => document.querySelector("#edit-title").value === "120 fps motion study");
+  selectedURL(page, FIRST_VIDEO);
+  await rejectedSelectionsKeepURL(page, fixture);
   assert.ok(fixture.state.requests.some(request => request.path === `/api/videos/${FIRST_VIDEO}` && request.search === "?remote=true"));
   const anchors = async () => page.evaluate(() => Object.fromEntries(["#library-search", "#library-refresh"].map(selector => { const { x, width } = document.querySelector(selector).getBoundingClientRect(); return [selector, { x, width }]; })));
   const beforeSearch = await anchors();
@@ -117,10 +174,13 @@ async function workflow(page, fixture) {
   await page.locator("#edit-description").fill("Line one.\nLine two, preserved.");
   await page.locator("#edit-tags").fill("motion, 120 fps, edited");
   await page.locator('input[name="edit-visibility"][value="unlisted"]').check();
+  const draftURL = page.url();
   await page.locator(`.video-row[data-id="${SECOND_VIDEO}"]`).click();
   await page.locator("#draft-prompt").waitFor({ state: "visible" });
+  assert.equal(page.url(), draftURL, "A selection waiting for a dirty-draft decision must not change the address");
   assert.equal(await page.locator("#edit-title").inputValue(), "Edited locally at 120 fps");
   await page.locator("#draft-keep").click();
+  assert.equal(page.url(), draftURL, "Keeping the current draft must leave its address intact");
   const beforeSave = countPOST(fixture);
   await page.locator("#editor-save").click();
   await waitMutation(page, fixture, beforeSave);
@@ -207,6 +267,7 @@ async function workflow(page, fixture) {
   await page.locator(`.video-row[data-id="${SECOND_VIDEO}"]`).click();
   await page.locator("#draft-discard").click();
   await page.waitForFunction(() => document.querySelector("#edit-title").value === "Motion study 2");
+  selectedURL(page, SECOND_VIDEO);
   fixture.failNextList();
   await page.locator("#library-refresh").click();
   await waitText(page, "#library-status", "unavailable");
@@ -236,9 +297,10 @@ async function workflow(page, fixture) {
   await page.locator(`.video-row[data-id="${NEW_VIDEO}"]`).click();
   await page.locator("#draft-discard").click();
   await page.waitForFunction(() => document.querySelector("#edit-title").value === "A new private upload");
-  await page.goto(`${fixture.origin}/?video=${FIRST_VIDEO}`);
+  await page.goto(`${fixture.origin}/?video=${FIRST_VIDEO}&v=legacy-ignored&keep=one%20two#studio`);
   await page.waitForFunction(() => document.querySelector("#edit-title").value === "Saved in another local tab");
   await samePreviewLink(page, fixture, FIRST_VIDEO);
+  selectedURL(page, FIRST_VIDEO);
   assert.ok(fixture.state.requests.filter(request => request.method === "POST").every(request => request.headers.session === STUDIO_TOKEN));
 }
 

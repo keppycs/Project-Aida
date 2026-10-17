@@ -241,6 +241,10 @@
       if (generation !== studio.detailRequest) return;
       if (!detail || detail.id !== id || !detail.revision) throw new Error("Couldn't open this video. Refresh the library and try again.");
       showDetail(detail);
+      const url = new URL(location.href);
+      url.searchParams.set("video", detail.id);
+      url.searchParams.delete("v");
+      if (url.href !== location.href) history.replaceState(history.state, "", url);
       find("#draft-prompt").classList.add("hidden");
       status("#thumbnail-status", "");
       status("#library-status", "");
