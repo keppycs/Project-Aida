@@ -8,8 +8,8 @@
  *
  * Every request checks current origin metadata before releasing any asset.
  * Downstream responses deliberately use no-store: previously public browser
- * caches must not bypass the check after a video's visibility changes. This
- * initial policy trades repeat-download bandwidth for simple revocation.
+ * caches must not bypass the check after a video's visibility changes. Only
+ * immutable media chunks are cached internally, after fresh authorization.
  * Video bodies stream unchanged, including 120 fps and HTTP byte ranges.
  */
 const BUCKET = "ProjectAida";
@@ -26,8 +26,12 @@ const THUMBNAILS = new Map([
 const METADATA_LIMIT = 128_000;
 const CATALOG_LIMIT = 1_000_000;
 // Fits the free Worker's subrequest limit, including B2 authorization + index.
-const MAX_CATALOG_ENTRIES = 40;
+const CATALOG_PAGE_SIZE = 40;
 const CATALOG_CONCURRENCY = 4;
+// A short bound also limits staleness if an operator replaces a chunk without
+// publishing new metadata. Normal metadata edits invalidate it immediately.
+const MEDIA_CACHE_SECONDS = 300;
+const MAX_CACHEABLE_MEDIA_BYTES = 32 * 1024 * 1024;
 const CATALOG_FIELDS = ["title", "description", "tags", "date", "createdAt", "duration", "width", "height", "frameRate", "hdr", "codecs"];
 const INDEX_ONLY_FIELDS = new Set(["tags", "date", "hdr"]);
 
@@ -36,10 +40,19 @@ function routeRequest(request) {
   const url = new URL(raw);
   // There is no public API, version selector, download-by-id or arbitrary path.
   // Forbid encoding entirely: all packaged filenames and video IDs are ASCII.
-  if (url.username || url.password || raw.includes("?") || raw.includes("#") ||
+  if (url.username || url.password || raw.includes("#") ||
       url.pathname.includes("%") || raw.includes("\\") || !url.pathname.startsWith(ROOT)) return null;
   const path = url.pathname.slice(ROOT.length);
-  if (path === "index.json") return { url, path, catalog: true, type: "application/json; charset=utf-8" };
+  if (path === "index.json") {
+    // Only catalogue pagination is public. Reject encoded, duplicate, unknown
+    // and empty queries so they cannot become an origin version selector.
+    const query = raw.slice(raw.indexOf("?") + 1);
+    if (raw.includes("?") && !/^page=(?:0|[1-9][0-9]*)$/.test(query)) return null;
+    const page = raw.includes("?") ? Number(query.slice(5)) : 0;
+    if (!Number.isSafeInteger(page) || page > Math.floor(Number.MAX_SAFE_INTEGER / CATALOG_PAGE_SIZE)) return null;
+    return { url, path, page, catalog: true, type: "application/json; charset=utf-8" };
+  }
+  if (raw.includes("?")) return null;
   const [id, ...parts] = path.split("/");
   if (!VIDEO_ID.test(id)) return null;
   const asset = parts.join("/");
@@ -48,7 +61,7 @@ function routeRequest(request) {
   const match = /^(AV1|HEVC)\/(manifest\.mpd|master\.m3u8|media_[0-9]+\.m3u8|init_[0-9]+\.mp4|chunk_[0-9]+_[0-9]+\.fmp4)$/.exec(asset);
   if (!match) return null;
   const type = asset.endsWith(".mpd") ? "application/dash+xml" : asset.endsWith(".m3u8") ? "application/vnd.apple.mpegurl" : "video/mp4";
-  return { url, path, id, type };
+  return { url, path, id, type, cacheableMedia: /\/(?:init_[0-9]+\.mp4|chunk_[0-9]+_[0-9]+\.fmp4)$/.test(asset) };
 }
 
 function publicHeaders(extra = {}) {
@@ -56,7 +69,7 @@ function publicHeaders(extra = {}) {
     "Access-Control-Allow-Origin": "*",
     "Access-Control-Allow-Methods": "GET, HEAD, OPTIONS",
     "Access-Control-Allow-Headers": "Range",
-    "Access-Control-Expose-Headers": "Content-Length, Content-Range, Accept-Ranges",
+    "Access-Control-Expose-Headers": "Content-Length, Content-Range, Accept-Ranges, Link",
     "Cache-Control": "no-store",
     "CDN-Cache-Control": "no-store",
     "Cloudflare-CDN-Cache-Control": "no-store",
@@ -72,13 +85,13 @@ function reply(status, message, request, extra = {}) {
   });
 }
 
-function jsonReply(value, request) {
+function jsonReply(value, request, extra = {}) {
   return new Response(request.method === "HEAD" ? null : JSON.stringify(value), {
-    headers: publicHeaders({ "Content-Type": "application/json; charset=utf-8" }),
+    headers: publicHeaders({ "Content-Type": "application/json; charset=utf-8", ...extra }),
   });
 }
 
-async function boundedJson(response, limit) {
+async function boundedJson(response, limit, includeText = false) {
   if (Number(response.headers.get("Content-Length")) > limit) {
     await response.body?.cancel();
     throw new Error("Origin JSON too large");
@@ -91,7 +104,11 @@ async function boundedJson(response, limit) {
   try {
     for (;;) {
       const { value, done } = await reader.read();
-      if (done) return JSON.parse(text + decoder.decode());
+      if (done) {
+        const raw = text + decoder.decode();
+        const value = JSON.parse(raw);
+        return includeText ? { value, raw } : value;
+      }
       size += value.byteLength;
       if (size > limit) throw new Error("Origin JSON too large");
       text += decoder.decode(value, { stream: true });
@@ -114,7 +131,6 @@ function metadataVisibility(meta, id, env) {
   let legacy;
   try { legacy = JSON.parse(env.LEGACY_VISIBILITY); } catch { return null; }
   if (!legacy || typeof legacy !== "object" || Array.isArray(legacy) ||
-      Object.keys(legacy).length > MAX_CATALOG_ENTRIES ||
       Object.entries(legacy).some(([key, value]) => !VIDEO_ID.test(key) || !["public", "unlisted"].includes(value)) ||
       !Object.hasOwn(legacy, id)) return null;
   const visibility = legacy[id];
@@ -122,7 +138,7 @@ function metadataVisibility(meta, id, env) {
 }
 
 /** Inject fetch/clock/timeouts for deterministic, credential-free unit tests. */
-export function createHandler({ fetcher = globalThis.fetch, now = Date.now, timeoutMs = 10_000 } = {}) {
+export function createHandler({ fetcher = globalThis.fetch, now = Date.now, timeoutMs = 10_000, cache } = {}) {
   let tokenCache = null;
   let pendingAuth = null;
 
@@ -194,13 +210,16 @@ export function createHandler({ fetcher = globalThis.fetch, now = Date.now, time
         if (response.status === 404) return null;
         throw new Error("Origin metadata unavailable");
       }
-      const meta = await boundedJson(response, METADATA_LIMIT);
+      const parsed = await boundedJson(response, METADATA_LIMIT, true);
+      const meta = parsed.value;
       const visibility = metadataVisibility(meta, id, env);
-      return visibility ? { meta, visibility } : null;
+      return visibility ? { meta, visibility, revisionSource: JSON.stringify([
+        parsed.raw, response.headers.get("ETag"), response.headers.get("Last-Modified"),
+      ]) } : null;
     } });
   }
 
-  async function catalog(env) {
+  async function catalog(env, page) {
     const entries = await originRequest("index.json", env, { consume: async response => {
       if (response.status !== 200) {
         await response.body?.cancel();
@@ -208,12 +227,13 @@ export function createHandler({ fetcher = globalThis.fetch, now = Date.now, time
       }
       return boundedJson(response, CATALOG_LIMIT);
     } });
-    if (!Array.isArray(entries) || entries.length > MAX_CATALOG_ENTRIES) throw new Error("Invalid catalogue");
+    if (!Array.isArray(entries)) throw new Error("Invalid catalogue");
     const indexed = new Map();
     for (const entry of entries) {
       if (entry && typeof entry === "object" && typeof entry.id === "string" && VIDEO_ID.test(entry.id) && !indexed.has(entry.id)) indexed.set(entry.id, entry);
     }
-    const ids = [...indexed.keys()];
+    const allIds = [...indexed.keys()];
+    const ids = allIds.slice(page * CATALOG_PAGE_SIZE, (page + 1) * CATALOG_PAGE_SIZE);
     const results = new Array(ids.length);
     let next = 0;
     await Promise.all(Array.from({ length: Math.min(CATALOG_CONCURRENCY, ids.length) }, async () => {
@@ -236,10 +256,19 @@ export function createHandler({ fetcher = globalThis.fetch, now = Date.now, time
         results[index] = entry;
       }
     }));
-    return results.filter(Boolean);
+    return { entries: results.filter(Boolean), hasNext: (page + 1) * CATALOG_PAGE_SIZE < allIds.length };
   }
 
-  return async function handleRequest(request, env = {}) {
+  async function mediaCacheRequest(route, checked, range) {
+    const bytes = new TextEncoder().encode(checked.revisionSource);
+    const hash = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
+    const revision = [...hash].map(value => value.toString(16).padStart(2, "0")).join("");
+    const key = new URL(route.url);
+    key.search = `aida-media-revision=${revision}`;
+    return new Request(key, { headers: range ? { Range: range } : undefined });
+  }
+
+  return async function handleRequest(request, env = {}, ctx) {
     try {
       const route = routeRequest(request);
       if (!route) return reply(404, "Not found", request);
@@ -250,7 +279,16 @@ export function createHandler({ fetcher = globalThis.fetch, now = Date.now, time
       }
       if (route.url.protocol !== "https:") return reply(404, "Not found", request);
       if (request.method === "OPTIONS") return reply(204, "", request);
-      if (route.catalog) return jsonReply(await catalog(env), request);
+      if (route.catalog) {
+        const result = await catalog(env, route.page);
+        const headers = {};
+        if (result.hasNext) {
+          const next = new URL(route.url);
+          next.search = `page=${route.page + 1}`;
+          headers.Link = `<${next.href}>; rel="next"`;
+        }
+        return jsonReply(result.entries, request, headers);
+      }
 
       const checked = await readMetadata(route.id, env);
       if (!checked || !["public", "unlisted"].includes(checked.visibility)) return reply(404, "Not found", request);
@@ -258,7 +296,20 @@ export function createHandler({ fetcher = globalThis.fetch, now = Date.now, time
 
       const range = request.headers.get("Range");
       if (range && (range.length > 100 || !/^bytes=(?:[0-9]+-[0-9]*|-[0-9]+)$/.test(range))) return reply(416, "Invalid range", request);
-      const upstream = await originRequest(route.path, env, { method: request.method, range });
+      // This lookup deliberately comes after a fresh origin metadata read on
+      // every request, including HEAD and Range. A cached chunk is never an
+      // authorization decision. Metadata changes also select a different key.
+      const mediaCache = route.cacheableMedia ? (cache ?? globalThis.caches?.default) : null;
+      let cacheRequest;
+      let upstream;
+      if (mediaCache) {
+        try {
+          cacheRequest = await mediaCacheRequest(route, checked, range);
+          upstream = await mediaCache.match(cacheRequest);
+        } catch { /* Cache outages must not interrupt authorized playback. */ }
+      }
+      const cacheHit = Boolean(upstream);
+      if (!upstream) upstream = await originRequest(route.path, env, { method: request.method, range });
       const encoding = upstream.headers.get("Content-Encoding");
       if (![200, 206, 416].includes(upstream.status) || (encoding && encoding.toLowerCase() !== "identity")) {
         await upstream.body?.cancel();
@@ -268,6 +319,30 @@ export function createHandler({ fetcher = globalThis.fetch, now = Date.now, time
       for (const name of ["Content-Length", "Content-Range", "Accept-Ranges"]) {
         const value = upstream.headers.get(name);
         if (value !== null) headers.set(name, value);
+      }
+      // Store only full GET media responses, with a known byte length for
+      // Cloudflare's native byte-range support. Browser/outer CDN responses
+      // keep no-store; the internal cache cannot bypass this Worker.
+      const contentLength = upstream.headers.get("Content-Length");
+      if (!cacheHit && cacheRequest && request.method === "GET" && !range && upstream.status === 200 &&
+          !upstream.headers.has("Content-Range") && /^[0-9]+$/.test(contentLength ?? "") &&
+          Number(contentLength) <= MAX_CACHEABLE_MEDIA_BYTES && typeof ctx?.waitUntil === "function") {
+        try {
+          const cachedHeaders = new Headers({
+            "Content-Type": route.type,
+            "Content-Length": upstream.headers.get("Content-Length"),
+            "Cache-Control": `public, max-age=${MEDIA_CACHE_SECONDS}`,
+            "Accept-Ranges": "bytes",
+          });
+          const cached = new Response(upstream.clone().body, { headers: cachedHeaders });
+          // All cache failures are absorbed; origin authorization and streaming
+          // remain sufficient even when a POP cannot store an object.
+          const storing = (async () => {
+            try { await mediaCache.put(cacheRequest, cached); }
+            catch { cached.body?.cancel().catch(() => {}); }
+          })();
+          ctx.waitUntil(storing);
+        } catch { /* Ignore clone/cache failures without denying the response. */ }
       }
       if (request.method === "HEAD" || upstream.status === 416) {
         await upstream.body?.cancel();

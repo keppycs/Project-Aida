@@ -26,22 +26,40 @@ export function watchUrl(videoId, { local = defaultLocal() } = {}) {
 }
 
 export async function fetchCatalog({ local = defaultLocal() } = {}) {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 15000);
-  try {
-    const response = await fetch(local ? "./local/index.json" : `${CDN_BASE}/index.json`, {
-      signal: controller.signal,
-      cache: "no-cache",
-    });
-    if (!response.ok) throw new Error(`Catalogue request failed (${response.status})`);
-    const data = await response.json();
-    if (!Array.isArray(data)) throw new Error("Invalid catalogue response");
-    return data
-      .filter((video) => video && typeof video.id === "string" && video.id.length && isPublicVideo(video))
-      .sort((a, b) => (Number(b.createdAt) || 0) - (Number(a.createdAt) || 0));
-  } finally {
-    clearTimeout(timeout);
+  const first = local ? "./local/index.json" : `${CDN_BASE}/index.json`;
+  let page = first;
+  let pageNumber = 0;
+  const videos = new Map();
+  while (page) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 15000);
+    try {
+      const response = await fetch(page, { signal: controller.signal, cache: "no-store" });
+      if (!response.ok) throw new Error(`Catalogue request failed (${response.status})`);
+      const data = await response.json();
+      if (!Array.isArray(data)) throw new Error("Invalid catalogue response");
+      for (const video of data) {
+        if (video && typeof video.id === "string" && video.id.length) videos.set(video.id, video);
+      }
+      const links = (response.headers.get("Link") || "").split(",").filter(link => /;\s*rel="?next"?\s*$/i.test(link));
+      if (!links.length) break;
+      if (local || links.length !== 1 || pageNumber >= 9999) throw new Error("Invalid catalogue pagination");
+      const match = /^\s*<([^>]+)>;\s*rel="?next"?\s*$/i.exec(links[0]);
+      if (!match) throw new Error("Invalid catalogue pagination");
+      const initial = new URL(first);
+      const next = new URL(match[1], page);
+      const number = next.searchParams.get("page");
+      if (next.origin !== initial.origin || next.pathname !== initial.pathname || next.username || next.password || next.hash ||
+          [...next.searchParams].length !== 1 || !/^(0|[1-9][0-9]{0,14})$/.test(number || "") ||
+          Number(number) !== pageNumber + 1) throw new Error("Invalid catalogue pagination");
+      page = next.href;
+      pageNumber++;
+    } finally {
+      clearTimeout(timeout);
+    }
   }
+  return [...videos.values()].filter(isPublicVideo)
+    .sort((a, b) => (Number(b.createdAt) || 0) - (Number(a.createdAt) || 0));
 }
 
 export function formatDate(timestamp) {
