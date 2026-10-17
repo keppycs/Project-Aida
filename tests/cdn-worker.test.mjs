@@ -1,0 +1,341 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import worker, { createHandler } from "../edge/cdn-worker.mjs";
+
+const cdn = "https://cdn.keppy.dev";
+const prefix = "/file/ProjectAida/";
+const origin = "https://f003.backblazeb2.com";
+const authorize = "https://api.backblazeb2.com/b2api/v2/b2_authorize_account";
+const id = "test-video_120";
+const env = { B2_KEY_ID: "test-key", B2_SECRET_KEY: "test-secret" };
+const meta = { id, title: "Current title", description: "Current description", visibility: "public", frameRate: 120, duration: 3, codecs: ["AV1", "HEVC"] };
+const assets = ["metadata.json", "thumbnail_hdr.avif", "thumbnail_hdr_720p.avif", "thumbnail_sdr.webp", "thumbnail_sdr_720p.webp", "thumbnail_share.jpg", "AV1/manifest.mpd", "AV1/master.m3u8", "AV1/media_0.m3u8", "AV1/init_0.mp4", "AV1/chunk_0_1.fmp4", "HEVC/manifest.mpd", "HEVC/master.m3u8", "HEVC/media_8.m3u8", "HEVC/init_8.mp4", "HEVC/chunk_8_1.fmp4"];
+
+function request(path = `${id}/metadata.json`, options) {
+  return new Request(`${cdn}${prefix}${path}`, options);
+}
+
+function fixture({ metadata = meta, rawMetadata, metadataStatus = 200, index = [{ id, title: "STALE_TITLE", description: "STALE_DESCRIPTION" }], authorization, authStatus = 200, authThrows = false, assetStatus = 200, assetBody = () => "media bytes", assetHeaders = {}, onFetch, timeoutMs } = {}) {
+  const calls = [];
+  const fetcher = async (input, init = {}) => {
+    const url = String(input);
+    const call = { url, init, method: init.method || "GET", headers: new Headers(init.headers) };
+    calls.push(call);
+    const override = await onFetch?.(call, calls);
+    if (override) return override;
+    if (url === authorize) {
+      if (authThrows) throw new Error("SECRET_UPSTREAM_DETAILS");
+      return Response.json(authorization ?? { downloadUrl: origin, authorizationToken: "origin-read-token", allowed: { bucketName: "ProjectAida", capabilities: ["readFiles"] } }, { status: authStatus });
+    }
+    assert.ok(url.startsWith(`${origin}${prefix}`), `Only fixed B2 bucket: ${url}`);
+    if (url.endsWith("/index.json")) return Response.json(index);
+    if (url.endsWith("/metadata.json")) {
+      const value = typeof metadata === "function" ? metadata(url) : metadata;
+      return new Response(rawMetadata ?? JSON.stringify(value), { status: metadataStatus });
+    }
+    return new Response(call.method === "HEAD" ? null : assetBody(), { status: assetStatus, headers: {
+      "Content-Type": "application/octet-stream", "Cache-Control": "public, max-age=31536000", "X-Bz-File-Name": "PRIVATE_ORIGIN_DETAILS", "Set-Cookie": "PRIVATE_COOKIE", ...assetHeaders,
+    } });
+  };
+  return { calls, handle: createHandler({ fetcher, timeoutMs }) };
+}
+
+test("module exports an ES-module Worker", () => {
+  assert.equal(typeof worker.fetch, "function");
+});
+
+for (const visibility of ["private", "invalid", null, false]) {
+  test(`${String(visibility)} visibility blocks every packaged asset and HEAD`, async () => {
+    const { calls, handle } = fixture({ metadata: { ...meta, visibility, title: "PRIVATE_TITLE", description: "PRIVATE_DESCRIPTION" } });
+    for (const asset of assets) {
+      for (const method of ["GET", "HEAD"]) {
+        const response = await handle(request(`${id}/${asset}`, { method }), env);
+        assert.equal(response.status, 404, `${method} ${asset}`);
+        assert.equal(response.headers.get("Cache-Control"), "no-store");
+        assert.doesNotMatch(await response.text(), /PRIVATE_|origin-read-token|test-secret/);
+      }
+    }
+    assert.ok(calls.filter(call => call.url !== authorize).every(call => call.url.endsWith("/metadata.json")));
+  });
+}
+
+for (const visibility of ["public", "unlisted"]) {
+  test(`${visibility} allows all packaged paths without leaking origin headers`, async () => {
+    const { handle } = fixture({ metadata: { ...meta, visibility } });
+    for (const asset of assets) {
+      const response = await handle(request(`${id}/${asset}`), env);
+      assert.equal(response.status, 200, asset);
+      assert.equal(response.headers.get("Cache-Control"), "no-store");
+      assert.equal(response.headers.get("CDN-Cache-Control"), "no-store");
+      assert.equal(response.headers.get("Cloudflare-CDN-Cache-Control"), "no-store");
+      assert.equal(response.headers.get("Access-Control-Allow-Origin"), "*");
+      assert.equal(response.headers.get("Set-Cookie"), null);
+      assert.equal(response.headers.get("X-Bz-File-Name"), null);
+    }
+  });
+}
+
+test("legacy metadata stays playable, including historical folder/id mismatch", async () => {
+  const { visibility, ...legacy } = meta;
+  const { handle } = fixture({ metadata: { ...legacy, id: "id2" } });
+  const response = await handle(request("legacy-folder/metadata.json"), { ...env, LEGACY_VISIBILITY: JSON.stringify({ "legacy-folder": "public" }) });
+  assert.equal(response.status, 200);
+  const data = await response.json();
+  assert.equal(data.id, "id2");
+  assert.equal(data.visibility, "public");
+});
+
+test("legacy unlisted is playable but never listed", async () => {
+  const { visibility, ...legacy } = meta;
+  const { handle } = fixture({ metadata: { ...legacy, unlisted: true } });
+  const legacyEnv = { ...env, LEGACY_VISIBILITY: JSON.stringify({ [id]: "unlisted" }) };
+  assert.equal((await handle(request(`${id}/AV1/chunk_0_1.fmp4`), legacyEnv)).status, 200);
+  assert.deepEqual(await (await handle(request("index.json"), legacyEnv)).json(), []);
+});
+
+test("unknown legacy uploads and invalid compatibility maps fail closed", async () => {
+  const { visibility, ...legacy } = meta;
+  for (const LEGACY_VISIBILITY of [undefined, "{}", "broken", "[]", "null", JSON.stringify({ [id]: "private" }), JSON.stringify({ [id]: "public", "../invalid": "public" }), JSON.stringify({ unknown: "public" })]) {
+    const { handle } = fixture({ metadata: legacy });
+    assert.equal((await handle(request(`${id}/AV1/init_0.mp4`), { ...env, LEGACY_VISIBILITY })).status, 404);
+  }
+});
+
+test("legacy compatibility never overrides explicit visibility or malformed metadata", async () => {
+  const legacyEnv = { ...env, LEGACY_VISIBILITY: JSON.stringify({ [id]: "public" }) };
+  for (const metadata of [{ ...meta, visibility: "private" }, { ...meta, visibility: null }, { ...meta, visibility: "invalid" }, { id, title: "Legacy unlisted", unlisted: true }]) {
+    const { handle } = fixture({ metadata });
+    assert.equal((await handle(request(`${id}/AV1/init_0.mp4`), legacyEnv)).status, 404);
+  }
+});
+
+for (const metadata of [null, [], {}, { title: "Missing ID" }, { id, title: null }, { ...meta, id: "../secret" }, { id, title: "Legacy", unlisted: "false" }]) {
+  test(`malformed metadata fails closed: ${JSON.stringify(metadata)}`, async () => {
+    const { calls, handle } = fixture({ metadata });
+    const response = await handle(request(`${id}/thumbnail_share.jpg`), env);
+    assert.equal(response.status, 404);
+    assert.equal(calls.filter(call => call.url.endsWith(".jpg")).length, 0);
+  });
+}
+
+test("malformed JSON, oversized declared/chunked metadata, and missing metadata never release assets", async () => {
+  for (const options of [{ rawMetadata: "bad json" }, { rawMetadata: " ".repeat(128_001) }, { metadataStatus: 404 }, { metadataStatus: 500 }, { onFetch: call => call.url.endsWith("/metadata.json") ? new Response("{}", { headers: { "Content-Length": "128001" } }) : null }]) {
+    const { calls, handle } = fixture(options);
+    const response = await handle(request(`${id}/AV1/init_0.mp4`), env);
+    assert.ok([404, 503].includes(response.status));
+    assert.equal(calls.filter(call => call.url.endsWith(".mp4")).length, 0);
+  }
+});
+
+test("rejects arbitrary B2 APIs, other buckets, unexpected files and all query parameters before authorization", async () => {
+  const { calls, handle } = fixture();
+  for (const path of [
+    "/", "/b2api/v2/b2_download_file_by_id?fileId=secret", "/file/OtherBucket/index.json", "/file/ProjectAida/", "/file/ProjectAida/.env", "/file/ProjectAida/%2e%2e/secret", "/file/ProjectAida/test%2fsecret/metadata.json", "/file/ProjectAida/test%252fsecret/metadata.json",
+    `${prefix}${id}/metadata.json?version=old`, `${prefix}${id}/metadata.json?fileId=old`, `${prefix}${id}/metadata.json?Authorization=secret`, `${prefix}${id}/metadata.json?`,
+    `${prefix}${id}/source.mp4`, `${prefix}${id}/log.txt`, `${prefix}${id}/extra/metadata.json`, `${prefix}${id}/AV1/metadata.json`, `${prefix}${id}/VP9/master.m3u8`, `${prefix}${id}/AV1/chunk_x_1.fmp4`, `${prefix}${id}/AV1/other.mp4`,
+  ]) {
+    assert.equal((await handle(new Request(`${cdn}${path}`), env)).status, 404, path);
+  }
+  assert.equal(calls.length, 0);
+});
+
+test("only read methods and simple Range CORS preflights are supported", async () => {
+  const { calls, handle } = fixture();
+  const response = await handle(request(undefined, { method: "POST", body: "PRIVATE_UPLOAD" }), env);
+  assert.equal(response.status, 405);
+  assert.equal(response.headers.get("Allow"), "GET, HEAD, OPTIONS");
+  const preflight = await handle(request(undefined, { method: "OPTIONS", headers: { Origin: "https://keppy.dev", "Access-Control-Request-Method": "GET", "Access-Control-Request-Headers": "range" } }), env);
+  assert.equal(preflight.status, 204);
+  assert.equal(preflight.headers.get("Access-Control-Allow-Headers"), "Range");
+  assert.equal(preflight.headers.get("Access-Control-Allow-Credentials"), null);
+  assert.equal(calls.length, 0);
+});
+
+test("HTTP redirects to HTTPS before origin access", async () => {
+  const { calls, handle } = fixture();
+  const response = await handle(new Request(`http://cdn.keppy.dev${prefix}${id}/metadata.json`), env);
+  assert.equal(response.status, 308);
+  assert.equal(response.headers.get("Location"), `${cdn}${prefix}${id}/metadata.json`);
+  assert.equal(calls.length, 0);
+});
+
+test("visitor credentials and cache/conditional headers never reach origin", async () => {
+  const { calls, handle } = fixture();
+  await handle(request(`${id}/AV1/chunk_0_1.fmp4`, { headers: {
+    Authorization: "Bearer VISITOR_SECRET", Cookie: "private=VISITOR_COOKIE", "X-Forwarded-Host": "evil.example", "If-None-Match": "*", "If-Modified-Since": "Wed, 01 Jan 2020 00:00:00 GMT", "Cache-Control": "only-if-cached", Range: "bytes=0-99",
+  } }), env);
+  for (const call of calls) {
+    assert.equal(call.init.redirect, "manual");
+    assert.equal(call.init.cache, "no-store");
+    assert.equal(call.init.cf?.cacheTtl, undefined, "Cloudflare rejects cf TTL overrides combined with cache:no-store");
+    assert.doesNotMatch(JSON.stringify([...call.headers]), /VISITOR_|evil\.example|only-if-cached/);
+    assert.equal(call.headers.get("Cookie"), null);
+    assert.equal(call.headers.get("If-None-Match"), null);
+    assert.equal(call.headers.get("If-Modified-Since"), null);
+    if (call.url !== authorize) {
+      assert.equal(call.headers.get("Authorization"), "origin-read-token");
+      assert.equal(call.headers.get("Accept-Encoding"), "identity");
+    }
+  }
+  assert.equal(calls.find(call => call.url.endsWith("/metadata.json")).headers.get("Range"), null);
+  assert.equal(calls.at(-1).headers.get("Range"), "bytes=0-99");
+});
+
+test("range responses preserve exact streaming bytes and transport headers", async () => {
+  let released = false;
+  let release;
+  const waiting = new Promise(resolve => { release = resolve; });
+  const bytes = new Uint8Array([0, 255, 4, 120]);
+  const { handle } = fixture({ assetStatus: 206, assetHeaders: { "Content-Range": "bytes 4-7/100", "Content-Length": "4", "Accept-Ranges": "bytes" }, assetBody: () => new ReadableStream({ async start(controller) { await waiting; released = true; controller.enqueue(bytes); controller.close(); } }) });
+  const response = await handle(request(`${id}/AV1/chunk_0_1.fmp4`, { headers: { Range: "bytes=4-7" } }), env);
+  assert.equal(released, false, "response returns before any video bytes are available");
+  assert.equal(response.status, 206);
+  assert.equal(response.headers.get("Content-Range"), "bytes 4-7/100");
+  assert.equal(response.headers.get("Content-Length"), "4");
+  assert.equal(response.headers.get("Accept-Ranges"), "bytes");
+  assert.equal(response.headers.get("Content-Type"), "video/mp4");
+  release();
+  assert.deepEqual(new Uint8Array(await response.arrayBuffer()), bytes);
+});
+
+test("HEAD still checks visibility and forwards HEAD with range headers and no body", async () => {
+  const { calls, handle } = fixture({ assetStatus: 206, assetHeaders: { "Content-Range": "bytes 0-9/100", "Content-Length": "10", "Accept-Ranges": "bytes" } });
+  const response = await handle(request(`${id}/HEVC/init_8.mp4`, { method: "HEAD", headers: { Range: "bytes=0-9" } }), env);
+  assert.equal(response.status, 206);
+  assert.equal(response.headers.get("Content-Length"), "10");
+  assert.equal(await response.text(), "");
+  assert.equal(calls.find(call => call.url.endsWith("/metadata.json")).method, "GET");
+  assert.equal(calls.at(-1).method, "HEAD");
+});
+
+test("invalid ranges fail without origin media requests; origin 416 retains total length", async () => {
+  const { calls, handle } = fixture();
+  for (const range of ["bytes=0-1,3-4", "items=0-1", "bytes=-", "bytes=anything", `bytes=${"1".repeat(101)}-`]) {
+    assert.equal((await handle(request(`${id}/AV1/init_0.mp4`, { headers: { Range: range } }), env)).status, 416);
+  }
+  assert.equal(calls.filter(call => call.url.endsWith(".mp4")).length, 0);
+  const originRange = fixture({ assetStatus: 416, assetHeaders: { "Content-Range": "bytes */100" } });
+  const response = await originRange.handle(request(`${id}/AV1/init_0.mp4`, { headers: { Range: "bytes=100-" } }), env);
+  assert.equal(response.status, 416);
+  assert.equal(response.headers.get("Content-Range"), "bytes */100");
+  assert.equal(await response.text(), "");
+});
+
+test("a previously public asset immediately becomes inaccessible when origin metadata changes", async () => {
+  let current = "public";
+  const { calls, handle } = fixture({ metadata: () => ({ ...meta, visibility: current }) });
+  assert.equal((await handle(request(`${id}/AV1/chunk_0_1.fmp4`), env)).status, 200);
+  current = "private";
+  assert.equal((await handle(request(`${id}/AV1/chunk_0_1.fmp4`), env)).status, 404);
+  assert.equal(calls.filter(call => call.url.endsWith("/metadata.json")).length, 2);
+  assert.equal(calls.filter(call => call.url.endsWith(".fmp4")).length, 1);
+});
+
+test("catalogue freshly gates public videos and replaces stale title/description, preserving folder IDs", async () => {
+  const index = ["public", "private", "unlisted", "legacy", "removed", "bad", "public"].map(value => ({ id: value, title: "STALE_SECRET", description: "STALE_SECRET" }));
+  index.push({ id: "../other", title: "INVALID" });
+  const { calls, handle } = fixture({ index, metadata: url => {
+    const folder = url.split("/").at(-2);
+    if (folder === "removed") return null;
+    if (folder === "bad") return { ...meta, visibility: "unexpected" };
+    if (folder === "legacy") return { id: "id2", title: "Updated legacy", frameRate: 120 };
+    return { ...meta, visibility: folder };
+  } });
+  const response = await handle(request("index.json"), { ...env, LEGACY_VISIBILITY: JSON.stringify({ legacy: "public" }) });
+  assert.equal(response.status, 200);
+  const entries = await response.json();
+  assert.deepEqual(entries.map(entry => entry.id), ["public", "legacy"]);
+  assert.equal(entries[0].title, "Current title");
+  assert.equal(entries[0].description, "Current description");
+  assert.equal(entries[1].title, "Updated legacy");
+  assert.equal(Object.hasOwn(entries[1], "description"), false);
+  assert.doesNotMatch(JSON.stringify(entries), /STALE_SECRET|INVALID|"private"|"unlisted"/);
+  assert.equal(calls.filter(call => call.url.endsWith("public/metadata.json")).length, 1);
+});
+
+test("malformed or excessive catalogue fails closed before metadata fanout", async () => {
+  for (const index of [{ invalid: true }, Array.from({ length: 41 }, (_, number) => ({ id: `video-${number}` }))]) {
+    const { calls, handle } = fixture({ index });
+    assert.equal((await handle(request("index.json"), env)).status, 503);
+    assert.equal(calls.filter(call => call.url.endsWith("/metadata.json")).length, 0);
+  }
+});
+
+test("catalogue preserves real uploader index-only tags, HDR and date after fresh authorization", async () => {
+  const index = [{ id, title: "STALE_TITLE", description: "REMOVED_DESCRIPTION", tags: ["120fps", "HDR"], hdr: true, date: "17-10-2026" }];
+  const { description, ...metadata } = meta;
+  const { handle } = fixture({ index, metadata: { ...metadata, colorTransfer: "smpte2084" } });
+  const response = await handle(request("index.json"), env);
+  const entries = await response.json();
+  assert.equal(entries[0].title, "Current title");
+  assert.equal(Object.hasOwn(entries[0], "description"), false);
+  assert.deepEqual(entries[0].tags, ["120fps", "HDR"]);
+  assert.equal(entries[0].hdr, true);
+  assert.equal(entries[0].date, "17-10-2026");
+});
+
+test("catalogue metadata fanout is limited to four concurrent requests", async () => {
+  let inFlight = 0;
+  let maximum = 0;
+  const { handle } = fixture({ index: Array.from({ length: 8 }, (_, number) => ({ id: `video-${number}` })), onFetch: async call => {
+    if (!call.url.endsWith("/metadata.json")) return;
+    maximum = Math.max(maximum, ++inFlight);
+    await new Promise(resolve => setTimeout(resolve, 2));
+    inFlight--;
+  } });
+  assert.equal((await handle(request("index.json"), env)).status, 200);
+  assert.equal(maximum, 4);
+});
+
+test("B2 failures, redirects and hostile download origins fail without leaking details", async () => {
+  for (const options of [
+    { authThrows: true }, { authStatus: 401 }, { authStatus: 302 },
+    { authorization: { downloadUrl: "http://f003.backblazeb2.com", authorizationToken: "SECRET" } },
+    { authorization: { downloadUrl: "https://evil.example", authorizationToken: "SECRET" } },
+    { authorization: { downloadUrl: "https://f003.backblazeb2.com.evil.example", authorizationToken: "SECRET" } },
+    { authorization: { downloadUrl: `${origin}/arbitrary/path`, authorizationToken: "SECRET" } },
+    { authorization: { downloadUrl: origin, authorizationToken: "SECRET", allowed: { bucketName: "OtherBucket" } } },
+    { authorization: { downloadUrl: origin, authorizationToken: "SECRET", allowed: { capabilities: ["writeFiles"] } } },
+    { authorization: { downloadUrl: origin, authorizationToken: "SECRET", allowed: { capabilities: "readFiles" } } },
+    { authorization: { downloadUrl: origin, authorizationToken: "SECRET", allowed: ["readFiles"] } },
+    { assetStatus: 302 }, { assetStatus: 500 }, { assetHeaders: { "Content-Encoding": "gzip" } },
+  ]) {
+    const { handle } = fixture(options);
+    const response = await handle(request(`${id}/thumbnail_share.jpg`), env);
+    assert.equal(response.status, 503);
+    assert.equal(await response.text(), "Temporarily unavailable");
+  }
+});
+
+test("missing secret bindings produce no upstream request", async () => {
+  const { calls, handle } = fixture();
+  assert.equal((await handle(request(), {})).status, 503);
+  assert.equal(calls.length, 0);
+});
+
+test("expired B2 token refreshes once, while repeated denial fails closed", async () => {
+  let denials = 0;
+  const one = fixture({ onFetch: call => call.url.endsWith("/metadata.json") && denials++ === 0 ? new Response("SECRET_B2_ERROR", { status: 401 }) : null });
+  assert.equal((await one.handle(request(), env)).status, 200);
+  assert.equal(one.calls.filter(call => call.url === authorize).length, 2);
+  const repeated = fixture({ onFetch: call => call.url.endsWith("/metadata.json") ? new Response("SECRET_B2_ERROR", { status: 403 }) : null });
+  const response = await repeated.handle(request(), env);
+  assert.equal(response.status, 503);
+  assert.equal(await response.text(), "Temporarily unavailable");
+  assert.equal(repeated.calls.filter(call => call.url === authorize).length, 2);
+});
+
+test("authorization is shared across concurrent requests and isolated after secret rotation", async () => {
+  const { calls, handle } = fixture();
+  await Promise.all([handle(request(), env), handle(request(), env)]);
+  assert.equal(calls.filter(call => call.url === authorize).length, 1);
+  await handle(request(), { ...env, B2_SECRET_KEY: "rotated-test-secret" });
+  assert.equal(calls.filter(call => call.url === authorize).length, 2);
+  assert.equal(calls.findLast(call => call.url === authorize).headers.get("Authorization"), `Basic ${btoa("test-key:rotated-test-secret")}`);
+});
+
+test("stalled metadata body is aborted within the authorization timeout", async () => {
+  const { handle } = fixture({ timeoutMs: 20, onFetch: call => call.url.endsWith("/metadata.json") ? new Response(new ReadableStream({ start(controller) { call.init.signal.addEventListener("abort", () => controller.error(new Error("stalled")), { once: true }); } })) : null });
+  const response = await handle(request(`${id}/AV1/chunk_0_1.fmp4`), env);
+  assert.equal(response.status, 503);
+});

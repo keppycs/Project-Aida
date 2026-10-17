@@ -127,7 +127,7 @@ The static site is published from `web/` by [the Pages workflow](.github/workflo
 
 GitHub Pages cannot generate different HTML for different `?v=` values. This feature therefore needs a **Cloudflare Worker Route in front of the existing site**, rather than just adding JavaScript meta tags. The website and video storage can stay where they are. Only the watch, embed, oEmbed and preview-image paths use the Worker; the CDN is unaffected. See [Cloudflare's route documentation](https://developers.cloudflare.com/workers/configuration/routing/routes/) and the [Open Graph specification](https://ogp.me/).
 
-The Worker reads each video's `metadata.json` from the existing CDN. Public and unlisted videos get previews; private, missing and invalid metadata never supply a video's title, playback summary or image. Watch/embed summary lookups read only the declared codecs' bounded DASH manifests, alongside thumbnail discovery; image and oEmbed requests do not fetch manifests. It revalidates metadata and sends `Cache-Control: no-store`. Receiving apps can still retain their own previously cached cards. These preview checks do not add authentication to the public storage bucket.
+The Worker reads each video's `metadata.json` from the existing CDN. Public and unlisted videos get previews; private, missing and invalid metadata never supply a video's title, playback summary or image. Watch/embed summary lookups read only the declared codecs' bounded DASH manifests, alongside thumbnail discovery; image and oEmbed requests do not fetch manifests. It revalidates metadata and sends `Cache-Control: no-store`. Receiving apps can still retain their own previously cached cards. These preview checks alone do not protect direct media URLs; the separate CDN Worker below enforces video visibility against the private B2 origin.
 
 New thumbnail runs also create **`thumbnail_share.jpg`**, an SDR still bounded by 1280×720 with its aspect ratio preserved. Uploads now set the correct image MIME types. The Worker prefers this JPEG, then tries existing SDR WebP thumbnails for older uploads. It serves the chosen image through `/preview-image?v=VIDEO_ID` with the correct MIME type, including when an older B2 object was uploaded as `application/octet-stream`. This image route also checks visibility. If all thumbnails are missing, the card still has text. Existing AVIF/WebP website thumbnails keep their current behavior.
 
@@ -200,6 +200,24 @@ These checks use fixture metadata, fake HTTP responses and mocked FFmpeg. They d
 - Vanilla JS frontend
 
 ---
+
+### Private storage and CDN visibility
+
+`edge/cdn-worker.mjs` replaces the original unconditional B2 proxy on `cdn.keppy.dev`. It serves only the ProjectAida public catalogue and the pipeline's known metadata, thumbnail, DASH, HLS, init and segment filenames. Every video request, including HEAD and byte ranges, checks fresh origin metadata before returning any file. Public and unlisted videos remain playable; private, unknown and malformed visibility is denied. Private owner previews and editing on the live site are a later feature; local previews retain their existing private-video opt-in.
+
+The B2 bucket stays **private**, with encryption enabled. The CDN needs a dedicated classic single-bucket application key restricted to ProjectAida with **readFiles** only, stored as encrypted `B2_KEY_ID` and `B2_SECRET_KEY` Worker secrets. Keep upload/maintenance credentials separate and remove bucket-administration capabilities they do not need. Do not expose the local transcoding admin.
+
+Older uploads without visibility require an explicitly reviewed `LEGACY_VISIBILITY` Worker variable: a JSON object mapping their existing folder IDs to `public` or `unlisted`. Keep the actual deployment mapping out of Git. An explicit metadata visibility always takes precedence, so changing a reviewed legacy video to private denies it immediately on subsequent network requests. Unknown legacy uploads are denied; this avoids interpreting a missing field as public.
+
+The CDN rebuilds catalogue titles/descriptions from current public metadata and omits private/unlisted entries even if the stored index is stale. Index-only tags and HDR thumbnail flags are preserved for authorized public entries. This initial implementation supports at most 40 catalogue entries, with four concurrent visibility checks; a larger catalogue needs a pagination/authorization design before increasing that bound on the free Workers plan.
+
+Metadata, manifests, images and media responses use `no-store`, including Cloudflare cache directives. The watch loader also bypasses old browser metadata caches. This intentionally favors current visibility and edits over repeat-download caching; it streams the original media unchanged, including 120 fps sources, HEAD and HTTP byte ranges. It does not add or alter renditions. Previously downloaded copies and responses already stored under the old one-year policy cannot be revoked.
+
+Deploy the reviewed module to the existing CDN Worker, preserving its `cdn.keppy.dev` Custom Domain and keeping Workers Caching and preview URLs disabled. Disable the alternate `workers.dev` URL after verifying the custom domain. The visibility gate is part of the Worker itself, so every remaining entry point gets the same checks. Retain the previous deployed version as a rollback checkpoint; keep the previous key until the replacement passes live checks. Revoke an old key only after confirming no uploader or other service still uses it.
+
+Connection hardening uses Full (strict), minimum TLS 1.2, and Always Use HTTPS. GitHub Pages currently presents a valid certificate for `keppy.dev` but not `www.keppy.dev`, so a Cloudflare redirect for `(http.host eq "www.keppy.dev")` must send requests to `concat("https://keppy.dev", http.request.uri.path)` with the query string preserved before strict origin verification is enabled. This preserves existing watch links.
+
+Run `node --test tests/cdn-worker.test.mjs tests/loader.test.mjs tests/share-worker.test.mjs` before release. After deployment, verify public and unlisted 120 fps playback, cold/concurrent metadata requests, range/HEAD responses, private denials for every asset family, query/API/other-bucket denials, fresh catalogue fields and the direct B2 origin's anonymous denial. A successful mock test is not a live deployment check. Publishing the changed watch loader also requires deploying the updated `web/` artifact.
 
 ## 💡 Not a usage tutorial
 

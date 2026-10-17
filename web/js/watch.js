@@ -2,7 +2,7 @@ import {
   fetchCatalog, mediaBase, formatDate,
   renderVideoCard, detectDisplayHdr, attachThumbnailFallbacks,
 } from "./catalog.js?v=clean-watch-v37";
-import { loadMetadata, VideoLoadError } from "./loader.js?v=clean-watch-v37";
+import { loadMetadata, VideoLoadError } from "./loader.js?v=cdn-security-v1";
 import { mountPlayer } from "./player/shell.js?v=overlay-scrollbar-v36";
 
 const id = new URLSearchParams(location.search).get("v") || "0";
