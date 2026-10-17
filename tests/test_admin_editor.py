@@ -310,10 +310,12 @@ class EditorHTTPTests(unittest.TestCase):
         self.assertEqual(cloud.bodies[-1][1].read_sizes, [])
 
     def test_root_injects_session_token_and_never_caches_editor(self):
-        response = self.client.get("/")
-        self.assertEqual(response.status_code, 200)
-        self.assertIn(f'name="aida-session" content="{admin_app.app.state.admin_token}"', response.text)
-        self.assertEqual(response.headers["cache-control"], "no-store")
+        for path in ("/", "/edit?v=sample120"):
+            with self.subTest(path=path):
+                response = self.client.get(path)
+                self.assertEqual(response.status_code, 200)
+                self.assertIn(f'name="aida-session" content="{admin_app.app.state.admin_token}"', response.text)
+                self.assertEqual(response.headers["cache-control"], "no-store")
 
     def test_cross_site_host_origin_and_non_loopback_clients_are_denied(self):
         for headers in ({"Host": "attacker.invalid:8765"}, {"Origin": "null"},

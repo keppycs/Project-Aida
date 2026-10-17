@@ -242,8 +242,9 @@
       if (!detail || detail.id !== id || !detail.revision) throw new Error("Couldn't open this video. Refresh the library and try again.");
       showDetail(detail);
       const url = new URL(location.href);
-      url.searchParams.set("video", detail.id);
-      url.searchParams.delete("v");
+      url.pathname = "/edit";
+      url.searchParams.set("v", detail.id);
+      url.searchParams.delete("video");
       if (url.href !== location.href) history.replaceState(history.state, "", url);
       find("#draft-prompt").classList.add("hidden");
       status("#thumbnail-status", "");
@@ -433,5 +434,5 @@
   }
 
   bind();
-  loadLibrary(false).then(() => { const params = new URLSearchParams(location.search); const id = params.get("video") || params.get("v"); if (id && studio.videos.some((video) => video.id === id)) { if (typeof setTab === "function") setTab("videos"); selectVideo(id); } });
+  loadLibrary(false).then(() => { const params = new URLSearchParams(location.search); const id = params.get("v") || params.get("video"); if (id && studio.videos.some((video) => video.id === id)) { if (typeof setTab === "function") setTab("videos"); selectVideo(id); } });
 })();

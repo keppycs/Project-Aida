@@ -86,8 +86,9 @@ async function waitMutation(page, fixture, before) {
 
 function selectedURL(page, id) {
   const url = new URL(page.url());
-  assert.equal(url.searchParams.get("video"), id, "The Studio address must match the successfully opened video");
-  assert.equal(url.searchParams.has("v"), false, "Successful selection must remove the legacy video parameter");
+  assert.equal(url.pathname, "/edit", "The Studio editor must use its canonical edit route");
+  assert.equal(url.searchParams.get("v"), id, "The Studio address must match the successfully opened video");
+  assert.equal(url.searchParams.has("video"), false, "Successful selection must remove the legacy video parameter");
   assert.equal(url.searchParams.get("keep"), "one two", "Selection must preserve unrelated query parameters");
   assert.equal(url.hash, "#studio", "Selection must preserve the URL fragment");
 }
@@ -297,7 +298,11 @@ async function workflow(page, fixture) {
   await page.locator(`.video-row[data-id="${NEW_VIDEO}"]`).click();
   await page.locator("#draft-discard").click();
   await page.waitForFunction(() => document.querySelector("#edit-title").value === "A new private upload");
-  await page.goto(`${fixture.origin}/?video=${FIRST_VIDEO}&v=legacy-ignored&keep=one%20two#studio`);
+  await page.goto(`${fixture.origin}/?video=${FIRST_VIDEO}&keep=one%20two#studio`);
+  await page.waitForFunction(() => document.querySelector("#edit-title").value === "Saved in another local tab");
+  await samePreviewLink(page, fixture, FIRST_VIDEO);
+  selectedURL(page, FIRST_VIDEO);
+  await page.goto(`${fixture.origin}/edit?v=${FIRST_VIDEO}&video=legacy-ignored&keep=one%20two#studio`);
   await page.waitForFunction(() => document.querySelector("#edit-title").value === "Saved in another local tab");
   await samePreviewLink(page, fixture, FIRST_VIDEO);
   selectedURL(page, FIRST_VIDEO);

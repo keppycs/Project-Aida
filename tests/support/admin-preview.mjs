@@ -55,7 +55,7 @@ export async function startAdminPreview() {
         records.set(NEW_VIDEO, record);
         send(response, 200, { video_id: NEW_VIDEO });
         emit({ type: "encode_start" });
-        setTimeout(() => emit({ type: "encode_done", ok: true, message: "Video prepared locally.", video_id: NEW_VIDEO, editor_url: `/?video=${NEW_VIDEO}` }), 30);
+        setTimeout(() => emit({ type: "encode_done", ok: true, message: "Video prepared locally.", video_id: NEW_VIDEO, editor_url: `/edit?v=${NEW_VIDEO}` }), 30);
         return;
       }
       if (url.pathname === "/api/videos") {
@@ -103,7 +103,7 @@ export async function startAdminPreview() {
       }
       if (url.pathname.startsWith("/api/video-media/")) return send(response, 200, TEST_IMAGE, "image/png");
       if (url.pathname === "/preview/watch.html") return send(response, 200, '<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><style>*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}body{margin:0;background:#101112;color:#fafafa;font:16px system-ui}header,main{padding:20px}header{color:#e8ff47}section{aspect-ratio:16/9;background:#282b2f;display:grid;place-items:center}p{line-height:1.6}footer{padding:20px;min-height:250px}</style></head><body><header>Aida · synthetic watch preview</header><main><section>120 fps preview fixture</section><h1>Video preview</h1><p>This is a synthetic page, without video files or network media.</p></main><footer>Full watch-page preview.</footer></body></html>', "text/html; charset=utf-8");
-      const staticFiles = { "/": "index.html", "/static/admin.css": "admin.css", "/static/admin.js": "admin.js", "/static/editor.js": "editor.js" };
+      const staticFiles = { "/": "index.html", "/edit": "index.html", "/static/admin.css": "admin.css", "/static/admin.js": "admin.js", "/static/editor.js": "editor.js" };
       const name = staticFiles[url.pathname];
       if (name) {
         let content = await readFile(resolve(ROOT, "admin", name));

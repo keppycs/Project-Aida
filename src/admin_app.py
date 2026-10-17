@@ -266,7 +266,7 @@ def _run_encode_job(body: PipelineIn) -> None:
             extra_log_handler=handler,
         )
         emit({"type": "encode_done", "ok": True, "message": "Video ready to edit.",
-              "video_id": body.video_id, "editor_url": f"/?video={body.video_id}"})
+              "video_id": body.video_id, "editor_url": f"/edit?v={body.video_id}"})
     except Exception as exc:
         emit({"type": "encode_done", "ok": False, "message": f"Pipeline failed: {exc}"})
     finally:
@@ -346,6 +346,7 @@ def _start_thread(target, *args, **kwargs) -> None:
 
 
 @app.get("/")
+@app.get("/edit")
 def index() -> HTMLResponse:
     return editor_html(app, ADMIN_DIR)
 

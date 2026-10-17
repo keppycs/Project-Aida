@@ -115,6 +115,7 @@ Run `node tests/site-ux.browser.mjs` for shared UI changes. It checks real class
 ### Local Studio
 
 Install `requirements.txt`, run `launch.bat`, and open `http://127.0.0.1:8765`.
+Video editor links use `http://127.0.0.1:8765/edit?v=ID`.
 Studio uses Aida's yellow/dark design. **New upload** selects a source, creates
 120 fps renditions and thumbnails, and can upload privately. Sources below or
 above the 120 fps target are rejected rather than relabelled or duplicated.
