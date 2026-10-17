@@ -3,7 +3,7 @@
   "use strict";
   const find = (selector) => document.querySelector(selector);
   const all = (selector) => [...document.querySelectorAll(selector)];
-  const studio = { videos: [], rows: new Map(), selected: null, detail: null, baseline: "", dirty: false, busy: false, pendingAction: null, listRequest: 0, detailRequest: 0, listAbort: null, detailAbort: null, lastListRemote: false, conflictMode: null };
+  const studio = { videos: [], rows: new Map(), selected: null, detail: null, baseline: "", dirty: false, busy: false, pendingAction: null, listRequest: 0, detailRequest: 0, listAbort: null, detailAbort: null, onlineAbort: null, lastListRemote: false, conflictMode: null };
   const visibilityText = { private: "Private", unlisted: "Unlisted", public: "Public" };
   const editable = ["#edit-title", "#edit-description", "#edit-tags", 'input[name="edit-visibility"]'];
   const picker = { open: false, epoch: 0, operation: 0, id: null, video: null, document: null, source: "", controller: null, observer: null, callback: null, timeout: null, seekRequest: null, paints: [], ready: false, waiting: false, presented: null, exact: false, target: 0, candidate: null };
@@ -73,7 +73,7 @@
     else if (studio.dirty) status("#editor-save-state", "Unsaved changes");
     else status("#editor-save-state", studio.detail?.pending ? studio.detail?.has_remote ? "Saved on this PC · website changes pending" : "Saved on this PC · not uploaded" : studio.detail?.has_remote ? "Saved · website is up to date" : "Saved on this PC");
     find("#editor-save").disabled = !studio.detail || studio.busy || !studio.dirty;
-    find("#editor-publish").disabled = !studio.detail || studio.busy || Boolean(studio.detail.remoteChanged);
+    find("#editor-publish").disabled = !studio.detail || studio.busy || Boolean(studio.detail.remoteChanged) || studio.conflictMode === "remote";
     find("#edit-thumbnail-file").disabled = studio.busy || !studio.detail;
     refreshFrameControls();
     find("#conflict-reload").disabled = studio.busy;
@@ -101,7 +101,7 @@
     find("#conflict-reload").textContent = remote ? "Use online version" : "Review saved version";
   }
 
-  function showDetail(detail, { preserveFields = false } = {}) {
+  function showDetail(detail, { preserveFields = false, preservePreview = false } = {}) {
     studio.detail = detail;
     studio.selected = detail.id;
     if (!preserveFields) {
@@ -123,14 +123,15 @@
     let url = detail.can_preview ? previewURL(detail.preview_url) : "";
     if (url) { const fresh = new URL(url); fresh.searchParams.set("studio_revision", detail.revision); url = fresh.href; }
     const player = find("#editor-player");
+    const wasID = player.dataset.videoId;
+    if (preservePreview && wasID === detail.id) url = previewURL(player.getAttribute("src")) || url;
     const previewLink = find("#editor-preview-link");
     previewLink.classList.toggle("hidden", !url);
     if (url) previewLink.href = url;
     else previewLink.removeAttribute("href");
-    const wasID = player.dataset.videoId;
     find("#editor-player-wrap").classList.toggle("hidden", !url);
     find("#editor-no-player").classList.toggle("hidden", Boolean(url));
-    if (url && (wasID !== detail.id || player.getAttribute("src") !== url)) {
+    if (url && (wasID !== detail.id || (!preservePreview && player.getAttribute("src") !== url) || !player.getAttribute("src"))) {
       closeFramePicker();
       player.src = url;
       player.dataset.videoId = detail.id;
@@ -236,28 +237,82 @@
     if (studio.selected === id && studio.detail) return;
     const generation = ++studio.detailRequest;
     studio.detailAbort?.abort();
+    stopOnlineCheck();
     const controller = new AbortController();
     studio.detailAbort = controller;
     closeFramePicker();
-    status("#library-status", "Opening video…");
+    // Library entries contain the same detail as a local GET. Paint that
+    // snapshot now; revision checks still protect saves if it became stale.
+    const cached = studio.videos.find(video => video.id === id && video.revision);
+    if (cached) openDetail(cached);
+    else status("#library-status", "Opening video…");
     try {
-      const detail = await request(`/api/videos/${encodeURIComponent(id)}?check_online=true`, { signal: controller.signal });
+      const detail = await request(`/api/videos/${encodeURIComponent(id)}?remote=false`, { signal: controller.signal });
       if (generation !== studio.detailRequest) return;
       if (!detail || detail.id !== id || !detail.revision) throw new Error("Couldn't open this video. Refresh the library and try again.");
       replaceSummary(detail);
-      showDetail(detail);
-      const url = new URL(location.href);
-      url.pathname = "/edit";
-      url.searchParams.set("v", detail.id);
-      url.searchParams.delete("video");
-      if (url.href !== location.href) history.replaceState(history.state, "", url);
-      find("#draft-prompt").classList.add("hidden");
-      status("#thumbnail-status", "");
-      status("#library-status", detail.online_check_error || "");
+      openDetail(detail, { preservePreview: Boolean(cached), preserveFields: Boolean(cached) && JSON.stringify(fromDetail(detail)) === studio.baseline });
+      // Checking storage is optional background work, never an opening gate.
+      void checkOnline(id, generation);
     } catch (error) {
       if (generation !== studio.detailRequest || error.name === "AbortError") return;
       status("#library-status", error.message, true);
     } finally { if (generation === studio.detailRequest) studio.detailAbort = null; }
+  }
+
+  function openDetail(detail, options) {
+    showDetail(detail, options);
+    const url = new URL(location.href);
+    url.pathname = "/edit";
+    url.searchParams.set("v", detail.id);
+    url.searchParams.delete("video");
+    if (url.href !== location.href) history.replaceState(history.state, "", url);
+    find("#draft-prompt").classList.add("hidden");
+    status("#thumbnail-status", "");
+    status("#library-status", "");
+  }
+
+  function stopOnlineCheck() {
+    studio.onlineAbort?.abort();
+    studio.onlineAbort = null;
+  }
+
+  function stopDetailRead() {
+    if (!studio.detailAbort) return;
+    ++studio.detailRequest;
+    studio.detailAbort.abort();
+    studio.detailAbort = null;
+  }
+
+  async function checkOnline(id, generation) {
+    stopOnlineCheck();
+    const controller = new AbortController();
+    studio.onlineAbort = controller;
+    const revision = studio.detail.revision;
+    let timedOut = false;
+    const timeout = setTimeout(() => { timedOut = true; controller.abort(); }, 8000);
+    try {
+      const detail = await request(`/api/videos/${encodeURIComponent(id)}?check_online=true`, { signal: controller.signal });
+      if (controller.signal.aborted || generation !== studio.detailRequest || studio.selected !== id || studio.detail.revision !== revision || studio.busy) return;
+      if (!detail || detail.id !== id || !detail.revision) throw new Error("Couldn't check online status. You can keep editing.");
+      replaceSummary(detail);
+      const sameFields = JSON.stringify(fromDetail(detail)) === studio.baseline;
+      if (studio.dirty && !sameFields) {
+        // Keep the revision on which the draft was based. A save must still
+        // detect these unseen online changes instead of overwriting them.
+        status("#library-status", "Online details changed. Your edits are still here.");
+        return;
+      }
+      // A passive status check must not restart playback or the frame picker.
+      showDetail(detail, { preserveFields: sameFields || studio.dirty, preservePreview: true });
+      status("#library-status", detail.online_check_error || "");
+    } catch (error) {
+      if (generation !== studio.detailRequest || studio.selected !== id || (controller.signal.aborted && !timedOut)) return;
+      status("#library-status", timedOut ? "Online check is taking too long. You can keep editing." : "Couldn't check online status. You can keep editing.");
+    } finally {
+      clearTimeout(timeout);
+      if (studio.onlineAbort === controller) studio.onlineAbort = null;
+    }
   }
 
   function replaceSummary(detail) {
@@ -268,7 +323,7 @@
 
   function mutationError(error, selector = "#editor-save-state") {
     const current = error.current;
-    if (current && current.id === studio.selected && typeof current.revision === "string" && current.revision) {
+    if (error.status !== 409 && current && current.id === studio.selected && typeof current.revision === "string" && current.revision) {
       // A failed upload may already have saved a newer local revision. Keep
       // both the typed draft and its original baseline while adopting that
       // server state, so retry never uses an obsolete revision.
@@ -276,11 +331,13 @@
       showDetail(current, { preserveFields: true });
     }
     status(selector, error.message, true);
-    if (error.status === 409) showConflict(studio.detail?.remoteChanged ? "remote" : "local");
+    if (error.status === 409) showConflict(current?.remoteChanged || studio.detail?.remoteChanged ? "remote" : "local");
   }
 
   async function saveVideo(publish) {
     if (!studio.detail || studio.busy) return;
+    stopDetailRead();
+    stopOnlineCheck();
     const draft = fields();
     if (!draft.title.trim()) { status("#editor-save-state", "Give the video a title first.", true); return; }
     const id = studio.detail.id;
@@ -302,7 +359,7 @@
 
   function refreshButtons() {
     find("#editor-save").disabled = !studio.detail || studio.busy || !studio.dirty;
-    find("#editor-publish").disabled = !studio.detail || studio.busy || Boolean(studio.detail.remoteChanged);
+    find("#editor-publish").disabled = !studio.detail || studio.busy || Boolean(studio.detail.remoteChanged) || studio.conflictMode === "remote";
     find("#edit-thumbnail-file").disabled = studio.busy || !studio.detail;
     refreshFrameControls();
     find("#conflict-reload").disabled = studio.busy;
@@ -311,6 +368,8 @@
 
   async function saveThumbnail(payload) {
     if (!studio.detail || studio.busy) return;
+    stopDetailRead();
+    stopOnlineCheck();
     const id = studio.detail.id;
     studio.busy = true;
     refreshButtons();
@@ -654,6 +713,7 @@
     const id = studio.selected;
     const generation = ++studio.detailRequest;
     studio.detailAbort?.abort();
+    stopOnlineCheck();
     const controller = new AbortController();
     studio.detailAbort = controller;
     closeFramePicker();
@@ -676,6 +736,8 @@
     if (!studio.detail || studio.busy) return;
     const remote = studio.conflictMode === "remote";
     withDraftGuard(async () => {
+      stopDetailRead();
+      stopOnlineCheck();
       studio.busy = true;
       refreshButtons();
       status("#editor-save-state", remote ? "Loading the latest online version…" : "Loading the saved version…");
@@ -744,7 +806,7 @@
     find("#library-retry").addEventListener("click", () => loadLibrary(studio.lastListRemote));
     find("#library-new").addEventListener("click", () => { if (typeof setTab === "function") setTab("encode"); });
     editable.forEach((selector) => all(selector).forEach((field) => field.addEventListener("input", () => {
-      if (studio.detailAbort) { ++studio.detailRequest; studio.detailAbort.abort(); studio.detailAbort = null; status("#library-status", "Opening cancelled. Your edits are still here."); }
+      if (studio.detailAbort) { stopDetailRead(); status("#library-status", ""); }
       updateState();
     })));
     find("#editor-form").addEventListener("submit", (event) => { event.preventDefault(); saveVideo(false); });

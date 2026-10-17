@@ -1,10 +1,12 @@
 """Editor safety tests use generated project fixtures and an in-memory B2 fake."""
 
 import io
+from concurrent.futures import ThreadPoolExecutor
 import json
 from pathlib import Path
 import runpy
 import tempfile
+from threading import Event
 import unittest
 
 
@@ -199,6 +201,155 @@ class VideoLibraryTests(unittest.TestCase):
         with self.assertRaises(VideoConflictError):
             self.save(publish=True)
         self.assertFalse(self.b2.puts)
+
+    def block_next_metadata_read(self):
+        entered, release = Event(), Event()
+        original = self.b2.get_object
+
+        def delayed(**kwargs):
+            response = original(**kwargs)
+            if kwargs["Key"] == "video-a/metadata.json" and not entered.is_set():
+                entered.set()
+                if not release.wait(5):
+                    raise AssertionError("Fixture metadata read was not released")
+            return response
+
+        self.b2.get_object = delayed
+        return entered, release
+
+    def test_slow_cloud_refresh_allows_local_reads_and_saves_and_preserves_the_new_draft(self):
+        self.cloud({**self.metadata, "title": "Different live title"})
+        entered, release = self.block_next_metadata_read()
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            refresh = pool.submit(self.view, True)
+            try:
+                self.assertTrue(entered.wait(1))
+                local = pool.submit(self.view).result(timeout=1)
+                self.assertEqual(local["metadata"]["title"], "Original")
+                self.assertEqual(len(pool.submit(self.library.list_videos).result(timeout=1)), 1)
+                draft = pool.submit(self.library.save_video, "video-a", {"title": "Typed during refresh"}, local["revision"]).result(timeout=1)
+                self.assertTrue(draft["pending"])
+            finally:
+                release.set()
+            result = refresh.result(timeout=2)
+        self.assertEqual(result["metadata"]["title"], "Typed during refresh")
+        self.assertEqual(result["revision"], draft["revision"])
+        self.assertTrue(result["pending"])
+        self.assertFalse(result["remoteChanged"])
+        self.assertFalse(result["remoteChecked"])
+        following = self.library.save_video("video-a", {"description": "Immediate next save"}, draft["revision"])
+        self.assertEqual(following["metadata"]["description"], "Immediate next save")
+        # A new, deliberately requested check may still compare this pending
+        # draft against the live version and report the actual conflict.
+        self.assertTrue(self.view(remote=True)["remoteChanged"])
+        self.assertFalse(self.b2.puts)
+
+    def test_refresh_started_before_thumbnail_save_keeps_its_revision_valid_for_next_save(self):
+        from PIL import Image
+        image = io.BytesIO()
+        Image.new("RGB", (16, 12), "yellow").save(image, format="PNG")
+        self.cloud()
+        entered, release = self.block_next_metadata_read()
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            refresh = pool.submit(self.view, True)
+            try:
+                self.assertTrue(entered.wait(1))
+                local = pool.submit(self.view).result(timeout=1)
+                draft = pool.submit(self.library.replace_thumbnail, "video-a", image.getvalue(), "frame.png", local["revision"]).result(timeout=2)
+                self.assertTrue(draft["pending"])
+            finally:
+                release.set()
+            result = refresh.result(timeout=2)
+        self.assertEqual(result["revision"], draft["revision"])
+        self.assertEqual(result["pendingThumbnails"], list(THUMBNAILS))
+        self.assertFalse(result["remoteChecked"])
+        following = self.library.save_video("video-a", {"description": "Saved after thumbnail"}, draft["revision"])
+        self.assertEqual(following["metadata"]["description"], "Saved after thumbnail")
+        self.assertEqual(following["pendingThumbnails"], list(THUMBNAILS))
+        self.assertFalse(self.b2.puts)
+
+    def test_older_refresh_cannot_replace_a_newer_refresh_result(self):
+        self.cloud()
+        entered, release = self.block_next_metadata_read()
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            old_refresh = pool.submit(self.view, True)
+            try:
+                self.assertTrue(entered.wait(1))
+                self.b2.store("video-a/metadata.json", {**self.metadata, "title": "Newest live title"})
+                latest = pool.submit(self.view, True).result(timeout=1)
+                self.assertEqual(latest["metadata"]["title"], "Newest live title")
+            finally:
+                release.set()
+            old_result = old_refresh.result(timeout=2)
+        self.assertEqual(old_result["revision"], latest["revision"])
+        self.assertEqual(self.view()["metadata"]["title"], "Newest live title")
+        self.assertFalse(self.b2.puts)
+
+    def test_refresh_started_before_publish_cannot_undo_the_published_baseline(self):
+        self.cloud()
+        self.view(remote=True)
+        entered, release = self.block_next_metadata_read()
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            old_refresh = pool.submit(self.view, True)
+            try:
+                self.assertTrue(entered.wait(1))
+                published = pool.submit(self.save, {"title": "Published during refresh"}, True).result(timeout=1)
+                self.assertFalse(published["pending"])
+            finally:
+                release.set()
+            result = old_refresh.result(timeout=2)
+        self.assertEqual(result["revision"], published["revision"])
+        self.assertEqual(result["metadata"]["title"], "Published during refresh")
+        self.assertFalse(result["remoteChanged"])
+        self.assertEqual(self.b2.puts, ["video-a/metadata.json", "index.json"])
+
+    def test_slow_cloud_catalog_listing_does_not_block_the_local_library(self):
+        self.cloud()
+        entered, release = Event(), Event()
+        original = self.b2.paginate
+
+        def delayed(**kwargs):
+            entered.set()
+            if not release.wait(5):
+                raise AssertionError("Fixture catalog read was not released")
+            yield from original(**kwargs)
+
+        self.b2.paginate = delayed
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            cloud_list = pool.submit(self.library.list_videos, True)
+            try:
+                self.assertTrue(entered.wait(1))
+                self.assertEqual(len(pool.submit(self.library.list_videos).result(timeout=1)), 1)
+                self.assertEqual(pool.submit(self.view).result(timeout=1)["metadata"]["title"], "Original")
+            finally:
+                release.set()
+            self.assertEqual(len(cloud_list.result(timeout=2)), 1)
+
+    def test_slow_origin_asset_headers_do_not_block_local_metadata_reads(self):
+        self.cloud()
+        self.view(remote=True)
+        self.b2.objects["video-a/AV1/init_0.mp4"] = b"unchanged-video"
+        entered, release = Event(), Event()
+        original = self.b2.get_object
+
+        def delayed(**kwargs):
+            if kwargs["Key"] == "video-a/AV1/init_0.mp4":
+                entered.set()
+                if not release.wait(5):
+                    raise AssertionError("Fixture asset headers were not released")
+            return original(**kwargs)
+
+        self.b2.get_object = delayed
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            asset = pool.submit(self.library.remote_asset, "video-a", "AV1/init_0.mp4")
+            try:
+                self.assertTrue(entered.wait(1))
+                self.assertEqual(pool.submit(self.view).result(timeout=1)["metadata"]["title"], "Original")
+            finally:
+                release.set()
+            response = asset.result(timeout=2)
+        self.assertEqual(response["Body"].read(), b"unchanged-video")
+        response["Body"].close()
 
     def test_remote_legacy_index_tag_change_also_conflicts(self):
         self.cloud(index=[{"id": "video-a", "tags": ["before"]}])

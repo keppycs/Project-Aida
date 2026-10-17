@@ -401,43 +401,124 @@ async function refreshPreservesDraft(page, fixture) {
 async function rejectedSelectionsKeepURL(page, fixture) {
   const originalURL = page.url();
   const originalTitle = await page.locator("#edit-title").inputValue();
-  const originalPreview = await page.locator("#editor-player").getAttribute("src");
-  const failurePattern = /\/api\/videos\/studio-003\?/;
+  const failurePattern = /\/api\/videos\/studio-003\?remote=false$/;
   await page.route(failurePattern, route => route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ detail: "Fixture selection unavailable." }) }));
   try {
     await page.locator('.video-row[data-id="studio-003"]').click();
     await waitText(page, "#library-status", "selection unavailable");
-    assert.equal(page.url(), originalURL, "A failed selection must leave the current video's address intact");
-    assert.equal(await page.locator("#edit-title").inputValue(), originalTitle);
-    assert.equal(await page.locator("#editor-player").getAttribute("src"), originalPreview);
+    selectedURL(page, "studio-003");
+    assert.equal(await page.locator("#edit-title").inputValue(), fixture.view("studio-003").title, "Cached details must remain usable when local validation fails");
+    assert.equal(await page.locator("#edit-title").isEnabled(), true);
+    await samePreviewLink(page, fixture, "studio-003");
   } finally { await page.unroute(failurePattern); }
-
-  const abortPattern = /\/api\/videos\/studio-004\?/;
-  let entered, release, complete, routeError;
-  const reached = new Promise(resolveReached => { entered = resolveReached; });
-  const held = new Promise(resolveHeld => { release = resolveHeld; });
-  const completed = new Promise(resolveCompleted => { complete = resolveCompleted; });
-  await page.route(abortPattern, async route => {
-    entered();
-    await held;
-    try { await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(fixture.view("studio-004")) }); }
-    catch (error) { if (!route.request().failure()) routeError = error; }
-    finally { complete(); }
-  });
+  const held = fixture.holdDetail("studio-004", "?remote=false", { title: "Late local validation", revision: "r800" });
   try {
     await page.locator('.video-row[data-id="studio-004"]').click();
-    await reached;
+    await held.started;
+    await page.waitForFunction(() => document.querySelector("#edit-title").value === "Motion study 5", null, { timeout: 3000 });
+    selectedURL(page, "studio-004");
+    const preview = await page.locator("#editor-player").getAttribute("src");
     await page.locator("#edit-title").fill("Typing cancels the pending selection");
-    release();
-    await completed;
-    if (routeError) throw routeError;
-    await waitText(page, "#library-status", "Opening cancelled");
+    held.release(); await held.finished;
     await painted(page);
-    assert.equal(page.url(), originalURL, "An aborted selection must leave the current video's address intact");
+    selectedURL(page, "studio-004");
     assert.equal(await page.locator("#edit-title").inputValue(), "Typing cancels the pending selection");
-    assert.equal(await page.locator("#editor-player").getAttribute("src"), originalPreview);
-    await page.locator("#edit-title").fill(originalTitle);
-  } finally { release(); await page.unroute(abortPattern); }
+    assert.equal(await page.locator("#editor-player").getAttribute("src"), preview);
+    assert.equal(await page.locator("#editor-save").isEnabled(), true);
+  } finally { held.release(); }
+  await page.locator(`.video-row[data-id="${FIRST_VIDEO}"]`).click();
+  await page.locator("#draft-discard").click();
+  await page.waitForFunction(title => document.querySelector("#edit-title").value === title, originalTitle);
+  await samePreviewLink(page, fixture, FIRST_VIDEO);
+  assert.equal(page.url(), originalURL);
+}
+
+async function slowOnlineSelection(page, fixture) {
+  const requestStart = fixture.state.requests.length;
+  const firstTitle = fixture.view(FIRST_VIDEO).title;
+  const first = fixture.holdDetail(FIRST_VIDEO, "?check_online=true", { title: "Late first online title", revision: "r900" });
+  const second = fixture.holdDetail(SECOND_VIDEO, "?check_online=true", { title: "Unseen second online title", revision: "r901" });
+  try {
+    await page.goto(`${fixture.origin}/?keep=one%20two#studio`);
+    await page.locator(`.video-row[data-id="${FIRST_VIDEO}"]`).waitFor();
+    await page.locator(`.video-row[data-id="${FIRST_VIDEO}"]`).click();
+    await first.started;
+    await page.waitForFunction(title => document.querySelector("#edit-title").value === title, firstTitle, { timeout: 3000 });
+    selectedURL(page, FIRST_VIDEO);
+    await samePreviewLink(page, fixture, FIRST_VIDEO);
+    assert.equal(await page.locator("#edit-title").isEnabled(), true, "A held cloud check must not block the local editor");
+    await page.locator(`.video-row[data-id="${SECOND_VIDEO}"]`).click();
+    await second.started;
+    await page.waitForFunction(() => document.querySelector("#edit-title").value === "Motion study 2", null, { timeout: 3000 });
+    selectedURL(page, SECOND_VIDEO);
+    const secondPreview = await page.locator("#editor-player").getAttribute("src");
+    first.release(); await first.finished; await painted(page);
+    assert.equal(await page.locator("#edit-title").inputValue(), "Motion study 2", "The previous video's late cloud response must not replace the current selection");
+    selectedURL(page, SECOND_VIDEO);
+    await page.locator("#edit-title").fill("Local typing while cloud is pending");
+    const localRevision = fixture.view(SECOND_VIDEO).revision;
+    second.release(); await second.finished; await painted(page);
+    assert.equal(await page.locator("#edit-title").inputValue(), "Local typing while cloud is pending");
+    assert.equal(await page.locator("#editor-player").getAttribute("src"), secondPreview, "Background checks must not reset an edited preview");
+    selectedURL(page, SECOND_VIDEO);
+    const before = countPOST(fixture);
+    await page.locator("#editor-save").click();
+    await waitMutation(page, fixture, before);
+    const saved = fixture.state.requests.filter(request => request.method === "POST").at(-1);
+    assert.equal(saved.path, `/api/videos/${SECOND_VIDEO}`);
+    assert.equal(saved.body.revision, localRevision, "Typing must prevent adoption of an unseen online revision");
+    assert.equal(saved.body.title, "Local typing while cloud is pending");
+    assert.equal(saved.body.publish, false);
+    assert.equal(fixture.state.requests.slice(requestStart).some(request => request.path === "/api/pipeline"), false);
+    assert.ok(fixture.state.requests.some(request => request.path === `/api/videos/${FIRST_VIDEO}` && request.search === "?remote=false"));
+    assert.ok(fixture.state.requests.some(request => request.path === `/api/videos/${FIRST_VIDEO}` && request.search === "?check_online=true"));
+  } finally { first.release(); second.release(); }
+  const sameID = "studio-002";
+  const same = fixture.holdDetail(sameID, "?check_online=true", { revision: "r902" }, { updateRecord: true });
+  try {
+    await page.locator(`.video-row[data-id="${sameID}"]`).click();
+    await same.started;
+    await page.waitForFunction(() => document.querySelector("#edit-title").value === "Motion study 3", null, { timeout: 3000 });
+    const preview = await page.locator("#editor-player").getAttribute("src");
+    await page.locator("#edit-title").fill("Typed edit with matching online baseline");
+    await page.locator("#edit-title").evaluate(input => input.setSelectionRange(5, 12));
+    same.release(); await same.finished; await painted(page);
+    assert.equal(await page.locator("#edit-title").inputValue(), "Typed edit with matching online baseline");
+    assert.equal(await page.locator("#editor-player").getAttribute("src"), preview, "A matching online status update must not restart the preview");
+    assert.deepEqual(await page.locator("#edit-title").evaluate(input => ({ start: input.selectionStart, end: input.selectionEnd, focused: document.activeElement === input })),
+      { start: 5, end: 12, focused: true }, "A matching background response must preserve typing focus and caret selection");
+    selectedURL(page, sameID);
+    const before = countPOST(fixture);
+    await page.locator("#editor-save").click();
+    await waitMutation(page, fixture, before);
+    await waitText(page, "#editor-save-state", "website unchanged");
+    const saved = fixture.state.requests.filter(request => request.method === "POST").at(-1);
+    assert.equal(saved.path, `/api/videos/${sameID}`);
+    assert.equal(saved.body.revision, "r902", "An unchanged editorial baseline may safely adopt its new status revision while typing");
+    assert.equal(saved.body.title, "Typed edit with matching online baseline");
+    assert.equal(saved.body.publish, false);
+  } finally { same.release(); }
+  const previewID = "studio-005";
+  const clean = fixture.holdDetail(previewID, "?check_online=true", { revision: "r903", can_preview: false, preview_url: null }, { updateRecord: true });
+  try {
+    await page.locator(`.video-row[data-id="${previewID}"]`).click();
+    await clean.started;
+    await page.waitForFunction(() => document.querySelector("#edit-title").value === "Motion study 6", null, { timeout: 3000 });
+    await samePreviewLink(page, fixture, previewID);
+    await openPicker(page);
+    const preview = await page.locator("#editor-player").getAttribute("src");
+    await page.locator("#edit-title").focus();
+    await page.locator("#edit-title").evaluate(input => input.setSelectionRange(2, 6));
+    clean.release(); await clean.finished; await painted(page);
+    assert.equal(await page.locator("#edit-title").inputValue(), "Motion study 6");
+    assert.deepEqual(await page.locator("#edit-title").evaluate(input => ({ start: input.selectionStart, end: input.selectionEnd, focused: document.activeElement === input })),
+      { start: 2, end: 6, focused: true }, "An unchanged clean validation must preserve its focused input and caret");
+    assert.equal(await page.locator("#editor-player").getAttribute("src"), preview, "A passive can_preview=false result must not discard an already working preview");
+    assert.equal(await page.locator("#editor-player-wrap").isVisible(), true);
+    assert.equal(await page.locator("#thumbnail-frame-toggle").getAttribute("aria-expanded"), "true", "Passive same-baseline status must keep the active frame picker open");
+    assert.equal(await page.locator("#edit-frame-canvas").isVisible(), true);
+    selectedURL(page, previewID);
+  } finally { clean.release(); }
 }
 
 async function workflow(page, fixture) {
@@ -547,10 +628,20 @@ async function workflow(page, fixture) {
   assert.equal(reload.headers.session, STUDIO_TOKEN);
 
   await page.locator("#edit-title").fill("My edits while another local tab saves");
+  const staleFormRevision = fixture.view(FIRST_VIDEO).revision;
   fixture.setNextMutation("stale");
   await page.locator("#editor-save").click();
   await waitText(page, "#conflict-reload", "Review saved");
   assert.equal(await page.locator("#editor-publish").isEnabled(), true, "A stale local form is not an online conflict");
+  assert.equal(await page.locator("#edit-title").inputValue(), "My edits while another local tab saves");
+  const newerSavedRevision = fixture.view(FIRST_VIDEO).revision;
+  const beforeStaleRetry = countPOST(fixture);
+  await page.locator("#editor-save").click();
+  await waitMutation(page, fixture, beforeStaleRetry);
+  const staleRetry = fixture.state.requests.filter(request => request.method === "POST").at(-1);
+  assert.equal(staleRetry.body.revision, staleFormRevision, "Repeated409 saves must retain the original form revision until explicit review");
+  assert.equal(fixture.view(FIRST_VIDEO).revision, newerSavedRevision, "A retry must not overwrite a newer saved version by adopting its error revision");
+  assert.equal(fixture.view(FIRST_VIDEO).title, "Saved in another local tab");
   assert.equal(await page.locator("#edit-title").inputValue(), "My edits while another local tab saves");
   const reloadCount = fixture.state.requests.filter(request => request.path.endsWith("/reload")).length;
   await page.locator("#conflict-reload").click();
@@ -693,7 +784,10 @@ try {
       fixture.setFrameClip(frameClip);
       try {
         await stableFrameNavigation(page, fixture);
-        if (!navigationOnly) await workflow(page, fixture);
+        if (!navigationOnly) {
+          await workflow(page, fixture);
+          await slowOnlineSelection(page, fixture);
+        }
       }
       catch (error) {
         results.failure = { profile: profile.name, errors, external, lastRequests: fixture.state.requests.slice(-10).map(({ method, path, search }) => ({ method, path, search })) };

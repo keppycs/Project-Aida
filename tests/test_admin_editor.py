@@ -1,11 +1,13 @@
 """Loopback editor integration; generated fixtures only, no credentials or B2."""
 
 import base64
+from concurrent.futures import ThreadPoolExecutor
 from io import BytesIO
 import json
 from pathlib import Path
 import sys
 import tempfile
+from threading import Event
 import unittest
 from unittest.mock import patch
 
@@ -106,10 +108,12 @@ class EditorHTTPTests(unittest.TestCase):
         self.previous_library = admin_app.app.state.video_library
         self.previous_previews = admin_app.app.state.remote_previews
         self.previous_fallbacks = admin_app.app.state.local_preview_fallbacks
+        self.previous_status_generations = admin_app.app.state.preview_status_generations
         self.previous_busy = admin_app.app.state.editor_busy
         admin_app.app.state.video_library = VideoLibrary(self.root)
         admin_app.app.state.remote_previews = set()
         admin_app.app.state.local_preview_fallbacks = set()
+        admin_app.app.state.preview_status_generations = {}
         admin_app.app.state.editor_busy = lambda: False
         self.addCleanup(self.restore_state)
         # An automatic status check must never inspect the real keyring or
@@ -124,6 +128,7 @@ class EditorHTTPTests(unittest.TestCase):
         admin_app.app.state.video_library = self.previous_library
         admin_app.app.state.remote_previews = self.previous_previews
         admin_app.app.state.local_preview_fallbacks = self.previous_fallbacks
+        admin_app.app.state.preview_status_generations = self.previous_status_generations
         admin_app.app.state.editor_busy = self.previous_busy
 
     def detail(self):
@@ -165,6 +170,118 @@ class EditorHTTPTests(unittest.TestCase):
         preview = self.client.get("/preview/local/sample120/AV1/init_0.mp4")
         self.assertEqual(preview.content, b"private-origin-video")
         self.assertFalse(cloud.puts)
+
+    def test_slow_automatic_cloud_check_does_not_block_local_open_list_media_or_save(self):
+        cloud = self.use_cloud(self.metadata)
+        self.mock_configured.return_value = True
+        entered, release = Event(), Event()
+        original = cloud.get_object
+
+        def delayed(**kwargs):
+            response = original(**kwargs)
+            if kwargs["Key"] == "sample120/metadata.json" and not entered.is_set():
+                entered.set()
+                if not release.wait(5):
+                    raise AssertionError("Fixture cloud check was not released")
+            return response
+
+        cloud.get_object = delayed
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            online = pool.submit(self.client.get, "/api/videos/sample120?check_online=true")
+            try:
+                self.assertTrue(entered.wait(1))
+                self.assertFalse(admin_app.app.state.editor_saving)
+                local = pool.submit(self.client.get, "/api/videos/sample120").result(timeout=1)
+                self.assertEqual(local.status_code, 200, local.text)
+                listing = pool.submit(self.client.get, "/api/videos").result(timeout=1)
+                self.assertEqual(listing.status_code, 200, listing.text)
+                media = pool.submit(self.client.get, "/preview/local/sample120/AV1/init_0.mp4").result(timeout=1)
+                self.assertEqual(media.content, bytes(range(128)))
+                body = {**self.metadata, "title": "Saved while checking", "revision": local.json()["revision"]}
+                fields = {key: body[key] for key in ("title", "description", "tags", "visibility", "revision")}
+                saved = pool.submit(self.client.post, "/api/videos/sample120", json=fields, headers=self.headers).result(timeout=1)
+                self.assertEqual(saved.status_code, 200, saved.text)
+            finally:
+                release.set()
+            result = online.result(timeout=2)
+        self.assertEqual(result.status_code, 200, result.text)
+        self.assertEqual(result.json()["title"], "Saved while checking")
+        self.assertEqual(result.json()["revision"], saved.json()["revision"])
+        self.assertTrue(result.json()["pending"])
+        self.assertFalse(result.json()["remoteChanged"])
+        next_fields = {**fields, "description": "Immediate next action", "revision": saved.json()["revision"]}
+        following = self.client.post("/api/videos/sample120", json=next_fields, headers=self.headers)
+        self.assertEqual(following.status_code, 200, following.text)
+        self.assertEqual(following.json()["description"], "Immediate next action")
+        self.assertFalse(cloud.puts)
+
+    def test_slow_cloud_check_for_one_video_does_not_block_opening_another(self):
+        cloud = self.use_cloud(self.metadata)
+        self.mock_configured.return_value = True
+        other = {**self.metadata, "id": "other120", "title": "Another video", "codecs": []}
+        other_folder = self.local / other["id"]
+        other_folder.mkdir()
+        (other_folder / "metadata.json").write_text(json.dumps(other), encoding="utf-8")
+        (self.local / "index.json").write_text(json.dumps([self.metadata, other]), encoding="utf-8")
+        entered, release = Event(), Event()
+        original = cloud.get_object
+
+        def delayed(**kwargs):
+            response = original(**kwargs)
+            if kwargs["Key"] == "sample120/metadata.json":
+                entered.set()
+                if not release.wait(5):
+                    raise AssertionError("Fixture first-video check was not released")
+            return response
+
+        cloud.get_object = delayed
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            first = pool.submit(self.client.get, "/api/videos/sample120?check_online=true")
+            try:
+                self.assertTrue(entered.wait(1))
+                second = pool.submit(self.client.get, "/api/videos/other120?check_online=true").result(timeout=1)
+                self.assertEqual(second.status_code, 200, second.text)
+                self.assertEqual(second.json()["id"], "other120")
+                self.assertEqual(second.json()["title"], "Another video")
+            finally:
+                release.set()
+            self.assertEqual(first.result(timeout=2).status_code, 200)
+        self.assertFalse(cloud.puts)
+
+    def test_older_failed_auto_check_cannot_restore_local_fallback_after_newer_success(self):
+        for query in ("check_online=true", "remote=true"):
+            with self.subTest(query=query):
+                cloud = self.use_cloud(self.metadata)
+                cloud.store("sample120/AV1/init_0.mp4", b"current-origin-video")
+                self.refresh_cloud()
+                self.mock_configured.return_value = True
+                entered, release = Event(), Event()
+                original = cloud.get_object
+
+                def older_failure(**kwargs):
+                    if kwargs["Key"] == "sample120/metadata.json" and not entered.is_set():
+                        entered.set()
+                        if not release.wait(5):
+                            raise AssertionError("Fixture older auto check was not released")
+                        raise OSError("older check failed after newer success")
+                    return original(**kwargs)
+
+                cloud.get_object = older_failure
+                with ThreadPoolExecutor(max_workers=2) as pool:
+                    older = pool.submit(self.client.get, "/api/videos/sample120?check_online=true")
+                    try:
+                        self.assertTrue(entered.wait(1))
+                        newer = pool.submit(self.client.get, f"/api/videos/sample120?{query}").result(timeout=1)
+                        self.assertEqual(newer.status_code, 200, newer.text)
+                        self.assertNotIn("sample120", admin_app.app.state.local_preview_fallbacks)
+                    finally:
+                        release.set()
+                    stale = older.result(timeout=2)
+                self.assertEqual(stale.status_code, 200, stale.text)
+                self.assertIn("online_check_error", stale.json())
+                self.assertNotIn("sample120", admin_app.app.state.local_preview_fallbacks)
+                self.assertEqual(self.client.get("/preview/local/sample120/AV1/init_0.mp4").content, b"current-origin-video")
+                self.assertFalse(cloud.puts)
 
     def test_automatic_online_check_without_configuration_stays_local_without_cloud_calls(self):
         cloud = self.use_cloud(self.metadata)

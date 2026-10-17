@@ -71,6 +71,7 @@ class VideoLibrary:
         self.root = Path(os.path.abspath(project_root))
         self.local = Path(os.path.abspath(local_dir or self.root / "web" / "local"))
         self.client_factory = client_factory
+        self._refresh_generations: dict[str, int] = {}
         self._safe(self.local)
 
     def _safe(self, path: Path) -> Path:
@@ -258,35 +259,53 @@ class VideoLibrary:
     def get_video(self, video_id: str, remote: bool = False) -> dict:
         with _LOCK:
             video_id = self._id(video_id)
-            if remote:
-                client, bucket = self._client()
-                raw = self._remote_json(client, bucket, f"{video_id}/metadata.json")
-                state = self._state(video_id)
-                remote_hash = _digest(raw) if raw is not None else None
-                remote_entry = next((item for item in self._remote_index(client, bucket) if item.get("id") == video_id), None)
-                if state.get("pending") and state.get("remoteChecked"):
-                    state["remoteChanged"] = bool(state.get("needsReview")) or remote_hash != state.get("remoteHash") or _digest(remote_entry) != state.get("remoteEntryHash")
-                else:
-                    # A reviewed local legacy visibility is preferable to guessing
-                    # that an unlisted upload missing visibility was public.
-                    local_entry = next((item for item in self._index() if item.get("id") == video_id), None)
-                    remote_metadata = self._metadata(video_id, raw, remote_entry or local_entry) if raw is not None else None
-                    # An offline edit may continue if the descriptive fields
-                    # still match the original version on which it was based.
-                    # Different cloud technical values are always preserved.
-                    original = state.get("offlineBase")
-                    if original is None:
-                        local_metadata = self._read(self._path(video_id, "metadata.json"))
-                        original = self._descriptive(self._metadata(video_id, local_metadata, local_entry)) if local_metadata is not None else None
-                    needs_review = bool(state.get("pending") and raw is not None and original != self._descriptive(remote_metadata))
-                    state.update(remoteHash=remote_hash, remoteEntryHash=_digest(remote_entry), remoteMetadata=remote_metadata,
-                                 localAtRefresh=_digest(self._read(self._path(video_id, "metadata.json"))), remoteChanged=False)
-                    if needs_review:
-                        state["remoteChanged"] = True
-                        state["needsReview"] = True
-                state.update(remoteChecked=True, uploaded=raw is not None)
-                if raw is not None or self._path(video_id, "metadata.json").exists() or self._path(video_id, ".editor-state.json").exists():
-                    self._save_state(video_id, state)
+            if not remote:
+                return self._view(video_id)
+            generation = self._refresh_generations.get(video_id, 0) + 1
+            self._refresh_generations[video_id] = generation
+            before_state = self._state(video_id)
+            try:
+                before_revision = self._view(video_id)["revision"]
+            except VideoNotFoundError:
+                before_revision = None
+        # Slow origin reads must not hold the local library lock. Publication
+        # still owns that lock for its complete write transaction.
+        client, bucket = self._client()
+        raw = self._remote_json(client, bucket, f"{video_id}/metadata.json")
+        remote_entry = next((item for item in self._remote_index(client, bucket) if item.get("id") == video_id), None)
+        with _LOCK:
+            if generation != self._refresh_generations.get(video_id):
+                return self._view(video_id)
+            state = self._state(video_id)
+            try:
+                current_revision = self._view(video_id)["revision"]
+            except VideoNotFoundError:
+                current_revision = None
+            baseline_changed = any(state.get(key) != before_state.get(key) for key in ("remoteHash", "remoteEntryHash", "remoteChecked"))
+            if baseline_changed or current_revision != before_revision:
+                # A local save, publish/reload, external metadata change or
+                # newer refresh invalidates this response. Keep the exact
+                # successful save revision so the next action can use it.
+                return self._view(video_id)
+            remote_hash = _digest(raw) if raw is not None else None
+            if state.get("pending") and state.get("remoteChecked"):
+                state["remoteChanged"] = bool(state.get("needsReview")) or remote_hash != state.get("remoteHash") or _digest(remote_entry) != state.get("remoteEntryHash")
+            else:
+                local_entry = next((item for item in self._index() if item.get("id") == video_id), None)
+                remote_metadata = self._metadata(video_id, raw, remote_entry or local_entry) if raw is not None else None
+                original = state.get("offlineBase")
+                if original is None:
+                    local_metadata = self._read(self._path(video_id, "metadata.json"))
+                    original = self._descriptive(self._metadata(video_id, local_metadata, local_entry)) if local_metadata is not None else None
+                needs_review = bool(state.get("pending") and raw is not None and original != self._descriptive(remote_metadata))
+                state.update(remoteHash=remote_hash, remoteEntryHash=_digest(remote_entry), remoteMetadata=remote_metadata,
+                             localAtRefresh=_digest(self._read(self._path(video_id, "metadata.json"))), remoteChanged=False)
+                if needs_review:
+                    state["remoteChanged"] = True
+                    state["needsReview"] = True
+            state.update(remoteChecked=True, uploaded=raw is not None)
+            if raw is not None or self._path(video_id, "metadata.json").exists() or self._path(video_id, ".editor-state.json").exists():
+                self._save_state(video_id, state)
             return self._view(video_id)
 
     def list_videos(self, refresh_remote: bool = False) -> list[dict]:
@@ -298,25 +317,25 @@ class VideoLibrary:
                         self._safe(child)
                         if child.is_dir() and (self._path(child.name, "metadata.json").is_file() or self._path(child.name, ".editor-state.json").is_file()):
                             ids.add(child.name)
-            if refresh_remote:
-                client, bucket = self._client()
-                try:
-                    pages = client.get_paginator("list_objects_v2").paginate(Bucket=bucket)
-                    for page in pages:
-                        for obj in page.get("Contents", []):
-                            parts = obj.get("Key", "").split("/")
-                            if len(parts) == 2 and parts[1] == "metadata.json" and VIDEO_ID.fullmatch(parts[0]):
-                                ids.add(parts[0])
-                except Exception:
-                    raise VideoLibraryError("Could not refresh the cloud video list.") from None
-            result = []
-            for video_id in sorted(ids):
-                try:
-                    video = self.get_video(video_id, remote=refresh_remote)
-                except VideoNotFoundError:
-                    continue
-                result.append({**video["metadata"], **{key: value for key, value in video.items() if key != "metadata"}})
-            return sorted(result, key=lambda item: float(item.get("createdAt") or 0), reverse=True)
+        if refresh_remote:
+            client, bucket = self._client()
+            try:
+                pages = client.get_paginator("list_objects_v2").paginate(Bucket=bucket)
+                for page in pages:
+                    for obj in page.get("Contents", []):
+                        parts = obj.get("Key", "").split("/")
+                        if len(parts) == 2 and parts[1] == "metadata.json" and VIDEO_ID.fullmatch(parts[0]):
+                            ids.add(parts[0])
+            except Exception:
+                raise VideoLibraryError("Could not refresh the cloud video list.") from None
+        result = []
+        for video_id in sorted(ids):
+            try:
+                video = self.get_video(video_id, remote=refresh_remote)
+            except VideoNotFoundError:
+                continue
+            result.append({**video["metadata"], **{key: value for key, value in video.items() if key != "metadata"}})
+        return sorted(result, key=lambda item: float(item.get("createdAt") or 0), reverse=True)
 
     def _check_revision(self, video_id: str, revision: str) -> dict:
         video = self._view(video_id)
@@ -673,18 +692,18 @@ class VideoLibrary:
                 raise VideoLibraryError("Refresh this video from cloud storage before using its online preview.")
             if range_header is not None and (not isinstance(range_header, str) or not re.fullmatch(r"bytes=(?:[0-9]+-[0-9]*|-[0-9]+)", range_header)):
                 raise VideoLibraryError("Invalid preview byte range.")
-            client, bucket = self._client()
-            kwargs = {"Range": range_header} if range_header is not None else {}
-            try:
-                return client.get_object(Bucket=bucket, Key=f"{video_id}/{relative}", **kwargs)
-            except Exception as exc:
-                if _missing(exc):
-                    raise VideoNotFoundError("This preview file is missing from cloud storage.") from None
-                if str(getattr(exc, "response", {}).get("Error", {}).get("Code", "")) in ("InvalidRange", "416"):
-                    error = VideoLibraryError("That byte range is outside the preview file.")
-                    error.status_code = 416
-                    raise error from None
-                raise VideoLibraryError("Could not read the online video preview.") from None
+        client, bucket = self._client()
+        kwargs = {"Range": range_header} if range_header is not None else {}
+        try:
+            return client.get_object(Bucket=bucket, Key=f"{video_id}/{relative}", **kwargs)
+        except Exception as exc:
+            if _missing(exc):
+                raise VideoNotFoundError("This preview file is missing from cloud storage.") from None
+            if str(getattr(exc, "response", {}).get("Error", {}).get("Code", "")) in ("InvalidRange", "416"):
+                error = VideoLibraryError("That byte range is outside the preview file.")
+                error.status_code = 416
+                raise error from None
+            raise VideoLibraryError("Could not read the online video preview.") from None
 
 
 _default_library = VideoLibrary()

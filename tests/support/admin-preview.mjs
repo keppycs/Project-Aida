@@ -106,6 +106,15 @@ export async function startAdminPreview() {
     return [id, { id, title: index === 0 ? "120 fps motion study" : `Motion study ${index + 1}`, description: "First line.\nSecond line.", tags: ["motion", "120 fps"], frameRate: index === 1 ? 60 : index === 2 ? undefined : 120, visibility: index === 0 ? "public" : "private", revision: "r1", local: true, uploaded: true, pending: false, remoteChecked: true, remoteChanged: false, has_local: true, has_remote: true, can_preview: true, preview_url: `/preview/watch.html?v=${id}&local=1&private=1`, thumbnail_url: `/api/video-media/${id}/thumbnail_sdr.webp?revision=r1`, createdAt: 1000 - index }];
   }));
   const state = { requests: [], nextListError: false, nextMutation: null, held: null, frameClip: null };
+  const detailHolds = new Map();
+  const holdDetail = (id, search, override = {}, { updateRecord = false } = {}) => {
+    let markStarted, release, markFinished;
+    const started = new Promise(resolveStarted => { markStarted = resolveStarted; });
+    const waiting = new Promise(resolveWaiting => { release = resolveWaiting; });
+    const finished = new Promise(resolveFinished => { markFinished = resolveFinished; });
+    detailHolds.set(`${id}${search}`, { markStarted, waiting, markFinished, override, release, updateRecord });
+    return { started, release, finished };
+  };
   const eventStreams = new Set();
   const emit = event => { for (const response of eventStreams) { if (!response.destroyed) response.write(`data: ${JSON.stringify(event)}\n\n`); } };
   const copy = value => structuredClone(value);
@@ -168,7 +177,15 @@ export async function startAdminPreview() {
       if (match) {
         const id = decodeURIComponent(match[1]), record = records.get(id);
         if (!record) return send(response, 404, { detail: "Video not found." });
-        if (request.method === "GET") return send(response, 200, view(id));
+        if (request.method === "GET") {
+          const key = `${id}${url.search}`, held = detailHolds.get(key);
+          if (held) {
+            held.markStarted(); await held.waiting; detailHolds.delete(key);
+            if (held.updateRecord) Object.assign(record, held.override);
+            send(response, 200, { ...view(id), ...held.override }); held.markFinished(); return;
+          }
+          return send(response, 200, view(id));
+        }
         if (request.method !== "POST") return send(response, 405, {});
         if (body.revision !== record.revision) return send(response, 409, { detail: "This saved version changed. Review it first.", current: view(id) });
         if (match[2] === "/reload") {
@@ -216,5 +233,5 @@ export async function startAdminPreview() {
     } catch (error) { send(response, 500, { detail: error.message }); }
   });
   await new Promise((resolveReady, reject) => { server.once("error", reject); server.listen(0, "127.0.0.1", resolveReady); });
-  return { origin: `http://127.0.0.1:${server.address().port}`, state, view, setFrameClip: bytes => { state.frameClip = bytes; }, setNextMutation: value => { state.nextMutation = value; }, failNextList: () => { state.nextListError = true; }, releaseHeld: () => state.held?.release(), close: () => new Promise(resolveClosed => { state.held?.release(); server.closeAllConnections(); server.close(resolveClosed); }) };
+  return { origin: `http://127.0.0.1:${server.address().port}`, state, view, holdDetail, setFrameClip: bytes => { state.frameClip = bytes; }, setNextMutation: value => { state.nextMutation = value; }, failNextList: () => { state.nextListError = true; }, releaseHeld: () => state.held?.release(), close: () => new Promise(resolveClosed => { state.held?.release(); for (const held of detailHolds.values()) held.release(); server.closeAllConnections(); server.close(resolveClosed); }) };
 }

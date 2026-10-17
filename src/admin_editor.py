@@ -169,9 +169,32 @@ def install_editor(app, root: Path, library: VideoLibrary | None = None) -> None
     app.state.video_library = library or VideoLibrary(root)
     app.state.remote_previews = set()
     app.state.local_preview_fallbacks = set()
+    app.state.preview_status_generations = {}
     app.state.editor_saving = False
     editor_lock = RLock()
+    preview_status_lock = RLock()
+    preview_status_generation = 0
     router = APIRouter()
+
+    def claim_preview_status(video_id: str | None = None) -> int:
+        nonlocal preview_status_generation
+        with preview_status_lock:
+            preview_status_generation += 1
+            token = preview_status_generation
+            if video_id is not None:
+                app.state.preview_status_generations[video_id] = token
+            return token
+
+    def set_local_preview_fallback(video_id: str, enabled: bool, token: int, *, bulk: bool = False) -> None:
+        with preview_status_lock:
+            current = app.state.preview_status_generations.get(video_id, 0)
+            if (bulk and current > token) or (not bulk and current != token):
+                return
+            app.state.preview_status_generations[video_id] = token
+            if enabled:
+                app.state.local_preview_fallbacks.add(video_id)
+            else:
+                app.state.local_preview_fallbacks.discard(video_id)
 
     def serial(function):
         @wraps(function)
@@ -221,42 +244,44 @@ def install_editor(app, root: Path, library: VideoLibrary | None = None) -> None
         return JSONResponse(payload, status_code=exc.status_code)
 
     @router.get("/api/videos")
-    @serial
     def videos(remote: bool = False, refresh: bool = False):
         service = app.state.video_library
         use_remote = remote or refresh
         if use_remote:
             idle()
+            token = claim_preview_status()
         items = service.list_videos(refresh_remote=use_remote)
         if use_remote:
-            app.state.local_preview_fallbacks.difference_update(item["id"] for item in items)
+            for item in items:
+                set_local_preview_fallback(item["id"], False, token, bulk=True)
         return {"videos": [view(item) for item in items], "remote": use_remote}
 
     @router.get("/api/videos/{video_id}")
-    @serial
     def video(video_id: str, remote: bool = False, check_online: bool = False):
         service = app.state.video_library
         if remote:
             idle()
+            token = claim_preview_status(video_id)
             result = service.get_video(video_id, remote=True)
-            app.state.local_preview_fallbacks.discard(video_id)
+            set_local_preview_fallback(video_id, False, token)
             return view(result)
         if check_online:
+            token = claim_preview_status(video_id)
             if getattr(app.state, "editor_busy", lambda: False)():
                 result = service.get_video(video_id)
-                app.state.local_preview_fallbacks.add(video_id)
+                set_local_preview_fallback(video_id, True, token)
                 return {**view(result), "online_check_error": "Online status can be checked after the current job finishes. You can edit the local copy."}
             if not b2_configured():
                 result = service.get_video(video_id)
-                app.state.local_preview_fallbacks.add(video_id)
+                set_local_preview_fallback(video_id, True, token)
                 return {**view(result), "online_check_error": "Cloud storage is not configured. You can edit the local copy."}
             try:
                 result = service.get_video(video_id, remote=True)
-                app.state.local_preview_fallbacks.discard(video_id)
+                set_local_preview_fallback(video_id, False, token)
                 return view(result)
             except VideoLibraryError:
                 result = service.get_video(video_id)
-                app.state.local_preview_fallbacks.add(video_id)
+                set_local_preview_fallback(video_id, True, token)
                 return {**view(result), "online_check_error": "Could not check online status. Your saved local edits are kept."}
         return view(service.get_video(video_id))
 
