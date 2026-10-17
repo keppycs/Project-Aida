@@ -2,11 +2,12 @@ import assert from "node:assert/strict";
 import { mkdir, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { dirname, resolve } from "node:path";
-import { FIRST_VIDEO, SECOND_VIDEO, NEW_VIDEO, STUDIO_TOKEN, TEST_IMAGE, startAdminPreview } from "./support/admin-preview.mjs";
+import { FIRST_VIDEO, SECOND_VIDEO, NEW_VIDEO, STUDIO_TOKEN, TEST_IMAGE, FRAME_FIXTURE, frameFixtureColor, makeFrameFixture, startAdminPreview } from "./support/admin-preview.mjs";
 
 const require = createRequire(import.meta.url);
 const modules = "C:/Users/keppy/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules";
 const { chromium } = require(process.env.AIDA_PLAYWRIGHT_MODULE || `${modules}/playwright`);
+const sharp = require(`${modules}/sharp`);
 const executablePath = process.env.AIDA_BROWSER_EXECUTABLE || "C:/Users/keppy/AppData/Local/Temp/codex-work/aida-player-review-1792104966336/browser/chromium-1234/chrome-win64/chrome.exe";
 const artifactRoot = process.env.AIDA_REVIEW_DIR || resolve("logs");
 await mkdir(artifactRoot, { recursive: true });
@@ -23,7 +24,8 @@ const profiles = [
   { name: "landscape844", mode: "overlay", width: 844, height: 390, touch: true },
 ].filter(profile => !requested || requested.split(",").includes(profile.name));
 assert.ok(profiles.length, "Choose an existing Studio profile.");
-const results = { fixture: "Synthetic admin APIs only; no credentials, source files, media or external network.", modes: [], profiles: [] };
+const results = { fixture: "Synthetic admin APIs and a WebCodecs120fps VP8 clip; no credentials, private source files or external network.", modes: [], profiles: [] };
+let frameClip;
 const painted = page => page.evaluate(() => new Promise(resolvePaint => requestAnimationFrame(() => requestAnimationFrame(resolvePaint))));
 const waitText = (page, selector, text) => page.waitForFunction(({ selector, text }) => document.querySelector(selector)?.textContent.includes(text), { selector, text });
 const countPOST = fixture => fixture.state.requests.filter(request => request.method === "POST").length;
@@ -76,7 +78,19 @@ async function samePreviewLink(page, fixture, id) {
   expected.searchParams.set("studio_revision", fixture.view(id).revision);
   assert.equal(await page.locator("#editor-player").getAttribute("src"), expected.href);
   assert.equal(await page.locator("#editor-preview-link").getAttribute("href"), expected.href);
+  await page.waitForFunction(expected => {
+    const iframe = document.querySelector("#editor-player");
+    try { return iframe?.contentWindow?.location.href === expected && iframe.contentDocument?.readyState === "complete" && iframe.contentDocument.querySelector("#video")?.readyState >= 2; }
+    catch { return false; }
+  }, expected.href);
   await page.frameLocator("#editor-player").locator("h1").waitFor();
+}
+
+async function reloadPreview(page) {
+  await page.locator("#editor-player").evaluate(iframe => new Promise(resolveLoad => {
+    iframe.addEventListener("load", () => resolveLoad(), { once: true });
+    iframe.contentWindow.location.reload();
+  }));
 }
 
 async function waitMutation(page, fixture, before) {
@@ -91,6 +105,186 @@ function selectedURL(page, id) {
   assert.equal(url.searchParams.has("video"), false, "Successful selection must remove the legacy video parameter");
   assert.equal(url.searchParams.get("keep"), "one two", "Selection must preserve unrelated query parameters");
   assert.equal(url.hash, "#studio", "Selection must preserve the URL fragment");
+}
+
+async function pickerFrame(page, frame) {
+  try { await page.waitForFunction(({ frame, fps }) => {
+    const canvas = document.querySelector("#edit-frame-canvas");
+    return !document.querySelector("#edit-frame-apply")?.disabled &&
+      Math.abs(Number(canvas?.dataset.frameTime) - (frame - 1) / fps) < .001 &&
+      Number(document.querySelector("#edit-frame-number")?.value) === frame;
+  }, { frame, fps: FRAME_FIXTURE.fps }); }
+  catch (error) {
+    const state = await page.evaluate(() => {
+      const video = document.querySelector("#editor-player")?.contentDocument?.querySelector("#video");
+      return { canvas: { ...document.querySelector("#edit-frame-canvas")?.dataset }, number: document.querySelector("#edit-frame-number")?.value,
+        status: document.querySelector("#edit-frame-status")?.textContent, disabled: document.querySelector("#edit-frame-apply")?.disabled,
+        video: video && { time: video.currentTime, seeking: video.seeking, readyState: video.readyState, duration: video.duration, error: video.error?.message } };
+    });
+    throw new Error(`Frame ${frame} did not become ready: ${JSON.stringify(state)}`, { cause: error });
+  }
+  const picture = await page.locator("#edit-frame-canvas").evaluate(canvas => {
+    const context = canvas.getContext("2d");
+    return { width: canvas.width, height: canvas.height, time: Number(canvas.dataset.frameTime), exact: canvas.dataset.frameExact,
+      color: [...context.getImageData(40, 67, 1, 1).data].slice(0, 3), parity: [...context.getImageData(12, 12, 1, 1).data].slice(0, 3),
+      marker: Array.from({ length: 8 }, (_, bit) => context.getImageData(14 + bit * 18, 82, 1, 1).data[0] > 128 ? 1 << bit : 0).reduce((sum, value) => sum + value, 0) };
+  });
+  assert.equal(picture.width, FRAME_FIXTURE.width);
+  assert.equal(picture.height, FRAME_FIXTURE.height);
+  assert.notEqual(picture.exact, "false", "Actual rVFC decoded-frame timing must be exact");
+  assert.equal(picture.marker, frame - 1, `Frame ${frame}: pictured binary marker must match the displayed frame number and timestamp`);
+  const expected = frameFixtureColor(frame - 1);
+  // VP8's YUV conversion may shift RGB values; timestamps and the alternating
+  // black/white patch independently distinguish the exact adjacent frame.
+  expected.forEach((value, index) => assert.ok(Math.abs(picture.color[index] - value) <= 24,
+    `Frame ${frame}: decoded canvas color ${picture.color} must match ${expected}`));
+  assert.ok(picture.parity.every(value => (frame - 1) % 2 ? value < 35 : value > 220),
+    `Frame ${frame}: alternating parity marker must distinguish adjacent real frames (${picture.parity})`);
+  return picture;
+}
+
+async function openPicker(page) {
+  if (await page.locator("#thumbnail-frame-toggle").getAttribute("aria-expanded") !== "true") await page.locator("#thumbnail-frame-toggle").click();
+  await page.locator("#edit-frame-canvas").waitFor({ state: "visible" });
+  await page.waitForFunction(() => !document.querySelector("#edit-frame-apply")?.disabled);
+}
+
+async function visualFramePicker(page, fixture) {
+  const typed = { title: await page.locator("#edit-title").inputValue(), description: await page.locator("#edit-description").inputValue(), tags: await page.locator("#edit-tags").inputValue() };
+  const originalRequests = fixture.state.requests.length;
+  await openPicker(page);
+  assert.equal(await page.locator("#edit-frame-source").count(), 0, "Picking an already uploaded frame must not ask for a local source path");
+  assert.equal(await page.locator("#edit-frame-browse").count(), 0);
+  await page.locator("#edit-frame-number").fill("61");
+  await page.locator("#edit-frame-number").press("Tab");
+  await pickerFrame(page, 61);
+  await page.locator("#edit-frame-next").click();
+  await pickerFrame(page, 62);
+  await page.locator("#edit-frame-prev").click();
+  await pickerFrame(page, 61);
+  const seeking = await page.locator("#edit-frame-seek").evaluate(slider => {
+    for (const time of [.25, 1.25, .75]) { slider.value = String(time); slider.dispatchEvent(new Event("input", { bubbles: true })); }
+    return document.querySelector("#edit-frame-apply").disabled;
+  });
+  assert.equal(seeking, true, "Capture must disable synchronously while a new frame is seeking");
+  const capturedPicture = await pickerFrame(page, 91);
+  await noOverflow(page, "Open visual frame picker");
+  await controlPresentation(page);
+  for (const selector of ["#edit-frame-prev", "#edit-frame-next", "#edit-frame-apply"]) await focusPresentation(page, selector);
+  if (await page.evaluate(() => navigator.maxTouchPoints > 0)) {
+    const slider = page.locator("#edit-frame-seek");
+    await slider.scrollIntoViewIfNeeded();
+    const rect = await slider.boundingBox();
+    const touch = await page.context().newCDPSession(page);
+    try {
+      const y = rect.y + rect.height / 2;
+      await touch.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: rect.x + rect.width * .25, y }] });
+      for (let step = 1; step <= 4; ++step) await touch.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: rect.x + rect.width * (.25 + step * .1), y }] });
+      const held = await slider.evaluate(element => { const style = getComputedStyle(element), rect = element.getBoundingClientRect(); return { x: rect.x, width: rect.width, height: rect.height, tap: style.webkitTapHighlightColor, outline: style.outlineStyle, shadow: style.boxShadow }; });
+      assert.equal(held.tap, "rgba(0, 0, 0, 0)");
+      assert.equal(held.outline, "none");
+      assert.equal(held.shadow, "none");
+      assert.ok(Math.abs(held.x - rect.x) < .5 && Math.abs(held.width - rect.width) < .5 && Math.abs(held.height - rect.height) < .5, "Held native range touch must preserve its geometry");
+      await touch.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+    } finally { await touch.detach(); }
+    await page.waitForFunction(() => !document.querySelector("#edit-frame-apply").disabled && Number(document.querySelector("#edit-frame-canvas").dataset.frameTime) > 1);
+    await pickerFrame(page, Number(await page.locator("#edit-frame-number").inputValue()));
+    await page.locator("#edit-frame-number").fill("91");
+    await page.locator("#edit-frame-number").press("Tab");
+    await pickerFrame(page, 91);
+  }
+  const viewport = page.viewportSize();
+  await page.locator("#thumbnail-frame-fields").screenshot({ path: resolve(artifacts, `frame-picker-${viewport.width}x${viewport.height}.png`) });
+  const priorThumb = fixture.view(FIRST_VIDEO).revision;
+  const before = countPOST(fixture);
+  const capturedResponse = page.waitForResponse(response => response.request().method() === "POST" && new URL(response.url()).pathname.endsWith("/thumbnail"));
+  await page.locator("#edit-frame-apply").click();
+  assert.equal((await capturedResponse).status(), 200);
+  await waitMutation(page, fixture, before);
+  const thumbnail = fixture.state.requests.filter(request => request.path.endsWith("/thumbnail")).at(-1);
+  assert.equal(thumbnail.body.content_type, "image/jpeg");
+  assert.equal(thumbnail.body.publish, false);
+  assert.equal(thumbnail.body.revision, priorThumb);
+  assert.equal(Object.hasOwn(thumbnail.body, "source_path"), false, "Frame capture must never resubmit a source video");
+  assert.equal(Object.hasOwn(thumbnail.body, "frame"), false, "The API receives the pictured JPEG rather than asking FFmpeg for a source frame");
+  const bytes = Buffer.from(thumbnail.body.image_base64, "base64");
+  assert.equal(bytes.readUInt16BE(0), 0xffd8, "Captured payload must be a real JPEG");
+  const decoded = await sharp(bytes).removeAlpha().raw().toBuffer({ resolveWithObject: true });
+  assert.equal(decoded.info.width, FRAME_FIXTURE.width);
+  assert.equal(decoded.info.height, FRAME_FIXTURE.height);
+  const pixel = (67 * decoded.info.width + 40) * decoded.info.channels;
+  capturedPicture.color.forEach((value, index) => assert.ok(Math.abs(decoded.data[pixel + index] - value) <= 10, "Saved JPEG must match the actual selected decoded frame"));
+  const capturedMarker = Array.from({ length: 8 }, (_, bit) => decoded.data[(82 * decoded.info.width + 14 + bit * 18) * decoded.info.channels] > 128 ? 1 << bit : 0).reduce((sum, value) => sum + value, 0);
+  assert.equal(capturedMarker, 90, "Captured JPEG's binary frame marker must match the picture and displayed frame91");
+  for (const [name, value] of Object.entries(typed)) assert.equal(await page.locator(`#edit-${name}`).inputValue(), value, "Frame capture must preserve typed metadata");
+  assert.equal(fixture.state.requests.slice(originalRequests).some(request => request.path === "/api/pipeline" || request.path === "/api/browse" || request.path === "/api/probe"), false,
+    "Picking a stored video frame must never restart an upload or ask for the source file");
+  await samePreviewLink(page, fixture, FIRST_VIDEO);
+  await page.waitForFunction(() => document.querySelector("#thumbnail-frame-toggle").getAttribute("aria-expanded") === "false");
+
+  await openPicker(page);
+  const beforeReload = countPOST(fixture);
+  await reloadPreview(page);
+  await page.waitForFunction(() => document.querySelector("#thumbnail-frame-toggle").getAttribute("aria-expanded") === "false");
+  assert.equal(await page.locator("#edit-frame-apply").isDisabled(), true, "Reload must invalidate the old canvas capture");
+  await samePreviewLink(page, fixture, FIRST_VIDEO);
+  await openPicker(page);
+  await page.frameLocator("#editor-player").locator("#video").evaluate(video => { video.src = "/__fixture/missing.webm"; video.load(); });
+  await page.waitForFunction(() => document.querySelector("#edit-frame-apply")?.disabled && document.querySelector("#edit-frame-status")?.textContent.trim());
+  assert.equal(countPOST(fixture), beforeReload, "Reload and decode errors must never save stale frames");
+  for (const [name, value] of Object.entries(typed)) assert.equal(await page.locator(`#edit-${name}`).inputValue(), value);
+  await reloadPreview(page);
+  await samePreviewLink(page, fixture, FIRST_VIDEO);
+}
+
+async function refreshPreservesDraft(page, fixture) {
+  await openPicker(page);
+  const currentURL = page.url(), preview = await page.locator("#editor-player").getAttribute("src");
+  const typed = await page.locator("#edit-title").inputValue();
+  const reads = fixture.state.requests.length;
+  await page.locator("#edit-frame-refresh").click();
+  await page.locator("#draft-prompt").waitFor({ state: "visible" });
+  await page.locator("#draft-keep").click();
+  assert.equal(await page.locator("#edit-title").inputValue(), typed);
+  assert.equal(page.url(), currentURL);
+  assert.equal(await page.locator("#editor-player").getAttribute("src"), preview);
+  assert.equal(fixture.state.requests.slice(reads).some(request => request.path === `/api/videos/${FIRST_VIDEO}` && request.search === "?remote=true"), false,
+    "Keeping an unsaved draft must not fetch or adopt an online revision");
+  await page.locator("#editor-save").click();
+  await waitText(page, "#editor-save-state", "website unchanged");
+  await samePreviewLink(page, fixture, FIRST_VIDEO);
+  await openPicker(page);
+  const savedRevision = fixture.view(FIRST_VIDEO).revision;
+  const savedPreview = await page.locator("#editor-player").getAttribute("src");
+  const pattern = /\/api\/videos\/studio-000\?remote=true$/;
+  let reached, release, finished, routeError;
+  const entered = new Promise(resolveEntered => { reached = resolveEntered; });
+  const held = new Promise(resolveHeld => { release = resolveHeld; });
+  const complete = new Promise(resolveComplete => { finished = resolveComplete; });
+  await page.route(pattern, async route => {
+    reached(); await held;
+    try { await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ...fixture.view(FIRST_VIDEO), revision: "r999", title: "Unseen online refresh" }) }); }
+    catch (error) { if (!route.request().failure()) routeError = error; }
+    finally { finished(); }
+  });
+  try {
+    await page.locator("#edit-frame-refresh").click();
+    await entered;
+    await page.locator("#edit-title").fill("Typing during refresh stays local");
+    release(); await complete;
+    if (routeError) throw routeError;
+    await waitText(page, "#thumbnail-status", "Refresh cancelled");
+    assert.equal(await page.locator("#edit-title").inputValue(), "Typing during refresh stays local");
+    assert.equal(page.url(), currentURL);
+    assert.equal(await page.locator("#editor-player").getAttribute("src"), savedPreview);
+    const beforeSave = countPOST(fixture);
+    await page.locator("#editor-save").click();
+    await waitMutation(page, fixture, beforeSave);
+    const saved = fixture.state.requests.filter(request => request.path === `/api/videos/${FIRST_VIDEO}` && request.method === "POST").at(-1);
+    assert.equal(saved.body.revision, savedRevision, "Typing must prevent a held refresh from adopting the unseen cloud revision");
+    assert.equal(saved.body.title, "Typing during refresh stays local");
+    await waitText(page, "#editor-save-state", "website unchanged");
+  } finally { release(); await page.unroute(pattern); }
 }
 
 async function rejectedSelectionsKeepURL(page, fixture) {
@@ -159,7 +353,7 @@ async function workflow(page, fixture) {
   await page.waitForFunction(() => document.querySelector("#edit-title").value === "120 fps motion study");
   selectedURL(page, FIRST_VIDEO);
   await rejectedSelectionsKeepURL(page, fixture);
-  assert.ok(fixture.state.requests.some(request => request.path === `/api/videos/${FIRST_VIDEO}` && request.search === "?remote=true"));
+  assert.ok(fixture.state.requests.some(request => request.path === `/api/videos/${FIRST_VIDEO}` && request.search === "?check_online=true"));
   const anchors = async () => page.evaluate(() => Object.fromEntries(["#library-search", "#library-refresh"].map(selector => { const { x, width } = document.querySelector(selector).getBoundingClientRect(); return [selector, { x, width }]; })));
   const beforeSearch = await anchors();
   await page.locator("#library-search").fill("no such video at all");
@@ -203,18 +397,8 @@ async function workflow(page, fixture) {
   assert.equal(thumb.body.content_type, "image/png");
   assert.equal(thumb.body.publish, false);
   assert.equal(thumb.headers.session, STUDIO_TOKEN);
-  await page.locator("#thumbnail-frame-toggle").click();
-  await page.locator("#edit-frame-browse").click();
-  await page.waitForFunction(() => document.querySelector("#edit-frame-source").value.includes("synthetic-source.mp4"));
-  await page.locator("#edit-frame-number").fill("321");
-  const priorThumb = fixture.view(FIRST_VIDEO).revision;
-  await page.locator("#edit-frame-apply").click();
-  await page.waitForFunction(revision => document.querySelector("#editor-player").src.includes(`studio_revision=${revision}`) === false, priorThumb);
-  await page.waitForFunction(() => document.querySelector("#editor-form").getAttribute("aria-busy") === "false");
-  thumb = fixture.state.requests.filter(request => request.path.endsWith("/thumbnail")).at(-1);
-  assert.equal(thumb.body.frame, 321);
-  assert.ok(thumb.body.source_path.endsWith("/logs/synthetic-source.mp4"));
-  assert.equal(thumb.body.revision, priorThumb);
+  await visualFramePicker(page, fixture);
+  await refreshPreservesDraft(page, fixture);
 
   fixture.setNextMutation("publish");
   const oldRevision = fixture.view(FIRST_VIDEO).revision;
@@ -265,8 +449,13 @@ async function workflow(page, fixture) {
   assert.equal(fixture.state.requests.filter(request => request.path.endsWith("/reload")).length, reloadCount, "Reviewing a stale local form must not discard saved drafts through cloud reload");
 
   await page.locator("#edit-title").fill("Unsaved selection test");
+  await openPicker(page);
+  await page.locator("#edit-frame-seek").evaluate(slider => { slider.value = "1.25"; slider.dispatchEvent(new Event("input", { bubbles: true })); });
   await page.locator(`.video-row[data-id="${SECOND_VIDEO}"]`).click();
   await page.locator("#draft-discard").click();
+  await page.waitForFunction(() => document.querySelector("#thumbnail-frame-toggle").getAttribute("aria-expanded") === "false");
+  assert.equal(await page.locator("#edit-frame-apply").isDisabled(), true, "Switching videos must invalidate pending frame captures");
+  assert.equal(await page.locator("#edit-frame-canvas").getAttribute("data-frame-time"), null);
   await page.waitForFunction(() => document.querySelector("#edit-title").value === "Motion study 2");
   selectedURL(page, SECOND_VIDEO);
   fixture.failNextList();
@@ -383,9 +572,20 @@ try {
       const context = await browser.newContext({ viewport: { width: profile.width, height: profile.height }, deviceScaleFactor: 1, hasTouch: Boolean(profile.touch), isMobile: Boolean(profile.touch) });
       const page = await context.newPage();
       const errors = [], external = [];
-      page.on("pageerror", error => errors.push(error.message));
+      page.on("pageerror", error => { errors.push(error.message); console.error(`${profile.name}: ${error.message}`); });
       await context.route("**/*", route => { if (new URL(route.request().url()).origin === fixture.origin) return route.continue(); external.push(route.request().url()); return route.abort(); });
-      await workflow(page, fixture);
+      if (!frameClip) {
+        frameClip = await makeFrameFixture(page, fixture.origin);
+        await writeFile(resolve(artifacts, "synthetic-120fps.webm"), frameClip, { flag: "wx" });
+        results.decodedFixture = { ...FRAME_FIXTURE, bytes: frameClip.length };
+      }
+      fixture.setFrameClip(frameClip);
+      try { await workflow(page, fixture); }
+      catch (error) {
+        results.failure = { profile: profile.name, errors, external, lastRequests: fixture.state.requests.slice(-10).map(({ method, path, search }) => ({ method, path, search })) };
+        await page.screenshot({ path: resolve(artifacts, `${profile.name}-failure.png`), fullPage: true });
+        throw error;
+      }
       await noOverflow(page, profile.name);
       await controlPresentation(page);
       await scrolling(page, profile);

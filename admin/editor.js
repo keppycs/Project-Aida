@@ -6,6 +6,7 @@
   const studio = { videos: [], rows: new Map(), selected: null, detail: null, baseline: "", dirty: false, busy: false, pendingAction: null, listRequest: 0, detailRequest: 0, listAbort: null, detailAbort: null, lastListRemote: false, conflictMode: null };
   const visibilityText = { private: "Private", unlisted: "Unlisted", public: "Public" };
   const editable = ["#edit-title", "#edit-description", "#edit-tags", 'input[name="edit-visibility"]'];
+  const picker = { open: false, epoch: 0, operation: 0, id: null, video: null, document: null, source: "", controller: null, observer: null, callback: null, timeout: null, paints: [], ready: false, waiting: false, presented: null, exact: false, target: 0, candidate: null };
 
   function status(selector, message, error = false) {
     const target = find(selector);
@@ -61,7 +62,8 @@
     const frameRateLabel = typeof frameRate === "number" && Number.isFinite(frameRate) && frameRate === 120 ? `${frameRate} fps` : "120 fps required";
     find("#editor-card-visibility").textContent = `${visibilityText[draft.visibility]} · ${frameRateLabel}`;
     find("#visibility-help").textContent = draft.visibility === "private" ? "Only you can preview a private video here." : draft.visibility === "unlisted" ? "Anyone with the link can watch. It won't appear in the video list." : "Everyone can watch. It appears in the video list after publishing.";
-    find("#editor-publish").textContent = draft.visibility === "public" ? "Publish changes" : "Upload changes";
+    find("#editor-publish").textContent = studio.detail?.has_remote ? "Save to website" : draft.visibility === "public" ? "Publish video" : "Upload video";
+    find("#editor-upload-note").textContent = studio.detail?.has_remote ? "Website saves update details and thumbnails. Your video stays in place." : "Saving locally doesn't change the website.";
   }
 
   function updateState(message) {
@@ -69,11 +71,11 @@
     updateCard();
     if (message) status("#editor-save-state", message);
     else if (studio.dirty) status("#editor-save-state", "Unsaved changes");
-    else status("#editor-save-state", studio.detail?.pending ? "Saved on this PC · not uploaded" : studio.detail?.has_remote ? "Saved · website is up to date" : "Saved on this PC");
+    else status("#editor-save-state", studio.detail?.pending ? studio.detail?.has_remote ? "Saved on this PC · website changes pending" : "Saved on this PC · not uploaded" : studio.detail?.has_remote ? "Saved · website is up to date" : "Saved on this PC");
     find("#editor-save").disabled = !studio.detail || studio.busy || !studio.dirty;
     find("#editor-publish").disabled = !studio.detail || studio.busy || Boolean(studio.detail.remoteChanged);
     find("#edit-thumbnail-file").disabled = studio.busy || !studio.detail;
-    find("#edit-frame-apply").disabled = studio.busy || !studio.detail;
+    refreshFrameControls();
     find("#conflict-reload").disabled = studio.busy;
     find("#editor-form").setAttribute("aria-busy", String(studio.busy));
   }
@@ -113,7 +115,7 @@
     find("#editor-empty").classList.add("hidden");
     find("#video-editor").classList.remove("hidden");
     find("#editor-heading").textContent = "Edit video";
-    find("#editor-location").textContent = detail.has_remote ? detail.pending ? "Local changes waiting to upload" : "On your website" : "On this PC";
+    find("#editor-location").textContent = detail.has_remote ? detail.pending ? "Changes waiting to save to your website" : "On your website" : "On this PC";
     showConflict(detail.remoteChanged ? "remote" : null);
     const live = find("#editor-live-link");
     live.href = `https://keppy.dev/watch?v=${encodeURIComponent(detail.id)}`;
@@ -129,9 +131,11 @@
     find("#editor-player-wrap").classList.toggle("hidden", !url);
     find("#editor-no-player").classList.toggle("hidden", Boolean(url));
     if (url && (wasID !== detail.id || player.getAttribute("src") !== url)) {
+      closeFramePicker();
       player.src = url;
       player.dataset.videoId = detail.id;
     } else if (!url) {
+      closeFramePicker();
       player.removeAttribute("src");
       delete player.dataset.videoId;
     }
@@ -163,7 +167,7 @@
     }
     row.setAttribute("aria-pressed", String(video.id === studio.selected));
     row.querySelector(".video-row-title").textContent = video.title || "Untitled video";
-    const place = video.pending ? "Not uploaded" : video.has_remote ? "Online" : "On this PC";
+    const place = video.pending ? video.has_remote ? "Changes on this PC" : "On this PC" : video.has_remote ? "Online" : "On this PC";
     row.querySelector(".video-row-meta").textContent = `${visibilityText[video.visibility] || "Private"} · ${place}`;
     const thumb = row.querySelector(".video-row-thumb");
     const url = thumbnailURL(video.thumbnail_url);
@@ -234,12 +238,13 @@
     studio.detailAbort?.abort();
     const controller = new AbortController();
     studio.detailAbort = controller;
-    const summary = studio.videos.find((video) => video.id === id);
+    closeFramePicker();
     status("#library-status", "Opening video…");
     try {
-      const detail = await request(`/api/videos/${encodeURIComponent(id)}?remote=${Boolean(summary?.has_remote)}`, { signal: controller.signal });
+      const detail = await request(`/api/videos/${encodeURIComponent(id)}?check_online=true`, { signal: controller.signal });
       if (generation !== studio.detailRequest) return;
       if (!detail || detail.id !== id || !detail.revision) throw new Error("Couldn't open this video. Refresh the library and try again.");
+      replaceSummary(detail);
       showDetail(detail);
       const url = new URL(location.href);
       url.pathname = "/edit";
@@ -248,7 +253,7 @@
       if (url.href !== location.href) history.replaceState(history.state, "", url);
       find("#draft-prompt").classList.add("hidden");
       status("#thumbnail-status", "");
-      status("#library-status", "");
+      status("#library-status", detail.online_check_error || "");
     } catch (error) {
       if (generation !== studio.detailRequest || error.name === "AbortError") return;
       status("#library-status", error.message, true);
@@ -281,7 +286,8 @@
     const id = studio.detail.id;
     const before = JSON.stringify(draft);
     studio.busy = true;
-    updateState(publish ? "Uploading changes…" : "Saving on this PC…");
+    const updatingWebsite = Boolean(studio.detail.has_remote);
+    updateState(publish ? updatingWebsite ? "Saving to website…" : "Uploading video…" : "Saving on this PC…");
     try {
       const detail = await request(`/api/videos/${encodeURIComponent(id)}`, { method: "POST", body: JSON.stringify({ ...draft, revision: studio.detail.revision, publish }) });
       if (studio.selected !== id) return;
@@ -289,7 +295,7 @@
       const changedWhileSaving = JSON.stringify(fields()) !== before;
       studio.baseline = JSON.stringify(fromDetail(detail));
       showDetail(detail, { preserveFields: changedWhileSaving });
-      updateState(changedWhileSaving ? "Saved. Your newest edits still need saving." : publish ? draft.visibility === "public" ? "Published · website updated" : "Uploaded · website updated" : "Saved on this PC · website unchanged");
+      updateState(changedWhileSaving ? "Saved. Your newest edits still need saving." : publish ? updatingWebsite ? "Saved to website · website updated" : draft.visibility === "public" ? "Published video · website updated" : "Uploaded video · website updated" : "Saved on this PC · website unchanged");
     } catch (error) { if (studio.selected === id) mutationError(error); }
     finally { studio.busy = false; refreshButtons(); }
   }
@@ -298,7 +304,7 @@
     find("#editor-save").disabled = !studio.detail || studio.busy || !studio.dirty;
     find("#editor-publish").disabled = !studio.detail || studio.busy || Boolean(studio.detail.remoteChanged);
     find("#edit-thumbnail-file").disabled = studio.busy || !studio.detail;
-    find("#edit-frame-apply").disabled = studio.busy || !studio.detail;
+    refreshFrameControls();
     find("#conflict-reload").disabled = studio.busy;
     find("#editor-form").setAttribute("aria-busy", String(studio.busy));
   }
@@ -314,7 +320,7 @@
       if (studio.selected !== id) return;
       replaceSummary(detail);
       showDetail(detail, { preserveFields: true });
-      status("#thumbnail-status", "Thumbnail saved on this PC. Upload changes to update the website.");
+      status("#thumbnail-status", detail.has_remote ? "Thumbnail saved on this PC. Save to website when ready." : "Thumbnail saved on this PC. Upload the video when ready.");
     } catch (error) { if (studio.selected === id) mutationError(error, "#thumbnail-status"); }
     finally { studio.busy = false; refreshButtons(); }
   }
@@ -332,13 +338,314 @@
     finally { event.target.value = ""; }
   }
 
+  function pickerIsCurrent(epoch = picker.epoch, operation = picker.operation) {
+    if (!picker.open || picker.epoch !== epoch || picker.operation !== operation || picker.id !== studio.selected || document.hidden || find("#panel-videos").hidden) return false;
+    const frame = find("#editor-player");
+    try {
+      return Boolean(picker.video?.isConnected && frame.dataset.videoId === picker.id && frame.contentDocument === picker.document && picker.video.ownerDocument === picker.document && new URL(picker.document.location.href).searchParams.get("v") === picker.id && (!picker.source || picker.video.currentSrc === picker.source));
+    } catch { return false; }
+  }
+
+  function pickerFPS() { return studio.detail?.frameRate === 120 ? 120 : null; }
+  function pickerDuration() { return picker.video && Number.isFinite(picker.video.duration) && picker.video.duration > 0 ? picker.video.duration : 0; }
+  function formatFrameTime(value) {
+    const milliseconds = Math.max(0, Math.round(value * 1000));
+    return `${Math.floor(milliseconds / 60000)}:${String(Math.floor(milliseconds / 1000) % 60).padStart(2, "0")}.${String(milliseconds % 1000).padStart(3, "0")}`;
+  }
+
+  function refreshFrameControls() {
+    const live = pickerIsCurrent(), duration = pickerDuration(), fps = pickerFPS();
+    const seekable = live && duration > 0 && picker.video.readyState >= 1 && !picker.video.error && !studio.busy;
+    const ready = seekable && picker.ready && !picker.video.seeking && picker.video.readyState >= 2;
+    find("#edit-frame-seek").disabled = !seekable;
+    find("#edit-frame-number").disabled = !seekable || !fps;
+    find("#edit-frame-prev").disabled = !ready || !fps || picker.presented <= 0;
+    find("#edit-frame-next").disabled = !ready || !fps || picker.presented >= duration - 1 / fps;
+    find("#edit-frame-apply").disabled = !ready;
+    find("#edit-frame-refresh").disabled = studio.busy;
+    find("#thumbnail-frame-fields").setAttribute("aria-busy", String(picker.waiting));
+    if (duration) {
+      find("#edit-frame-seek").max = String(Math.max(0, duration - (fps ? 1 / fps : .001)));
+      find("#edit-frame-seek").step = fps ? String(1 / fps) : ".001";
+      if (fps) find("#edit-frame-number").max = String(Math.max(1, Math.ceil(duration * fps)));
+    }
+  }
+
+  function cancelFrameWork() {
+    ++picker.operation;
+    if (picker.callback !== null && picker.video?.cancelVideoFrameCallback) picker.video.cancelVideoFrameCallback(picker.callback);
+    picker.callback = null;
+    clearTimeout(picker.timeout);
+    picker.timeout = null;
+    picker.paints.forEach(cancelAnimationFrame);
+    picker.paints = [];
+    picker.ready = false;
+    picker.waiting = false;
+    picker.candidate = null;
+  }
+
+  function closeFramePicker({ restoreFocus = false } = {}) {
+    cancelFrameWork();
+    ++picker.epoch;
+    picker.controller?.abort();
+    picker.controller = null;
+    picker.observer?.disconnect();
+    picker.observer = null;
+    picker.open = false;
+    picker.id = null;
+    picker.video = null;
+    picker.document = null;
+    picker.source = "";
+    picker.presented = null;
+    const canvas = find("#edit-frame-canvas");
+    canvas.hidden = true;
+    canvas.getContext("2d", { colorSpace: "srgb" })?.clearRect(0, 0, canvas.width, canvas.height);
+    delete canvas.dataset.frameTime;
+    delete canvas.dataset.frameExact;
+    find("#thumbnail-frame-fields").classList.add("hidden");
+    find("#thumbnail-frame-toggle").setAttribute("aria-expanded", "false");
+    refreshFrameControls();
+    if (restoreFocus) find("#thumbnail-frame-toggle").focus({ preventScroll: true });
+  }
+
+  function frameUnavailable(message) {
+    cancelFrameWork();
+    const canvas = find("#edit-frame-canvas");
+    canvas.hidden = true;
+    delete canvas.dataset.frameTime;
+    delete canvas.dataset.frameExact;
+    const placeholder = find("#edit-frame-placeholder");
+    placeholder.textContent = message;
+    placeholder.hidden = false;
+    status("#edit-frame-status", message, true);
+    refreshFrameControls();
+  }
+
+  function paintDecodedFrame(time, exact, epoch, operation) {
+    if (!pickerIsCurrent(epoch, operation) || picker.video.seeking || picker.video.readyState < 2 || !picker.video.videoWidth || !picker.video.videoHeight || !Number.isFinite(time)) return;
+    const canvas = find("#edit-frame-canvas");
+    const scale = Math.min(1, 1920 / picker.video.videoWidth, 1080 / picker.video.videoHeight);
+    try {
+      canvas.width = Math.max(1, Math.round(picker.video.videoWidth * scale));
+      canvas.height = Math.max(1, Math.round(picker.video.videoHeight * scale));
+      const context = canvas.getContext("2d", { colorSpace: "srgb", alpha: false });
+      if (!context) throw new Error("Canvas unavailable");
+      context.drawImage(picker.video, 0, 0, canvas.width, canvas.height);
+      // Verify that this frame can actually be exported before enabling Use.
+      context.getImageData(0, 0, 1, 1);
+    } catch {
+      frameUnavailable("This video frame couldn't be copied. Refresh online and try again, or choose an image.");
+      return;
+    }
+    clearTimeout(picker.timeout);
+    picker.timeout = null;
+    picker.ready = true;
+    picker.waiting = false;
+    picker.presented = time;
+    picker.exact = exact;
+    canvas.hidden = false;
+    canvas.dataset.frameTime = String(time);
+    canvas.dataset.frameExact = String(exact);
+    find("#edit-frame-placeholder").hidden = true;
+    find("#edit-frame-time").textContent = formatFrameTime(time);
+    if (!picker.scrubbing) find("#edit-frame-seek").value = String(time);
+    const fps = pickerFPS();
+    find("#edit-frame-number").value = fps ? String(Math.max(1, (exact ? Math.round(time * fps) : Math.floor(time * fps + 1e-6)) + 1)) : "";
+    find("#edit-frame-number-label").textContent = fps ? exact ? "Frame number" : "Approximate frame" : "Frame number · requires 120 fps";
+    status("#edit-frame-status", exact ? "This is the frame your thumbnail will use. SDR preview." : "Decoded frame preview. Frame number is approximate in this browser. SDR preview.");
+    refreshFrameControls();
+  }
+
+  function fallbackDecodedFrame(epoch, operation) {
+    picker.paints.push(requestAnimationFrame(() => {
+      picker.paints.push(requestAnimationFrame(() => {
+        if (pickerIsCurrent(epoch, operation) && !picker.ready) paintDecodedFrame(picker.video.currentTime, false, epoch, operation);
+      }));
+    }));
+  }
+
+  function presentedTimeMatchesTarget(time) {
+    if (!Number.isFinite(time)) return false;
+    const fps = pickerFPS();
+    return fps ? Math.round(time * fps) === Math.floor(picker.target * fps + 1e-6) : Math.abs(time - picker.target) <= .001;
+  }
+
+  function requestPresentedFrame(epoch, operation) {
+    const video = picker.video;
+    if (!pickerIsCurrent(epoch, operation) || typeof video.requestVideoFrameCallback !== "function") return;
+    picker.callback = video.requestVideoFrameCallback((_now, metadata) => {
+      picker.callback = null;
+      if (!pickerIsCurrent(epoch, operation)) return;
+      // A callback queued before a seek can still carry the previous frame.
+      // Its PTS must match this seek before it can label a canvas snapshot.
+      if (!presentedTimeMatchesTarget(metadata.mediaTime)) { requestPresentedFrame(epoch, operation); return; }
+      picker.candidate = metadata.mediaTime;
+      if (!video.seeking) paintDecodedFrame(metadata.mediaTime, true, epoch, operation);
+    });
+  }
+
+  function waitForDecodedFrame(target) {
+    cancelFrameWork();
+    picker.waiting = true;
+    picker.target = target;
+    const epoch = picker.epoch, operation = picker.operation, video = picker.video;
+    const placeholder = find("#edit-frame-placeholder");
+    placeholder.textContent = "Loading frame…";
+    placeholder.hidden = false;
+    status("#edit-frame-status", "Loading frame…");
+    requestPresentedFrame(epoch, operation);
+    picker.timeout = setTimeout(() => {
+      if (!pickerIsCurrent(epoch, operation)) return;
+      if (!video.seeking && video.readyState >= 2) fallbackDecodedFrame(epoch, operation);
+      else frameUnavailable("The video is still loading. Refresh online and try again.");
+    }, 8000);
+    refreshFrameControls();
+  }
+
+  function seekFrame(time) {
+    if (!pickerIsCurrent() || studio.busy || !Number.isFinite(time) || !pickerDuration()) return;
+    const fps = pickerFPS();
+    const end = Math.max(0, pickerDuration() - (fps ? 1 / fps : .001));
+    const start = Math.min(end, Math.max(0, time));
+    // Seek within the selected frame's presentation interval, rather than
+    // accidentally landing on the previous interval at a rounded boundary.
+    let target = fps ? (Math.round(start * fps) + .25) / fps : start;
+    target = Math.min(pickerDuration() - .00001, target);
+    if (Math.abs(target - picker.video.currentTime) < .00001) target = Math.max(0, target - .0001);
+    picker.video.pause();
+    waitForDecodedFrame(target);
+    try { picker.video.currentTime = target; }
+    catch { frameUnavailable("This part of the video isn't ready. Try another position or refresh online."); }
+  }
+
+  function attachFrameVideo() {
+    if (!picker.open || picker.id !== studio.selected) return;
+    const frame = find("#editor-player");
+    let doc, video;
+    try { doc = frame.contentDocument; video = doc?.getElementById("video"); }
+    catch { frameUnavailable("Refresh online to load this video's preview, then choose a frame."); return; }
+    if (!video || video.tagName !== "VIDEO") {
+      status("#edit-frame-status", "Waiting for the video preview. Refresh online if it doesn't load.");
+      return;
+    }
+    picker.controller?.abort();
+    picker.controller = new AbortController();
+    picker.observer?.disconnect();
+    picker.document = doc;
+    picker.video = video;
+    picker.source = video.currentSrc;
+    const epoch = picker.epoch, options = { signal: picker.controller.signal };
+    picker.observer = new MutationObserver(() => {
+      if (picker.open && picker.epoch === epoch && doc.getElementById("video") !== video) frameUnavailable("The video preview changed. Close this picker and choose a frame again.");
+    });
+    picker.observer.observe(video.parentElement, { childList: true });
+    const ready = () => {
+      if (!picker.open || picker.epoch !== epoch || picker.id !== studio.selected) return;
+      picker.source = video.currentSrc;
+      refreshFrameControls();
+      if (video.error) { frameUnavailable("The video couldn't load. Refresh online and try again."); return; }
+      if (video.readyState >= 2 && !video.seeking && !picker.waiting && !picker.ready) seekFrame(video.currentTime);
+    };
+    video.addEventListener("loadedmetadata", ready, options);
+    video.addEventListener("loadeddata", ready, options);
+    video.addEventListener("canplay", ready, options);
+    video.addEventListener("durationchange", refreshFrameControls, options);
+    video.addEventListener("play", () => { if (pickerIsCurrent(epoch)) video.pause(); }, options);
+    video.addEventListener("seeking", () => {
+      if (!pickerIsCurrent(epoch)) return;
+      video.pause();
+      if (!picker.waiting || Math.abs(picker.target - video.currentTime) > .0001) waitForDecodedFrame(video.currentTime);
+    }, options);
+    video.addEventListener("seeked", () => {
+      if (!pickerIsCurrent(epoch)) return;
+      if (picker.candidate !== null && presentedTimeMatchesTarget(picker.candidate)) paintDecodedFrame(picker.candidate, true, epoch, picker.operation);
+      else fallbackDecodedFrame(epoch, picker.operation);
+    }, options);
+    for (const name of ["emptied", "loadstart"]) video.addEventListener(name, () => {
+      if (picker.epoch !== epoch) return;
+      cancelFrameWork();
+      picker.source = video.currentSrc;
+      find("#edit-frame-canvas").hidden = true;
+      find("#edit-frame-placeholder").hidden = false;
+      find("#edit-frame-placeholder").textContent = "Loading video…";
+      status("#edit-frame-status", "Loading video…");
+      refreshFrameControls();
+    }, options);
+    video.addEventListener("error", () => { if (picker.epoch === epoch) frameUnavailable("The video couldn't load. Refresh online and try again."); }, options);
+    video.pause();
+    ready();
+  }
+
+  function openFramePicker() {
+    closeFramePicker();
+    if (!studio.detail) return;
+    picker.open = true;
+    picker.id = studio.selected;
+    picker.scrubbing = false;
+    find("#thumbnail-frame-fields").classList.remove("hidden");
+    find("#thumbnail-frame-toggle").setAttribute("aria-expanded", "true");
+    find("#edit-frame-placeholder").textContent = "Loading video…";
+    find("#edit-frame-placeholder").hidden = false;
+    find("#edit-frame-time").textContent = "0:00.000";
+    find("#edit-frame-number").value = "";
+    status("#edit-frame-status", "Loading this video's frames…");
+    if (!studio.detail.can_preview) { frameUnavailable("Refresh online to load this video's preview, then choose a frame."); return; }
+    const epoch = picker.epoch;
+    picker.timeout = setTimeout(() => {
+      if (picker.open && picker.epoch === epoch && picker.id === studio.selected && !picker.ready) frameUnavailable("The video preview hasn't loaded. Refresh online and try again.");
+    }, 8000);
+    attachFrameVideo();
+    refreshFrameControls();
+  }
+
+  function seekFrameNumber() {
+    const raw = find("#edit-frame-number").value;
+    const frame = Number(raw), max = Math.ceil(pickerDuration() * 120);
+    if (!/^\d+$/.test(raw) || !Number.isSafeInteger(frame) || frame < 1 || frame > max || !pickerFPS()) { status("#edit-frame-status", "Choose a frame number within this video.", true); return; }
+    if (picker.ready && picker.exact && frame === Math.round(picker.presented * 120) + 1) return;
+    if (picker.waiting && frame === Math.floor(picker.target * 120 + 1e-6) + 1) return;
+    seekFrame((frame - 1) / 120);
+  }
+
   async function useFrame() {
-    const source = find("#edit-frame-source").value.trim().replace(/^["']|["']$/g, "");
-    const rawFrame = find("#edit-frame-number").value;
-    const frame = Number(rawFrame);
-    if (!source) { status("#thumbnail-status", "Choose a source video first.", true); return; }
-    if (!/^\d+$/.test(rawFrame) || !Number.isSafeInteger(frame) || frame < 1) { status("#thumbnail-status", "Use a whole frame number, starting at 1.", true); return; }
-    await saveThumbnail({ source_path: source, frame });
+    if (!pickerIsCurrent() || !picker.ready || picker.video.seeking || studio.busy) return;
+    const epoch = picker.epoch, operation = picker.operation, id = picker.id, presented = picker.presented;
+    const canvas = find("#edit-frame-canvas");
+    try {
+      const blob = await new Promise(resolveBlob => canvas.toBlob(resolveBlob, "image/jpeg", .9));
+      if (!blob) throw new Error("Couldn't prepare this frame. Try another frame.");
+      const base64 = await new Promise((resolveData, reject) => { const reader = new FileReader(); reader.onload = () => resolveData(String(reader.result).split(",")[1]); reader.onerror = () => reject(new Error("Couldn't prepare this frame.")); reader.readAsDataURL(blob); });
+      if (!pickerIsCurrent(epoch, operation) || !picker.ready || picker.presented !== presented || picker.video.seeking || id !== studio.selected) return;
+      const stamp = Math.round(presented * 1000);
+      await saveThumbnail({ image_base64: base64, content_type: "image/jpeg", filename: `frame-${id}-${stamp}.jpg` });
+    } catch (error) { if (pickerIsCurrent(epoch, operation)) status("#edit-frame-status", error.message, true); }
+  }
+
+  function refreshFrameVideo() {
+    if (!studio.detail || studio.busy) return;
+    withDraftGuard(refreshSelectedFrameVideo);
+  }
+
+  async function refreshSelectedFrameVideo() {
+    const id = studio.selected;
+    const generation = ++studio.detailRequest;
+    studio.detailAbort?.abort();
+    const controller = new AbortController();
+    studio.detailAbort = controller;
+    closeFramePicker();
+    status("#thumbnail-status", "Refreshing this video…");
+    try {
+      const detail = await request(`/api/videos/${encodeURIComponent(id)}?remote=true`, { signal: controller.signal });
+      if (studio.selected !== id || generation !== studio.detailRequest) return;
+      replaceSummary(detail);
+      showDetail(detail);
+      openFramePicker();
+      status("#thumbnail-status", "");
+    } catch (error) {
+      if (studio.selected !== id) return;
+      if (error.name === "AbortError") status("#thumbnail-status", "Refresh cancelled. Your edits are still here.");
+      else if (generation === studio.detailRequest) status("#thumbnail-status", error.message, true);
+    } finally { if (generation === studio.detailRequest) studio.detailAbort = null; }
   }
 
   async function reloadLatest() {
@@ -423,9 +730,21 @@
     find("#conflict-reload").addEventListener("click", reloadLatest);
     find("#edit-thumbnail-file").addEventListener("change", chooseThumbnail);
     find("#editor-thumb-preview").addEventListener("error", () => { find("#editor-thumb-preview").hidden = true; find("#editor-thumb-placeholder").hidden = false; });
-    find("#thumbnail-frame-toggle").addEventListener("click", () => { const button = find("#thumbnail-frame-toggle"); const open = button.getAttribute("aria-expanded") !== "true"; button.setAttribute("aria-expanded", String(open)); find("#thumbnail-frame-fields").classList.toggle("hidden", !open); if (open && !find("#edit-frame-source").value) find("#edit-frame-source").value = find("#source-path").value; });
-    find("#edit-frame-browse").addEventListener("click", async () => { try { const result = await request("/api/browse", { method: "POST", body: "{}" }); if (result.path) find("#edit-frame-source").value = result.path; } catch (error) { status("#thumbnail-status", error.message, true); } });
+    find("#thumbnail-frame-toggle").addEventListener("click", () => { if (picker.open) closeFramePicker({ restoreFocus: true }); else openFramePicker(); });
+    find("#edit-frame-close").addEventListener("click", () => closeFramePicker({ restoreFocus: true }));
+    find("#edit-frame-seek").addEventListener("input", (event) => seekFrame(Number(event.target.value)));
+    find("#edit-frame-seek").addEventListener("pointerdown", () => { picker.scrubbing = true; });
+    for (const event of ["pointerup", "pointercancel"]) find("#edit-frame-seek").addEventListener(event, () => { picker.scrubbing = false; if (picker.ready) find("#edit-frame-seek").value = String(picker.presented); });
+    find("#edit-frame-number").addEventListener("change", seekFrameNumber);
+    find("#edit-frame-number").addEventListener("keydown", (event) => { if (event.key === "Enter") { event.preventDefault(); seekFrameNumber(); } });
+    find("#edit-frame-prev").addEventListener("click", () => { if (picker.ready && pickerFPS()) seekFrame(Math.max(0, Math.round(picker.presented * 120) - 1) / 120); });
+    find("#edit-frame-next").addEventListener("click", () => { if (picker.ready && pickerFPS()) seekFrame((Math.round(picker.presented * 120) + 1) / 120); });
     find("#edit-frame-apply").addEventListener("click", useFrame);
+    find("#edit-frame-refresh").addEventListener("click", refreshFrameVideo);
+    find("#thumbnail-frame-fields").addEventListener("keydown", (event) => { if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); closeFramePicker({ restoreFocus: true }); } });
+    find("#editor-player").addEventListener("load", () => { if (!picker.open) return; if (picker.document) closeFramePicker(); else attachFrameVideo(); });
+    window.addEventListener("aida:tab-change", (event) => { if (event.detail.name !== "videos") closeFramePicker(); });
+    document.addEventListener("visibilitychange", () => { if (document.hidden) closeFramePicker(); });
     window.addEventListener("beforeunload", (event) => { if (!studio.dirty && !studio.busy) return; event.preventDefault(); event.returnValue = ""; });
     window.addEventListener("aida:encode-done", (event) => { if (event.detail.ok) openVideos(event.detail.video_id || null); });
     window.addEventListener("aida:open-videos", () => openVideos());

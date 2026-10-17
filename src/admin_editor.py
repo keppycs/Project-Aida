@@ -16,6 +16,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 
+from config import b2_configured
 from video_library import MEDIA, THUMBNAILS, VIDEO_ID, VideoLibrary, VideoLibraryError, VideoNotFoundError, VideoConflictError
 
 
@@ -167,6 +168,7 @@ def frame_image(source_path: str, frame: int) -> bytes:
 def install_editor(app, root: Path, library: VideoLibrary | None = None) -> None:
     app.state.video_library = library or VideoLibrary(root)
     app.state.remote_previews = set()
+    app.state.local_preview_fallbacks = set()
     app.state.editor_saving = False
     editor_lock = RLock()
     router = APIRouter()
@@ -225,14 +227,38 @@ def install_editor(app, root: Path, library: VideoLibrary | None = None) -> None
         use_remote = remote or refresh
         if use_remote:
             idle()
-        return {"videos": [view(item) for item in service.list_videos(refresh_remote=use_remote)], "remote": use_remote}
+        items = service.list_videos(refresh_remote=use_remote)
+        if use_remote:
+            app.state.local_preview_fallbacks.difference_update(item["id"] for item in items)
+        return {"videos": [view(item) for item in items], "remote": use_remote}
 
     @router.get("/api/videos/{video_id}")
     @serial
-    def video(video_id: str, remote: bool = False):
+    def video(video_id: str, remote: bool = False, check_online: bool = False):
+        service = app.state.video_library
         if remote:
             idle()
-        return view(app.state.video_library.get_video(video_id, remote=remote))
+            result = service.get_video(video_id, remote=True)
+            app.state.local_preview_fallbacks.discard(video_id)
+            return view(result)
+        if check_online:
+            if getattr(app.state, "editor_busy", lambda: False)():
+                result = service.get_video(video_id)
+                app.state.local_preview_fallbacks.add(video_id)
+                return {**view(result), "online_check_error": "Online status can be checked after the current job finishes. You can edit the local copy."}
+            if not b2_configured():
+                result = service.get_video(video_id)
+                app.state.local_preview_fallbacks.add(video_id)
+                return {**view(result), "online_check_error": "Cloud storage is not configured. You can edit the local copy."}
+            try:
+                result = service.get_video(video_id, remote=True)
+                app.state.local_preview_fallbacks.discard(video_id)
+                return view(result)
+            except VideoLibraryError:
+                result = service.get_video(video_id)
+                app.state.local_preview_fallbacks.add(video_id)
+                return {**view(result), "online_check_error": "Could not check online status. Your saved local edits are kept."}
+        return view(service.get_video(video_id))
 
     @router.post("/api/videos/{video_id}")
     @serial
@@ -293,6 +319,7 @@ def install_editor(app, root: Path, library: VideoLibrary | None = None) -> None
         service = app.state.video_library
         details = service.get_video(video_id)
         prefer_remote = (details.get("preferRemoteAssets") and video_id in app.state.remote_previews
+                         and video_id not in app.state.local_preview_fallbacks
                          and asset not in details.get("pendingThumbnails", []))
         try:
             path = service.local_asset_path(video_id, asset)

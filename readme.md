@@ -121,13 +121,20 @@ Studio uses Aida's yellow/dark design. **New upload** selects a source, creates
 above the 120 fps target are rejected rather than relabelled or duplicated.
 
 **Videos** edits existing titles, descriptions, tags, visibility and thumbnails.
-Choose an image or extract a source frame, then review the thumbnail/card and
-the existing watch-page player. **Save locally** keeps a draft on this PC;
-**Upload changes / Publish changes** sends the reviewed draft to B2. These
-actions never re-encode an existing video. **Refresh online** includes private
-and unlisted uploads, and authenticated local previews work without exposing
-storage credentials to the player. The optional editor on the public website
-is a later step and is not enabled by this local Studio release.
+Choose an image or open the visual frame picker to scrub the existing video,
+step through its 120 fps frames and preview the thumbnail before saving it.
+An uploaded video uses the authenticated local preview; choosing its original
+source file again is unnecessary. The picker saves an SDR still from the
+decoded video without changing the video renditions.
+
+Opening a video checks B2 when configured, including older uploads without a
+saved editor state. A failed online check leaves local drafts available.
+**Save locally** keeps a draft on this PC; **Save to website** updates an
+existing upload's details and changed thumbnail without resending its video.
+A new local video still needs its first upload. **Refresh online** includes
+private and unlisted uploads, and local previews keep storage credentials out
+of the player. The optional editor on the public website is a later step and
+is not enabled by this local Studio release.
 
 Cloud refreshes and revision checks detect stale forms and changed online
 details. Failed uploads keep a retryable draft. This is a single-owner local

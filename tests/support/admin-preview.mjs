@@ -10,14 +10,102 @@ export const SECOND_VIDEO = "studio-001";
 export const NEW_VIDEO = "studio-new";
 export const TEST_IMAGE = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aXioAAAAASUVORK5CYII=", "base64");
 
-// All metadata, credentials, source paths and media here are synthetic. The
-// fixture reads only the four admin source files and never contacts B2/CDN.
+const FIXTURE_FPS = 120;
+export const FRAME_FIXTURE = { fps: FIXTURE_FPS, frames: 240, width: 160, height: 90 };
+export function frameFixtureColor(index) { return [30 + index % 180, 40 + index * 5 % 160, 50 + index * 11 % 150]; }
+
+function ebmlSize(value) {
+  for (let size = 1; size <= 8; ++size) {
+    if (BigInt(value) >= (1n << BigInt(size * 7)) - 1n) continue;
+    let encoded = BigInt(value) | 1n << BigInt(size * 7);
+    const result = Buffer.alloc(size);
+    for (let index = size - 1; index >= 0; --index) { result[index] = Number(encoded & 255n); encoded >>= 8n; }
+    return result;
+  }
+  throw new Error("Synthetic WebM element is too large");
+}
+function uint(value) {
+  let encoded = BigInt(value), size = 1;
+  while (encoded >= 1n << BigInt(size * 8)) ++size;
+  const result = Buffer.alloc(size);
+  for (let index = size - 1; index >= 0; --index) { result[index] = Number(encoded & 255n); encoded >>= 8n; }
+  return result;
+}
+function element(id, ...children) {
+  const body = Buffer.concat(children);
+  return Buffer.concat([Buffer.from(id, "hex"), ebmlSize(body.length), body]);
+}
+function muxFrames(frames) {
+  const { fps, width, height } = FRAME_FIXTURE;
+  const header = element("1a45dfa3", element("4286", uint(1)), element("42f7", uint(1)),
+    element("42f2", uint(4)), element("42f3", uint(8)), element("4282", Buffer.from("webm")),
+    element("4287", uint(2)), element("4285", uint(2)));
+  const duration = Buffer.alloc(8);
+  duration.writeDoubleBE(frames.length * 1_000_000 / fps);
+  const info = element("1549a966", element("2ad7b1", uint(1000)), element("4489", duration),
+    element("4d80", Buffer.from("Aida synthetic120")), element("5741", Buffer.from("Aida synthetic120")));
+  const tracks = element("1654ae6b", element("ae", element("d7", uint(1)), element("73c5", uint(1)),
+    element("83", uint(1)), element("86", Buffer.from("V_VP8")), element("23e383", uint(Math.round(1e9 / fps))),
+    element("e0", element("b0", uint(width)), element("ba", uint(height)))));
+  let offset = info.length + tracks.length;
+  const cuePoints = [];
+  const clusters = frames.map(frame => {
+    cuePoints.push(element("bb", element("b3", uint(frame.timestamp)),
+      element("b7", element("f7", uint(1)), element("f1", uint(offset)))));
+    const cluster = element("1f43b675", element("e7", uint(frame.timestamp)),
+      element("a3", Buffer.from([0x81, 0, 0, 0x80]), Buffer.from(frame.bytes)));
+    offset += cluster.length;
+    return cluster;
+  });
+  return Buffer.concat([header, element("18538067", info, tracks, ...clusters, element("1c53bb6b", ...cuePoints))]);
+}
+
+/** Real distinct VP8 frames at120Hz, generated through WebCodecs without FFmpeg. */
+export async function makeFrameFixture(page, origin) {
+  await page.goto(`${origin}/__fixture/encoder`);
+  const frames = await page.evaluate(async specification => {
+    const { fps, frames: count, width, height } = specification;
+    const config = { codec: "vp8", width, height, bitrate: 2_000_000, framerate: fps, latencyMode: "realtime", hardwareAcceleration: "prefer-software" };
+    if (!globalThis.VideoEncoder || !(await VideoEncoder.isConfigSupported(config)).supported) throw new Error("WebCodecs VP8 encoding is required for decoded frame-picker verification");
+    const canvas = document.createElement("canvas");
+    canvas.width = width; canvas.height = height;
+    const context = canvas.getContext("2d");
+    const chunks = [];
+    let encodeError;
+    const encoder = new VideoEncoder({ output: chunk => { const bytes = new Uint8Array(chunk.byteLength); chunk.copyTo(bytes); chunks.push({ timestamp: chunk.timestamp, bytes: [...bytes] }); }, error: error => { encodeError = error; } });
+    encoder.configure(config);
+    for (let index = 0; index < count; ++index) {
+      context.fillStyle = `rgb(${30 + index % 180},${40 + index * 5 % 160},${50 + index * 11 % 150})`;
+      context.fillRect(0, 0, width, height);
+      context.fillStyle = index % 2 ? "#000" : "#fff";
+      context.fillRect(0, 0, 24, 24);
+      context.fillStyle = "#000"; context.font = "18px monospace";
+      context.fillText(String(index + 1), 55, 50);
+      for (let bit = 0; bit < 8; ++bit) {
+        context.fillStyle = index & 1 << bit ? "#fff" : "#000";
+        context.fillRect(8 + bit * 18, 76, 12, 12);
+      }
+      const timestamp = Math.floor(index * 1e6 / fps), next = Math.floor((index + 1) * 1e6 / fps);
+      const frame = new VideoFrame(canvas, { timestamp, duration: next - timestamp });
+      encoder.encode(frame, { keyFrame: true }); frame.close();
+      if (encoder.encodeQueueSize > 20) await encoder.flush();
+    }
+    await encoder.flush(); encoder.close();
+    if (encodeError) throw encodeError;
+    if (chunks.length !== count) throw new Error("Synthetic encoder dropped distinct test frames");
+    return chunks;
+  }, FRAME_FIXTURE);
+  return muxFrames(frames.sort((a, b) => a.timestamp - b.timestamp));
+}
+
+// All metadata, credentials, source paths and decoded media here are synthetic.
+// The fixture reads only the admin source files and never contacts B2/CDN.
 export async function startAdminPreview() {
   const records = new Map(Array.from({ length: 28 }, (_, index) => {
     const id = `studio-${String(index).padStart(3, "0")}`;
     return [id, { id, title: index === 0 ? "120 fps motion study" : `Motion study ${index + 1}`, description: "First line.\nSecond line.", tags: ["motion", "120 fps"], frameRate: index === 1 ? 60 : index === 2 ? undefined : 120, visibility: index === 0 ? "public" : "private", revision: "r1", local: true, uploaded: true, pending: false, remoteChecked: true, remoteChanged: false, has_local: true, has_remote: true, can_preview: true, preview_url: `/preview/watch.html?v=${id}&local=1&private=1`, thumbnail_url: `/api/video-media/${id}/thumbnail_sdr.webp?revision=r1`, createdAt: 1000 - index }];
   }));
-  const state = { requests: [], nextListError: false, nextMutation: null, held: null };
+  const state = { requests: [], nextListError: false, nextMutation: null, held: null, frameClip: null };
   const eventStreams = new Set();
   const emit = event => { for (const response of eventStreams) { if (!response.destroyed) response.write(`data: ${JSON.stringify(event)}\n\n`); } };
   const copy = value => structuredClone(value);
@@ -36,6 +124,20 @@ export async function startAdminPreview() {
   const server = createServer(async (request, response) => {
     try {
       const url = new URL(request.url, "http://127.0.0.1");
+      if (url.pathname === "/__fixture/encoder") return send(response, 200, "<!doctype html><title>Synthetic WebCodecs fixture</title>", "text/html");
+      if (url.pathname === "/__fixture/frame.webm") {
+        if (!state.frameClip) return send(response, 503, { detail: "Synthetic frame fixture is not ready" });
+        let start = 0, end = state.frameClip.length - 1;
+        const range = request.headers.range;
+        if (range) {
+          const match = /^bytes=([0-9]+)-([0-9]*)$/.exec(range);
+          if (!match || Number(match[1]) > end) { response.writeHead(416).end(); return; }
+          start = Number(match[1]); end = Math.min(end, match[2] ? Number(match[2]) : end);
+        }
+        response.writeHead(range ? 206 : 200, { "content-type": "video/webm", "cache-control": "no-store", "accept-ranges": "bytes", "content-length": end - start + 1,
+          ...(range ? { "content-range": `bytes ${start}-${end}/${state.frameClip.length}` } : {}) });
+        return response.end(request.method === "HEAD" ? undefined : state.frameClip.subarray(start, end + 1));
+      }
       let body = null;
       if (request.method === "POST") {
         const chunks = [];
@@ -102,7 +204,7 @@ export async function startAdminPreview() {
         return send(response, 200, view(id));
       }
       if (url.pathname.startsWith("/api/video-media/")) return send(response, 200, TEST_IMAGE, "image/png");
-      if (url.pathname === "/preview/watch.html") return send(response, 200, '<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><style>*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}body{margin:0;background:#101112;color:#fafafa;font:16px system-ui}header,main{padding:20px}header{color:#e8ff47}section{aspect-ratio:16/9;background:#282b2f;display:grid;place-items:center}p{line-height:1.6}footer{padding:20px;min-height:250px}</style></head><body><header>Aida · synthetic watch preview</header><main><section>120 fps preview fixture</section><h1>Video preview</h1><p>This is a synthetic page, without video files or network media.</p></main><footer>Full watch-page preview.</footer></body></html>', "text/html; charset=utf-8");
+      if (url.pathname === "/preview/watch.html") return send(response, 200, `<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><style>*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}body{margin:0;background:#101112;color:#fafafa;font:16px system-ui}header,main{padding:20px}header{color:#e8ff47}video{width:100%;aspect-ratio:16/9;background:#282b2f}p{line-height:1.6}footer{padding:20px;min-height:250px}</style></head><body><header>Aida · synthetic watch preview</header><main><video id="video" muted playsinline preload="auto" src="/__fixture/frame.webm?v=${encodeURIComponent(url.searchParams.get("v") || "")}"></video><h1>Video preview</h1><p>240 distinct synthetic frames, encoded at120fps for local decoder verification.</p></main><footer>Full watch-page preview.</footer></body></html>`, "text/html; charset=utf-8");
       const staticFiles = { "/": "index.html", "/edit": "index.html", "/static/admin.css": "admin.css", "/static/admin.js": "admin.js", "/static/editor.js": "editor.js" };
       const name = staticFiles[url.pathname];
       if (name) {
@@ -114,5 +216,5 @@ export async function startAdminPreview() {
     } catch (error) { send(response, 500, { detail: error.message }); }
   });
   await new Promise((resolveReady, reject) => { server.once("error", reject); server.listen(0, "127.0.0.1", resolveReady); });
-  return { origin: `http://127.0.0.1:${server.address().port}`, state, view, setNextMutation: value => { state.nextMutation = value; }, failNextList: () => { state.nextListError = true; }, releaseHeld: () => state.held?.release(), close: () => new Promise(resolveClosed => { state.held?.release(); server.closeAllConnections(); server.close(resolveClosed); }) };
+  return { origin: `http://127.0.0.1:${server.address().port}`, state, view, setFrameClip: bytes => { state.frameClip = bytes; }, setNextMutation: value => { state.nextMutation = value; }, failNextList: () => { state.nextListError = true; }, releaseHeld: () => state.held?.release(), close: () => new Promise(resolveClosed => { state.held?.release(); server.closeAllConnections(); server.close(resolveClosed); }) };
 }

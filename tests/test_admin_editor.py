@@ -105,17 +105,25 @@ class EditorHTTPTests(unittest.TestCase):
         (self.video / "AV1" / "init_0.mp4").write_bytes(bytes(range(128)))
         self.previous_library = admin_app.app.state.video_library
         self.previous_previews = admin_app.app.state.remote_previews
+        self.previous_fallbacks = admin_app.app.state.local_preview_fallbacks
         self.previous_busy = admin_app.app.state.editor_busy
         admin_app.app.state.video_library = VideoLibrary(self.root)
         admin_app.app.state.remote_previews = set()
+        admin_app.app.state.local_preview_fallbacks = set()
         admin_app.app.state.editor_busy = lambda: False
         self.addCleanup(self.restore_state)
+        # An automatic status check must never inspect the real keyring or
+        # project credentials in this fixture-only HTTP suite.
+        configured = patch("admin_editor.b2_configured", return_value=False)
+        self.mock_configured = configured.start()
+        self.addCleanup(configured.stop)
         self.client = TestClient(admin_app.app, base_url="http://127.0.0.1:8765", client=("127.0.0.1", 50500))
         self.headers = {"X-Aida-Session": admin_app.app.state.admin_token, "Origin": "http://127.0.0.1:8765"}
 
     def restore_state(self):
         admin_app.app.state.video_library = self.previous_library
         admin_app.app.state.remote_previews = self.previous_previews
+        admin_app.app.state.local_preview_fallbacks = self.previous_fallbacks
         admin_app.app.state.editor_busy = self.previous_busy
 
     def detail(self):
@@ -139,6 +147,192 @@ class EditorHTTPTests(unittest.TestCase):
         response = self.client.get("/api/videos/sample120?remote=true")
         self.assertEqual(response.status_code, 200, response.text)
         return response.json()
+
+    def test_automatic_online_check_discovers_legacy_private_upload_and_enables_authenticated_preview(self):
+        cloud = self.use_cloud(self.metadata)
+        cloud.store("sample120/AV1/init_0.mp4", b"private-origin-video")
+        self.mock_configured.return_value = True
+        before = self.detail()
+        self.assertFalse(before["has_remote"])
+        response = self.client.get("/api/videos/sample120?check_online=true")
+        self.assertEqual(response.status_code, 200, response.text)
+        detail = response.json()
+        self.assertTrue(detail["has_remote"])
+        self.assertTrue(detail["remoteChecked"])
+        self.assertTrue(detail["can_preview"])
+        self.assertEqual(detail["visibility"], "private")
+        self.assertNotIn("online_check_error", detail)
+        preview = self.client.get("/preview/local/sample120/AV1/init_0.mp4")
+        self.assertEqual(preview.content, b"private-origin-video")
+        self.assertFalse(cloud.puts)
+
+    def test_automatic_online_check_without_configuration_stays_local_without_cloud_calls(self):
+        cloud = self.use_cloud(self.metadata)
+        response = self.client.get("/api/videos/sample120?check_online=true")
+        self.assertEqual(response.status_code, 200, response.text)
+        detail = response.json()
+        self.assertFalse(detail["has_remote"])
+        self.assertFalse(detail["remoteChecked"])
+        self.assertTrue(detail["can_preview"])
+        self.assertIn("online_check_error", detail)
+        self.assertFalse(cloud.reads)
+        self.assertFalse(cloud.puts)
+
+    def test_automatic_online_check_failure_keeps_pending_draft_and_local_preview(self):
+        cloud = self.use_cloud(self.metadata)
+        saved = self.client.post("/api/videos/sample120", json=self.payload(title="Offline draft"), headers=self.headers)
+        self.assertEqual(saved.status_code, 200, saved.text)
+        cloud.read_failures["sample120/metadata.json"] = OSError("simulated offline cloud")
+        self.mock_configured.return_value = True
+        response = self.client.get("/api/videos/sample120?check_online=true")
+        self.assertEqual(response.status_code, 200, response.text)
+        detail = response.json()
+        self.assertEqual(detail["title"], "Offline draft")
+        self.assertEqual(detail["revision"], saved.json()["revision"])
+        self.assertTrue(detail["pending"])
+        self.assertTrue(detail["can_preview"])
+        self.assertIn("online_check_error", detail)
+        self.assertEqual(self.client.get("/preview/local/sample120/AV1/init_0.mp4").content, bytes(range(128)))
+        self.assertFalse(cloud.puts)
+
+    def test_automatic_online_check_during_job_returns_local_view_without_cloud_calls(self):
+        cloud = self.use_cloud(self.metadata)
+        self.mock_configured.return_value = True
+        admin_app.app.state.editor_busy = lambda: True
+        response = self.client.get("/api/videos/sample120?check_online=true")
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertTrue(response.json()["can_preview"])
+        self.assertIn("online_check_error", response.json())
+        self.assertFalse(cloud.reads)
+        self.assertFalse(cloud.puts)
+        explicit = self.client.get("/api/videos/sample120?remote=true&check_online=true")
+        self.assertEqual(explicit.status_code, 409)
+
+    def test_automatic_online_check_preserves_pending_cloud_conflict(self):
+        cloud = self.use_cloud(self.metadata)
+        self.mock_configured.return_value = True
+        self.refresh_cloud()
+        saved = self.client.post("/api/videos/sample120", json=self.payload(title="Local draft"), headers=self.headers)
+        self.assertEqual(saved.status_code, 200, saved.text)
+        cloud.store("sample120/metadata.json", {**self.metadata, "title": "Different online edit"})
+        response = self.client.get("/api/videos/sample120?check_online=true")
+        self.assertEqual(response.status_code, 200, response.text)
+        detail = response.json()
+        self.assertEqual(detail["title"], "Local draft")
+        self.assertTrue(detail["pending"])
+        self.assertTrue(detail["remoteChanged"])
+        self.assertTrue(detail["has_remote"])
+        self.assertFalse(cloud.puts)
+
+    def test_automatic_online_check_does_not_mark_missing_video_uploaded(self):
+        cloud = self.use_cloud()
+        self.mock_configured.return_value = True
+        response = self.client.get("/api/videos/sample120?check_online=true")
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertTrue(response.json()["remoteChecked"])
+        self.assertFalse(response.json()["has_remote"])
+        self.assertFalse(cloud.puts)
+
+    def test_known_uploaded_offline_preview_uses_local_media_and_thumbnail_without_changing_private_draft(self):
+        cloud = self.use_cloud(self.metadata)
+        cloud.store("sample120/AV1/init_0.mp4", b"different-origin-video")
+        cloud.store("sample120/thumbnail_sdr.webp", b"different-origin-thumbnail")
+        (self.video / "thumbnail_sdr.webp").write_bytes(b"local-thumbnail")
+        self.refresh_cloud()
+        saved = self.client.post("/api/videos/sample120", json=self.payload(title="Pending private draft", visibility="private"), headers=self.headers)
+        self.assertEqual(saved.status_code, 200, saved.text)
+        cloud.store("sample120/metadata.json", {**self.metadata, "title": "Concurrent private edit"})
+        conflicted = self.refresh_cloud()
+        self.assertTrue(conflicted["remoteChanged"])
+        self.mock_configured.return_value = True
+        cloud.read_failures["sample120/metadata.json"] = OSError("simulated offline cloud")
+        response = self.client.get("/api/videos/sample120?check_online=true")
+        self.assertEqual(response.status_code, 200, response.text)
+        detail = response.json()
+        self.assertTrue(detail["has_remote"])
+        self.assertTrue(detail["pending"])
+        self.assertTrue(detail["remoteChanged"])
+        self.assertEqual(detail["title"], "Pending private draft")
+        self.assertEqual(detail["visibility"], "private")
+        self.assertEqual(detail["revision"], conflicted["revision"])
+        before = len(cloud.reads)
+        media = self.client.get("/preview/local/sample120/AV1/init_0.mp4", headers={"Range": "bytes=8-23"})
+        self.assertEqual(media.status_code, 206)
+        self.assertEqual(media.content, bytes(range(8, 24)))
+        self.assertEqual(self.client.get(detail["thumbnail_url"]).content, b"local-thumbnail")
+        self.assertEqual(len(cloud.reads), before)
+        self.assertEqual(self.client.get("/preview/local/sample120/AV1/init_0.mp4", headers={"Origin": "http://attacker.invalid"}).status_code, 403)
+        self.assertFalse(cloud.puts)
+
+    def test_known_uploaded_local_preview_works_when_auto_check_is_unconfigured_or_busy(self):
+        cloud = self.use_cloud(self.metadata)
+        cloud.store("sample120/AV1/init_0.mp4", b"different-origin-video")
+        cloud.store("sample120/thumbnail_sdr.webp", b"different-origin-thumbnail")
+        (self.video / "thumbnail_sdr.webp").write_bytes(b"local-thumbnail")
+        for mode in ("unconfigured", "busy"):
+            with self.subTest(mode=mode):
+                self.refresh_cloud()
+                self.assertNotIn("sample120", admin_app.app.state.local_preview_fallbacks)
+                self.mock_configured.return_value = mode != "unconfigured"
+                admin_app.app.state.editor_busy = lambda: mode == "busy"
+                before = len(cloud.reads)
+                response = self.client.get("/api/videos/sample120?check_online=true")
+                self.assertEqual(response.status_code, 200, response.text)
+                detail = response.json()
+                self.assertTrue(detail["has_remote"])
+                self.assertEqual(detail["visibility"], "private")
+                self.assertIn("online_check_error", detail)
+                self.assertEqual(self.client.get("/preview/local/sample120/AV1/init_0.mp4").content, bytes(range(128)))
+                self.assertEqual(self.client.get(detail["thumbnail_url"]).content, b"local-thumbnail")
+                self.assertEqual(len(cloud.reads), before)
+                admin_app.app.state.editor_busy = lambda: False
+        self.assertFalse(cloud.puts)
+
+    def test_successful_online_check_or_explicit_refresh_restores_current_remote_media(self):
+        for query in ("check_online=true", "remote=true"):
+            with self.subTest(query=query):
+                cloud = self.use_cloud(self.metadata)
+                cloud.store("sample120/AV1/init_0.mp4", b"current-origin-video")
+                self.refresh_cloud()
+                self.mock_configured.return_value = True
+                cloud.read_failures["sample120/metadata.json"] = OSError("simulated offline cloud")
+                fallback = self.client.get("/api/videos/sample120?check_online=true")
+                self.assertEqual(fallback.status_code, 200, fallback.text)
+                self.assertEqual(self.client.get("/preview/local/sample120/AV1/init_0.mp4").content, bytes(range(128)))
+                cloud.read_failures.clear()
+                refreshed = self.client.get(f"/api/videos/sample120?{query}")
+                self.assertEqual(refreshed.status_code, 200, refreshed.text)
+                self.assertNotIn("sample120", admin_app.app.state.local_preview_fallbacks)
+                self.assertEqual(self.client.get("/preview/local/sample120/AV1/init_0.mp4").content, b"current-origin-video")
+                self.assertFalse(cloud.puts)
+
+    def test_remote_library_refresh_clears_only_returned_video_fallbacks(self):
+        cloud = self.use_cloud(self.metadata)
+        admin_app.app.state.local_preview_fallbacks.update(("sample120", "unrelated"))
+        current = admin_app.app.state.video_library.get_video("sample120", remote=True)
+        with patch.object(admin_app.app.state.video_library, "list_videos", return_value=[current]) as listing:
+            response = self.client.get("/api/videos?remote=true")
+        self.assertEqual(response.status_code, 200, response.text)
+        listing.assert_called_once_with(refresh_remote=True)
+        self.assertEqual(admin_app.app.state.local_preview_fallbacks, {"unrelated"})
+        self.assertFalse(cloud.puts)
+
+    def test_offline_fallback_does_not_fabricate_missing_local_assets(self):
+        cloud = self.use_cloud(self.metadata)
+        cloud.store("sample120/AV1/chunk_0_00001.fmp4", b"origin-only-chunk")
+        self.refresh_cloud()
+        self.mock_configured.return_value = True
+        cloud.read_failures["sample120/metadata.json"] = OSError("simulated metadata check failure")
+        response = self.client.get("/api/videos/sample120?check_online=true")
+        self.assertEqual(response.status_code, 200, response.text)
+        media = self.client.get("/preview/local/sample120/AV1/chunk_0_00001.fmp4")
+        self.assertEqual(media.status_code, 200)
+        self.assertEqual(media.content, b"origin-only-chunk")
+        cloud.read_failures["sample120/AV1/chunk_0_00001.fmp4"] = OSError("simulated missing remote connection")
+        failed = self.client.get("/preview/local/sample120/AV1/chunk_0_00001.fmp4")
+        self.assertGreaterEqual(failed.status_code, 400)
+        self.assertNotEqual(failed.content, b"origin-only-chunk")
+        self.assertFalse(cloud.puts)
 
     def test_first_publish_checks_cloud_and_uploads_completed_local_draft(self):
         other = {"id": "other", "title": "Keep online video", "visibility": "public", "frameRate": 120}
