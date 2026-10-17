@@ -16,6 +16,7 @@ await mkdir(artifacts);
 process.env.TEMP = process.env.TMP = artifacts;
 process.env.PLAYWRIGHT_BROWSERS_PATH = resolve(dirname(executablePath), "../..");
 const requested = process.argv.find(argument => argument.startsWith("--profile="))?.split("=")[1];
+const navigationOnly = process.argv.includes("--frame-navigation-only");
 const profiles = [
   { name: "classic-desktop", mode: "classic", width: 1440, height: 900 },
   { name: "overlay-desktop", mode: "overlay", width: 1440, height: 900 },
@@ -24,7 +25,7 @@ const profiles = [
   { name: "landscape844", mode: "overlay", width: 844, height: 390, touch: true },
 ].filter(profile => !requested || requested.split(",").includes(profile.name));
 assert.ok(profiles.length, "Choose an existing Studio profile.");
-const results = { fixture: "Synthetic admin APIs and a WebCodecs120fps VP8 clip; no credentials, private source files or external network.", modes: [], profiles: [] };
+const results = { fixture: "Synthetic admin APIs and a WebCodecs120fps VP8 clip; no credentials, private source files or external network.", mode: navigationOnly ? "frame-navigation-only" : "full-studio", modes: [], profiles: [], frameNavigation: [] };
 let frameClip;
 const painted = page => page.evaluate(() => new Promise(resolvePaint => requestAnimationFrame(() => requestAnimationFrame(resolvePaint))));
 const waitText = (page, selector, text) => page.waitForFunction(({ selector, text }) => document.querySelector(selector)?.textContent.includes(text), { selector, text });
@@ -147,6 +148,116 @@ async function openPicker(page) {
   if (await page.locator("#thumbnail-frame-toggle").getAttribute("aria-expanded") !== "true") await page.locator("#thumbnail-frame-toggle").click();
   await page.locator("#edit-frame-canvas").waitFor({ state: "visible" });
   await page.waitForFunction(() => !document.querySelector("#edit-frame-apply")?.disabled);
+}
+
+async function navigationTrace(page, name, action, expectedClicks) {
+  await page.evaluate(() => {
+    const samples = [], events = [], controls = ["edit-frame-prev", "edit-frame-next", "edit-frame-apply", "edit-frame-seek", "edit-frame-number"];
+    const audit = window.__aidaFrameNavigation = { samples, events, expected: Number(document.querySelector("#edit-frame-number").value), active: true, canvasResizes: 0 };
+    const snapshot = kind => {
+      if (!audit.active || samples.length >= 1000) return;
+      const canvas = document.querySelector("#edit-frame-canvas"), placeholder = document.querySelector("#edit-frame-placeholder"), apply = document.querySelector("#edit-frame-apply");
+      const video = document.querySelector("#editor-player").contentDocument.querySelector("#video");
+      const context = canvas.getContext("2d"), color = [...context.getImageData(40, 67, 1, 1).data];
+      const marker = Array.from({ length: 8 }, (_, bit) => context.getImageData(14 + bit * 18, 82, 1, 1).data[0] > 128 ? 1 << bit : 0).reduce((sum, value) => sum + value, 0);
+      samples.push({ kind, time: performance.now(), expected: audit.expected, marker, label: Number(document.querySelector("#edit-frame-number").value),
+        visible: !canvas.hidden && Boolean(canvas.getClientRects().length), nonempty: color.slice(0, 3).some(value => value > 15),
+        loading: (!placeholder.hidden && Boolean(placeholder.getClientRects().length)) || /loading frame/i.test(document.querySelector("#edit-frame-status").textContent),
+        status: document.querySelector("#edit-frame-status").textContent,
+        captureDisabled: apply.disabled, captureOpacity: getComputedStyle(apply).opacity, pending: apply.disabled || video.seeking, focus: document.activeElement.id,
+        scrollX, scrollY, rects: Object.fromEntries(controls.map(id => { const element = document.getElementById(id), rect = element.getBoundingClientRect(); return [id, { x: rect.x, y: rect.y, width: rect.width, height: rect.height, opacity: getComputedStyle(element).opacity }]; })) });
+    };
+    const click = event => {
+      const button = event.target.closest("#edit-frame-prev, #edit-frame-next");
+      if (!button || button.disabled || !event.isTrusted) return;
+      const delta = button.id === "edit-frame-next" ? 1 : -1;
+      audit.expected = Math.min(240, Math.max(1, audit.expected + delta));
+      events.push({ control: button.id, delta, detail: event.detail, expected: audit.expected });
+    };
+    const afterClick = event => { if (event.isTrusted && event.target.closest("#edit-frame-prev, #edit-frame-next")) snapshot("after-click"); };
+    document.addEventListener("click", click, true);
+    // Capture counts the accepted intent; bubble samples after the button's
+    // own handler. Microtasks can run between native event listeners.
+    document.addEventListener("click", afterClick);
+    const observer = new MutationObserver(records => {
+      audit.canvasResizes += records.filter(record => record.target.id === "edit-frame-canvas" && (record.attributeName === "width" || record.attributeName === "height")).length;
+      snapshot("mutation");
+    });
+    observer.observe(document.querySelector("#thumbnail-frame-fields"), { attributes: true, childList: true, characterData: true, subtree: true });
+    let frame;
+    const sampleFrame = () => { snapshot("animation-frame"); if (audit.active) frame = requestAnimationFrame(sampleFrame); };
+    snapshot("initial"); frame = requestAnimationFrame(sampleFrame);
+    audit.stop = () => { audit.active = false; cancelAnimationFrame(frame); observer.disconnect(); document.removeEventListener("click", click, true); document.removeEventListener("click", afterClick); return { samples, events, expected: audit.expected, canvasResizes: audit.canvasResizes }; };
+  });
+  let trace;
+  try {
+    await action();
+    await page.waitForFunction(() => !document.querySelector("#edit-frame-apply").disabled && Number(document.querySelector("#edit-frame-number").value) === window.__aidaFrameNavigation.expected);
+    await painted(page);
+  } finally { trace = await page.evaluate(() => window.__aidaFrameNavigation.stop()); }
+  results.frameNavigation.push({ name, viewport: page.viewportSize(), ...trace });
+  const first = trace.samples[0];
+  assert.ok(trace.samples.some(sample => sample.kind === "animation-frame" && sample.pending), `${name}: sample actual intermediate seek paints`);
+  assert.ok(trace.samples.every(sample => sample.visible && sample.nonempty), `${name}: keep the painted canvas visible and nonempty between frames`);
+  assert.ok(trace.samples.every(sample => !sample.loading), `${name}: do not flash a loading overlay or status after the first decoded frame`);
+  assert.ok(trace.samples.every(sample => sample.status === first.status), `${name}: keep the decoded-frame guidance stable between steps`);
+  assert.ok(trace.samples.every(sample => sample.captureOpacity === first.captureOpacity), `${name}: disabling capture while decoding must not flash the Use button opacity`);
+  assert.equal(trace.canvasResizes, 0, `${name}: do not clear the painted canvas by reassigning unchanged dimensions`);
+  assert.equal(trace.events.length, expectedClicks, `${name}: rapid native activations must remain available while decoding`);
+  for (const sample of trace.samples) {
+    assert.ok(sample.marker + 1 === sample.expected || sample.captureDisabled, `${name}: Use must stay disabled until the newest requested frame is painted`);
+    assert.ok(sample.focus === "edit-frame-prev" || sample.focus === "edit-frame-next", `${name}: frame stepping must retain control focus (${sample.focus})`);
+    assert.ok(Math.abs(sample.scrollX - first.scrollX) < .5 && Math.abs(sample.scrollY - first.scrollY) < .5, `${name}: stepping must not scroll the page`);
+    for (const [id, rect] of Object.entries(sample.rects)) {
+      for (const dimension of ["x", "y", "width", "height"]) assert.ok(Math.abs(rect[dimension] - first.rects[id][dimension]) < .5, `${name}: ${id} changed ${dimension} during navigation`);
+      assert.equal(rect.opacity, first.rects[id].opacity, `${name}: ${id} opacity must stay steady during warm navigation`);
+    }
+  }
+  await pickerFrame(page, trace.expected);
+}
+
+async function stableFrameNavigation(page, fixture) {
+  await page.goto(`${fixture.origin}/edit?v=${FIRST_VIDEO}&keep=one%20two#studio`);
+  await page.waitForFunction(() => document.querySelector("#edit-title")?.value === "120 fps motion study");
+  await samePreviewLink(page, fixture, FIRST_VIDEO);
+  await openPicker(page);
+  await page.locator("#edit-frame-number").fill("61");
+  await page.locator("#edit-frame-number").press("Tab");
+  await pickerFrame(page, 61);
+  const before = countPOST(fixture);
+  const touch = await page.evaluate(() => navigator.maxTouchPoints > 0);
+  for (const [selector, name, count] of [["#edit-frame-next", "rapid-next", 6], ["#edit-frame-prev", "rapid-previous", 4]]) {
+    const button = page.locator(selector);
+    await button.scrollIntoViewIfNeeded(); await button.focus(); await painted(page);
+    const rect = await button.boundingBox();
+    await navigationTrace(page, name, async () => {
+      for (let index = 0; index < count; ++index) {
+        if (touch) await page.touchscreen.tap(rect.x + rect.width / 2, rect.y + rect.height / 2);
+        else await page.mouse.click(rect.x + rect.width / 2, rect.y + rect.height / 2);
+      }
+    }, count);
+  }
+  const next = page.locator("#edit-frame-next");
+  await next.scrollIntoViewIfNeeded(); await next.focus(); await painted(page);
+  const rect = await next.boundingBox();
+  await navigationTrace(page, "held-navigation", async () => {
+    const x = rect.x + rect.width / 2, y = rect.y + rect.height / 2;
+    if (touch) {
+      const session = await page.context().newCDPSession(page);
+      try {
+        await session.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x, y }] });
+        await page.waitForTimeout(90);
+        await session.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+      } finally { await session.detach(); }
+    } else {
+      await page.mouse.move(x, y); await page.mouse.down(); await page.waitForTimeout(90); await page.mouse.up();
+    }
+  }, 1);
+  for (const [selector, name] of [["#edit-frame-next", "keyboard-next"], ["#edit-frame-prev", "keyboard-previous"]]) {
+    await page.locator(selector).focus(); await painted(page);
+    await navigationTrace(page, name, async () => { for (let index = 0; index < 5; ++index) await page.keyboard.press("Enter"); }, 5);
+  }
+  assert.equal(countPOST(fixture), before, "Frame navigation must never save or upload anything");
 }
 
 async function visualFramePicker(page, fixture) {
@@ -580,7 +691,10 @@ try {
         results.decodedFixture = { ...FRAME_FIXTURE, bytes: frameClip.length };
       }
       fixture.setFrameClip(frameClip);
-      try { await workflow(page, fixture); }
+      try {
+        await stableFrameNavigation(page, fixture);
+        if (!navigationOnly) await workflow(page, fixture);
+      }
       catch (error) {
         results.failure = { profile: profile.name, errors, external, lastRequests: fixture.state.requests.slice(-10).map(({ method, path, search }) => ({ method, path, search })) };
         await page.screenshot({ path: resolve(artifacts, `${profile.name}-failure.png`), fullPage: true });
@@ -588,8 +702,10 @@ try {
       }
       await noOverflow(page, profile.name);
       await controlPresentation(page);
-      await scrolling(page, profile);
-      for (const selector of ["#library-search", "#edit-title", "#thumbnail-frame-toggle", "#editor-publish"]) await focusPresentation(page, selector);
+      if (!navigationOnly) {
+        await scrolling(page, profile);
+        for (const selector of ["#library-search", "#edit-title", "#thumbnail-frame-toggle", "#editor-publish"]) await focusPresentation(page, selector);
+      }
       await page.evaluate(() => { document.documentElement.style.fontSize = "200%"; });
       await painted(page);
       await noOverflow(page, `${profile.name} enlarged text`);

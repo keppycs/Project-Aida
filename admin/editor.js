@@ -6,7 +6,7 @@
   const studio = { videos: [], rows: new Map(), selected: null, detail: null, baseline: "", dirty: false, busy: false, pendingAction: null, listRequest: 0, detailRequest: 0, listAbort: null, detailAbort: null, lastListRemote: false, conflictMode: null };
   const visibilityText = { private: "Private", unlisted: "Unlisted", public: "Public" };
   const editable = ["#edit-title", "#edit-description", "#edit-tags", 'input[name="edit-visibility"]'];
-  const picker = { open: false, epoch: 0, operation: 0, id: null, video: null, document: null, source: "", controller: null, observer: null, callback: null, timeout: null, paints: [], ready: false, waiting: false, presented: null, exact: false, target: 0, candidate: null };
+  const picker = { open: false, epoch: 0, operation: 0, id: null, video: null, document: null, source: "", controller: null, observer: null, callback: null, timeout: null, seekRequest: null, paints: [], ready: false, waiting: false, presented: null, exact: false, target: 0, candidate: null };
 
   function status(selector, message, error = false) {
     const target = find(selector);
@@ -348,6 +348,12 @@
 
   function pickerFPS() { return studio.detail?.frameRate === 120 ? 120 : null; }
   function pickerDuration() { return picker.video && Number.isFinite(picker.video.duration) && picker.video.duration > 0 ? picker.video.duration : 0; }
+  function lastFrameIndex() { return Math.max(0, Math.ceil(pickerDuration() * (pickerFPS() || 120)) - 1); }
+  function requestedFrameIndex() {
+    const fps = pickerFPS() || 120;
+    if (picker.waiting) return Math.floor(picker.target * fps + 1e-6);
+    return picker.exact ? Math.round(picker.presented * fps) : Math.floor(picker.presented * fps + 1e-6);
+  }
   function formatFrameTime(value) {
     const milliseconds = Math.max(0, Math.round(value * 1000));
     return `${Math.floor(milliseconds / 60000)}:${String(Math.floor(milliseconds / 1000) % 60).padStart(2, "0")}.${String(milliseconds % 1000).padStart(3, "0")}`;
@@ -356,16 +362,18 @@
   function refreshFrameControls() {
     const live = pickerIsCurrent(), duration = pickerDuration(), fps = pickerFPS();
     const seekable = live && duration > 0 && picker.video.readyState >= 1 && !picker.video.error && !studio.busy;
-    const ready = seekable && picker.ready && !picker.video.seeking && picker.video.readyState >= 2;
+    const ready = seekable && picker.ready && picker.seekRequest === null && !picker.video.seeking && picker.video.readyState >= 2;
+    const navigable = seekable && Number.isFinite(picker.presented) && !find("#edit-frame-canvas").hidden;
+    const frame = requestedFrameIndex();
     find("#edit-frame-seek").disabled = !seekable;
     find("#edit-frame-number").disabled = !seekable || !fps;
-    find("#edit-frame-prev").disabled = !ready || !fps || picker.presented <= 0;
-    find("#edit-frame-next").disabled = !ready || !fps || picker.presented >= duration - 1 / fps;
+    find("#edit-frame-prev").disabled = !navigable || !fps || frame <= 0;
+    find("#edit-frame-next").disabled = !navigable || !fps || frame >= lastFrameIndex();
     find("#edit-frame-apply").disabled = !ready;
     find("#edit-frame-refresh").disabled = studio.busy;
     find("#thumbnail-frame-fields").setAttribute("aria-busy", String(picker.waiting));
     if (duration) {
-      find("#edit-frame-seek").max = String(Math.max(0, duration - (fps ? 1 / fps : .001)));
+      find("#edit-frame-seek").max = String(fps ? lastFrameIndex() / fps : Math.max(0, duration - .001));
       find("#edit-frame-seek").step = fps ? String(1 / fps) : ".001";
       if (fps) find("#edit-frame-number").max = String(Math.max(1, Math.ceil(duration * fps)));
     }
@@ -373,6 +381,8 @@
 
   function cancelFrameWork() {
     ++picker.operation;
+    if (picker.seekRequest !== null) cancelAnimationFrame(picker.seekRequest);
+    picker.seekRequest = null;
     if (picker.callback !== null && picker.video?.cancelVideoFrameCallback) picker.video.cancelVideoFrameCallback(picker.callback);
     picker.callback = null;
     clearTimeout(picker.timeout);
@@ -422,12 +432,14 @@
   }
 
   function paintDecodedFrame(time, exact, epoch, operation) {
-    if (!pickerIsCurrent(epoch, operation) || picker.video.seeking || picker.video.readyState < 2 || !picker.video.videoWidth || !picker.video.videoHeight || !Number.isFinite(time)) return;
+    if (!pickerIsCurrent(epoch, operation) || picker.seekRequest !== null || picker.video.seeking || picker.video.readyState < 2 || !picker.video.videoWidth || !picker.video.videoHeight || !Number.isFinite(time)) return;
     const canvas = find("#edit-frame-canvas");
     const scale = Math.min(1, 1920 / picker.video.videoWidth, 1080 / picker.video.videoHeight);
     try {
-      canvas.width = Math.max(1, Math.round(picker.video.videoWidth * scale));
-      canvas.height = Math.max(1, Math.round(picker.video.videoHeight * scale));
+      const width = Math.max(1, Math.round(picker.video.videoWidth * scale));
+      const height = Math.max(1, Math.round(picker.video.videoHeight * scale));
+      if (canvas.width !== width) canvas.width = width;
+      if (canvas.height !== height) canvas.height = height;
       const context = canvas.getContext("2d", { colorSpace: "srgb", alpha: false });
       if (!context) throw new Error("Canvas unavailable");
       context.drawImage(picker.video, 0, 0, canvas.width, canvas.height);
@@ -478,7 +490,7 @@
       if (!pickerIsCurrent(epoch, operation)) return;
       // A callback queued before a seek can still carry the previous frame.
       // Its PTS must match this seek before it can label a canvas snapshot.
-      if (!presentedTimeMatchesTarget(metadata.mediaTime)) { requestPresentedFrame(epoch, operation); return; }
+      if (picker.seekRequest !== null || !presentedTimeMatchesTarget(metadata.mediaTime)) { requestPresentedFrame(epoch, operation); return; }
       picker.candidate = metadata.mediaTime;
       if (!video.seeking) paintDecodedFrame(metadata.mediaTime, true, epoch, operation);
     });
@@ -489,10 +501,12 @@
     picker.waiting = true;
     picker.target = target;
     const epoch = picker.epoch, operation = picker.operation, video = picker.video;
-    const placeholder = find("#edit-frame-placeholder");
-    placeholder.textContent = "Loading frame…";
-    placeholder.hidden = false;
-    status("#edit-frame-status", "Loading frame…");
+    if (!Number.isFinite(picker.presented) || find("#edit-frame-canvas").hidden) {
+      const placeholder = find("#edit-frame-placeholder");
+      placeholder.textContent = "Loading frame…";
+      placeholder.hidden = false;
+      status("#edit-frame-status", "Loading frame…");
+    }
     requestPresentedFrame(epoch, operation);
     picker.timeout = setTimeout(() => {
       if (!pickerIsCurrent(epoch, operation)) return;
@@ -505,17 +519,26 @@
   function seekFrame(time) {
     if (!pickerIsCurrent() || studio.busy || !Number.isFinite(time) || !pickerDuration()) return;
     const fps = pickerFPS();
-    const end = Math.max(0, pickerDuration() - (fps ? 1 / fps : .001));
-    const start = Math.min(end, Math.max(0, time));
+    const index = fps ? Math.min(lastFrameIndex(), Math.max(0, Math.round(time * fps))) : null;
     // Seek within the selected frame's presentation interval, rather than
     // accidentally landing on the previous interval at a rounded boundary.
-    let target = fps ? (Math.round(start * fps) + .25) / fps : start;
+    let target = fps ? (index + .25) / fps : Math.min(pickerDuration() - .001, Math.max(0, time));
     target = Math.min(pickerDuration() - .00001, target);
     if (Math.abs(target - picker.video.currentTime) < .00001) target = Math.max(0, target - .0001);
     picker.video.pause();
     waitForDecodedFrame(target);
-    try { picker.video.currentTime = target; }
-    catch { frameUnavailable("This part of the video isn't ready. Try another position or refresh online."); }
+    const epoch = picker.epoch, operation = picker.operation;
+    picker.seekRequest = requestAnimationFrame(() => {
+      if (!pickerIsCurrent(epoch, operation)) return;
+      picker.seekRequest = null;
+      try { picker.video.currentTime = target; }
+      catch { frameUnavailable("This part of the video isn't ready. Try another position or refresh online."); }
+    });
+  }
+
+  function stepFrame(direction) {
+    const fps = pickerFPS();
+    if (pickerIsCurrent() && fps && Number.isFinite(picker.presented)) seekFrame((requestedFrameIndex() + direction) / fps);
   }
 
   function attachFrameVideo() {
@@ -554,12 +577,13 @@
     video.addEventListener("seeking", () => {
       if (!pickerIsCurrent(epoch)) return;
       video.pause();
+      if (picker.seekRequest !== null) return;
       if (!picker.waiting || Math.abs(picker.target - video.currentTime) > .0001) waitForDecodedFrame(video.currentTime);
     }, options);
     video.addEventListener("seeked", () => {
       if (!pickerIsCurrent(epoch)) return;
       if (picker.candidate !== null && presentedTimeMatchesTarget(picker.candidate)) paintDecodedFrame(picker.candidate, true, epoch, picker.operation);
-      else fallbackDecodedFrame(epoch, picker.operation);
+      else if (typeof video.requestVideoFrameCallback !== "function") fallbackDecodedFrame(epoch, picker.operation);
     }, options);
     for (const name of ["emptied", "loadstart"]) video.addEventListener(name, () => {
       if (picker.epoch !== epoch) return;
@@ -737,8 +761,8 @@
     for (const event of ["pointerup", "pointercancel"]) find("#edit-frame-seek").addEventListener(event, () => { picker.scrubbing = false; if (picker.ready) find("#edit-frame-seek").value = String(picker.presented); });
     find("#edit-frame-number").addEventListener("change", seekFrameNumber);
     find("#edit-frame-number").addEventListener("keydown", (event) => { if (event.key === "Enter") { event.preventDefault(); seekFrameNumber(); } });
-    find("#edit-frame-prev").addEventListener("click", () => { if (picker.ready && pickerFPS()) seekFrame(Math.max(0, Math.round(picker.presented * 120) - 1) / 120); });
-    find("#edit-frame-next").addEventListener("click", () => { if (picker.ready && pickerFPS()) seekFrame((Math.round(picker.presented * 120) + 1) / 120); });
+    find("#edit-frame-prev").addEventListener("click", () => stepFrame(-1));
+    find("#edit-frame-next").addEventListener("click", () => stepFrame(1));
     find("#edit-frame-apply").addEventListener("click", useFrame);
     find("#edit-frame-refresh").addEventListener("click", refreshFrameVideo);
     find("#thumbnail-frame-fields").addEventListener("keydown", (event) => { if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); closeFramePicker({ restoreFocus: true }); } });
