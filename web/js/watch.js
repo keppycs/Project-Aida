@@ -1,7 +1,7 @@
 import {
   fetchCatalog, mediaBase, formatDate,
   renderVideoCard, detectDisplayHdr, attachThumbnailFallbacks,
-} from "./catalog.js?v=clean-watch-v37";
+} from "./catalog.js?v=cdn-security-v2";
 import { loadMetadata, VideoLoadError } from "./loader.js?v=cdn-security-v1";
 import { mountPlayer } from "./player/shell.js?v=overlay-scrollbar-v36";
 

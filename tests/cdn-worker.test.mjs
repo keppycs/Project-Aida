@@ -15,7 +15,7 @@ function request(path = `${id}/metadata.json`, options) {
   return new Request(`${cdn}${prefix}${path}`, options);
 }
 
-function fixture({ metadata = meta, rawMetadata, metadataStatus = 200, index = [{ id, title: "STALE_TITLE", description: "STALE_DESCRIPTION" }], authorization, authStatus = 200, authThrows = false, assetStatus = 200, assetBody = () => "media bytes", assetHeaders = {}, onFetch, timeoutMs } = {}) {
+function fixture({ metadata = meta, rawMetadata, metadataStatus = 200, index = [{ id, title: "STALE_TITLE", description: "STALE_DESCRIPTION" }], authorization, authStatus = 200, authThrows = false, assetStatus = 200, assetBody = () => "media bytes", assetHeaders = {}, onFetch, timeoutMs, cache, now } = {}) {
   const calls = [];
   const fetcher = async (input, init = {}) => {
     const url = String(input);
@@ -37,7 +37,47 @@ function fixture({ metadata = meta, rawMetadata, metadataStatus = 200, index = [
       "Content-Type": "application/octet-stream", "Cache-Control": "public, max-age=31536000", "X-Bz-File-Name": "PRIVATE_ORIGIN_DETAILS", "Set-Cookie": "PRIVATE_COOKIE", ...assetHeaders,
     } });
   };
-  return { calls, handle: createHandler({ fetcher, timeoutMs }) };
+  return { calls, handle: createHandler({ fetcher, timeoutMs, cache, now }) };
+}
+
+// Models Cloudflare's Cache API: the key ignores request headers, but a Range
+// lookup against a full Content-Length response returns a partial response.
+function memoryCache(now = Date.now) {
+  const stored = new Map();
+  const matches = [];
+  const puts = [];
+  return {
+    stored, matches, puts,
+    async match(req) {
+      matches.push(req);
+      const item = stored.get(req.url);
+      if (!item || item.expires <= now()) return undefined;
+      const headers = new Headers(item.headers);
+      const range = req.headers.get("Range");
+      if (!range) return new Response(item.bytes, { headers });
+      const [, from, to] = /^bytes=([0-9]*)-([0-9]*)$/.exec(range);
+      const start = from ? Number(from) : Math.max(0, item.bytes.length - Number(to));
+      const end = from && to ? Math.min(Number(to), item.bytes.length - 1) : item.bytes.length - 1;
+      if (start >= item.bytes.length || end < start) return new Response(null, { status: 416, headers: { "Content-Range": `bytes */${item.bytes.length}` } });
+      const bytes = item.bytes.slice(start, end + 1);
+      headers.set("Content-Length", String(bytes.length));
+      headers.set("Content-Range", `bytes ${start}-${end}/${item.bytes.length}`);
+      return new Response(bytes, { status: 206, headers });
+    },
+    async put(req, response) {
+      puts.push({ request: req, headers: new Headers(response.headers), status: response.status });
+      assert.equal(req.method, "GET");
+      assert.equal(req.headers.get("Range"), null);
+      assert.equal(response.status, 200);
+      const ttl = Number(/max-age=([0-9]+)/.exec(response.headers.get("Cache-Control"))[1]);
+      stored.set(req.url, { bytes: new Uint8Array(await response.arrayBuffer()), headers: new Headers(response.headers), expires: now() + ttl * 1000 });
+    },
+  };
+}
+
+function executionContext() {
+  const tasks = [];
+  return { waitUntil(task) { tasks.push(task); }, async drain() { await Promise.all(tasks); } };
 }
 
 test("module exports an ES-module Worker", () => {
@@ -127,7 +167,7 @@ test("malformed JSON, oversized declared/chunked metadata, and missing metadata 
   }
 });
 
-test("rejects arbitrary B2 APIs, other buckets, unexpected files and all query parameters before authorization", async () => {
+test("rejects arbitrary B2 APIs, other buckets, unexpected files and non-catalogue queries before authorization", async () => {
   const { calls, handle } = fixture();
   for (const path of [
     "/", "/b2api/v2/b2_download_file_by_id?fileId=secret", "/file/OtherBucket/index.json", "/file/ProjectAida/", "/file/ProjectAida/.env", "/file/ProjectAida/%2e%2e/secret", "/file/ProjectAida/test%2fsecret/metadata.json", "/file/ProjectAida/test%252fsecret/metadata.json",
@@ -253,12 +293,249 @@ test("catalogue freshly gates public videos and replaces stale title/description
   assert.equal(calls.filter(call => call.url.endsWith("public/metadata.json")).length, 1);
 });
 
-test("malformed or excessive catalogue fails closed before metadata fanout", async () => {
-  for (const index of [{ invalid: true }, Array.from({ length: 41 }, (_, number) => ({ id: `video-${number}` }))]) {
+test("malformed or oversized catalogue fails closed before metadata fanout", async () => {
+  for (const index of [{ invalid: true }, [{ id, title: "x".repeat(1_000_001) }]]) {
     const { calls, handle } = fixture({ index });
     assert.equal((await handle(request("index.json"), env)).status, 503);
     assert.equal(calls.filter(call => call.url.endsWith("/metadata.json")).length, 0);
   }
+});
+
+test("catalogue pagination covers more than 40 videos with bounded fresh checks per request", async () => {
+  const index = Array.from({ length: 91 }, (_, number) => ({ id: `video-${number}` }));
+  const { calls, handle } = fixture({ index });
+  const listed = [];
+  let url = request("index.json").url;
+  for (let page = 0; url; page++) {
+    const start = calls.length;
+    const response = await handle(new Request(url), env);
+    assert.equal(response.status, 200);
+    assert.match(response.headers.get("Access-Control-Expose-Headers"), /\bLink\b/);
+    const entries = await response.json();
+    assert.equal(entries.length, page < 2 ? 40 : 11);
+    assert.equal(calls.slice(start).filter(call => call.url.endsWith("/metadata.json")).length, entries.length);
+    assert.ok(calls.length - start <= 42, "page fits free Worker's subrequest budget");
+    listed.push(...entries.map(entry => entry.id));
+    const link = response.headers.get("Link");
+    if (page < 2) assert.equal(link, `<${cdn}${prefix}index.json?page=${page + 1}>; rel="next"`);
+    url = link?.match(/^<([^>]+)>; rel="next"$/)[1];
+  }
+  assert.deepEqual(listed, index.map(entry => entry.id));
+  const beyond = await handle(request("index.json?page=99"), env);
+  assert.deepEqual(await beyond.json(), []);
+  assert.equal(beyond.headers.get("Link"), null);
+});
+
+test("catalogue empty filtered pages still link onward and each page rechecks visibility", async () => {
+  let publicVisible = true;
+  const index = Array.from({ length: 41 }, (_, number) => ({ id: `video-${number}` }));
+  const { calls, handle } = fixture({ index, metadata: url => ({ ...meta, visibility: url.includes("/video-40/") && publicVisible ? "public" : "private" }) });
+  const first = await handle(request("index.json"), env);
+  assert.deepEqual(await first.json(), []);
+  assert.equal(first.headers.get("Link"), `<${cdn}${prefix}index.json?page=1>; rel="next"`);
+  const second = await handle(request("index.json?page=1"), env);
+  assert.deepEqual((await second.json()).map(entry => entry.id), ["video-40"]);
+  publicVisible = false;
+  assert.deepEqual(await (await handle(request("index.json?page=1"), env)).json(), []);
+  assert.equal(calls.filter(call => call.url.endsWith("video-40/metadata.json")).length, 2);
+});
+
+test("catalogue accepts only one canonical nonnegative integer page query", async () => {
+  const { calls, handle } = fixture();
+  for (const query of ["?", "?page", "?page=", "?page=-1", "?page=01", "?page=1.0", "?page=+1", "?page=%31", "?page=1&page=2", "?page=1&version=old", "?version=old", "?page=9007199254740991"]) {
+    assert.equal((await handle(request(`index.json${query}`), env)).status, 404, query);
+  }
+  assert.equal(calls.length, 0);
+  assert.equal((await handle(request("index.json?page=0"), env)).status, 200);
+});
+
+test("legacy compatibility map supports more than 40 reviewed videos within its size bound", async () => {
+  const { visibility, ...legacy } = meta;
+  const legacyMap = Object.fromEntries(Array.from({ length: 80 }, (_, number) => [`video-${number}`, "public"]));
+  const { handle } = fixture({ metadata: legacy });
+  assert.equal((await handle(request("video-79/metadata.json"), { ...env, LEGACY_VISIBILITY: JSON.stringify(legacyMap) })).status, 200);
+});
+
+test("internal media cache reduces origin reads while checking visibility before every hit", async () => {
+  const cache = memoryCache();
+  const ctx = executionContext();
+  let visibility = "public";
+  const { calls, handle } = fixture({ cache, metadata: () => ({ ...meta, visibility }), assetHeaders: { "Content-Length": "11" } });
+  const path = `${id}/AV1/chunk_0_1.fmp4`;
+  const first = await handle(request(path), env, ctx);
+  assert.equal(await first.text(), "media bytes");
+  await ctx.drain();
+  assert.equal(cache.puts.length, 1);
+  const second = await handle(request(path, { headers: { Cookie: "SECRET", Authorization: "Bearer SECRET", "If-None-Match": "*", "If-Modified-Since": "Thu, 01 Jan 2037 00:00:00 GMT" } }), env, ctx);
+  assert.equal(second.status, 200);
+  assert.equal(await second.text(), "media bytes");
+  assert.equal(second.headers.get("Cache-Control"), "no-store");
+  assert.equal(second.headers.get("CDN-Cache-Control"), "no-store");
+  assert.equal(second.headers.get("Cloudflare-CDN-Cache-Control"), "no-store");
+  assert.equal(cache.matches.at(-1).headers.get("If-None-Match"), null);
+  assert.equal(cache.matches.at(-1).headers.get("If-Modified-Since"), null);
+  assert.equal(cache.matches.at(-1).headers.get("Cookie"), null);
+  assert.equal(calls.filter(call => call.url.endsWith(".fmp4")).length, 1);
+  assert.equal(calls.filter(call => call.url.endsWith("/metadata.json")).length, 2);
+  visibility = "private";
+  for (const options of [undefined, { method: "HEAD" }, { headers: { Range: "bytes=0-3" } }]) assert.equal((await handle(request(path, options), env, ctx)).status, 404);
+  assert.equal(cache.matches.length, 2, "private metadata denies before cache lookup");
+  assert.equal(calls.filter(call => call.url.endsWith(".fmp4")).length, 1);
+});
+
+test("metadata edits and origin metadata revisions select new media cache entries", async () => {
+  const cache = memoryCache();
+  const ctx = executionContext();
+  let title = "Old title";
+  let metadataETag = "one";
+  let bytes = "first bytes";
+  const { calls, handle } = fixture({ cache, assetHeaders: { "Content-Length": "11" }, assetBody: () => bytes,
+    onFetch: call => call.url.endsWith("/metadata.json") ? Response.json({ ...meta, title }, { headers: { ETag: metadataETag } }) : null });
+  const path = `${id}/HEVC/init_8.mp4`;
+  assert.equal(await (await handle(request(path), env, ctx)).text(), "first bytes");
+  await ctx.drain();
+  title = "New title";
+  bytes = "newer bytes";
+  assert.equal(await (await handle(request(path), env, ctx)).text(), "newer bytes");
+  await ctx.drain();
+  metadataETag = "two";
+  bytes = "third bytes";
+  assert.equal(await (await handle(request(path), env, ctx)).text(), "third bytes");
+  await ctx.drain();
+  assert.equal(cache.stored.size, 3);
+  assert.equal(calls.filter(call => call.url.endsWith(".mp4")).length, 3);
+});
+
+test("internal media cache entries expire within five minutes", async () => {
+  let time = 0;
+  const cache = memoryCache(() => time);
+  const ctx = executionContext();
+  const { calls, handle } = fixture({ cache, now: () => time, assetHeaders: { "Content-Length": "11" } });
+  const path = `${id}/AV1/chunk_0_1.fmp4`;
+  await (await handle(request(path), env, ctx)).text();
+  await ctx.drain();
+  assert.equal(cache.puts[0].headers.get("Cache-Control"), "public, max-age=300");
+  time = 299_999;
+  await (await handle(request(path), env, ctx)).text();
+  assert.equal(calls.filter(call => call.url.endsWith(".fmp4")).length, 1);
+  time = 300_000;
+  await (await handle(request(path), env, ctx)).text();
+  await ctx.drain();
+  assert.equal(calls.filter(call => call.url.endsWith(".fmp4")).length, 2);
+});
+
+test("cached full media serves exact Range, suffix Range, HEAD and unsatisfiable Range", async () => {
+  const cache = memoryCache();
+  const ctx = executionContext();
+  const { calls, handle } = fixture({ cache, assetHeaders: { "Content-Length": "11" } });
+  const path = `${id}/AV1/chunk_0_1.fmp4`;
+  await (await handle(request(path), env, ctx)).text();
+  await ctx.drain();
+  const partial = await handle(request(path, { headers: { Range: "bytes=1-4" } }), env, ctx);
+  assert.equal(partial.status, 206);
+  assert.equal(partial.headers.get("Content-Range"), "bytes 1-4/11");
+  assert.equal(partial.headers.get("Content-Length"), "4");
+  assert.equal(await partial.text(), "edia");
+  const suffix = await handle(request(path, { headers: { Range: "bytes=-5" } }), env, ctx);
+  assert.equal(await suffix.text(), "bytes");
+  const head = await handle(request(path, { method: "HEAD", headers: { Range: "bytes=1-4" } }), env, ctx);
+  assert.equal(head.status, 206);
+  assert.equal(head.headers.get("Content-Length"), "4");
+  assert.equal(await head.text(), "");
+  const invalid = await handle(request(path, { headers: { Range: "bytes=100-" } }), env, ctx);
+  assert.equal(invalid.status, 416);
+  assert.equal(invalid.headers.get("Content-Range"), "bytes */11");
+  assert.equal(invalid.headers.get("Content-Length"), "0");
+  assert.equal(await invalid.text(), "");
+  assert.equal(calls.filter(call => call.url.endsWith(".fmp4")).length, 1);
+  assert.equal(calls.filter(call => call.url.endsWith("/metadata.json")).length, 5);
+});
+
+test("Range cache misses preserve origin partial streaming and never store partial responses", async () => {
+  const cache = memoryCache();
+  const ctx = executionContext();
+  const { calls, handle } = fixture({ cache, assetStatus: 206, assetHeaders: { "Content-Length": "4", "Content-Range": "bytes 4-7/11" }, assetBody: () => "a by" });
+  const response = await handle(request(`${id}/AV1/chunk_0_1.fmp4`, { headers: { Range: "bytes=4-7" } }), env, ctx);
+  assert.equal(response.status, 206);
+  assert.equal(response.headers.get("Content-Range"), "bytes 4-7/11");
+  assert.equal(await response.text(), "a by");
+  await ctx.drain();
+  assert.equal(cache.puts.length, 0);
+  assert.equal(calls.at(-1).headers.get("Range"), "bytes=4-7");
+});
+
+test("only init and chunk media are cached; editable assets and catalogue remain fresh", async () => {
+  const cache = memoryCache();
+  const ctx = executionContext();
+  const { handle } = fixture({ cache, assetHeaders: { "Content-Length": "11" } });
+  for (const path of ["index.json", `${id}/metadata.json`, `${id}/thumbnail_share.jpg`, `${id}/AV1/manifest.mpd`, `${id}/AV1/master.m3u8`, `${id}/AV1/media_0.m3u8`]) {
+    await (await handle(request(path), env, ctx)).text();
+  }
+  await ctx.drain();
+  assert.equal(cache.puts.length, 0);
+  assert.equal(cache.matches.length, 0);
+});
+
+test("cache keys isolate origin and media path and cannot be requested directly", async () => {
+  const cache = memoryCache();
+  const ctx = executionContext();
+  const { calls, handle } = fixture({ cache, assetHeaders: { "Content-Length": "11" } });
+  const path = `${id}/AV1/init_0.mp4`;
+  for (const url of [request(path).url, request(`${id}/HEVC/init_0.mp4`).url, `https://alternate.example${prefix}${path}`]) {
+    await (await handle(new Request(url), env, ctx)).text();
+  }
+  await ctx.drain();
+  assert.equal(cache.stored.size, 3);
+  assert.ok([...cache.stored.keys()].every(key => /^\?aida-media-revision=[a-f0-9]{64}$/.test(new URL(key).search)));
+  assert.equal(calls.filter(call => call.url.endsWith(".mp4")).length, 3);
+  const before = calls.length;
+  assert.equal((await handle(new Request([...cache.stored.keys()][0]), env, ctx)).status, 404);
+  assert.equal(calls.length, before);
+});
+
+test("cache skips unknown or excessive lengths, partial objects and absent lifetime context", async () => {
+  for (const assetHeaders of [{}, { "Content-Length": "33554433" }, { "Content-Length": "11", "Content-Range": "bytes 0-10/11" }]) {
+    const cache = memoryCache();
+    const ctx = executionContext();
+    const { handle } = fixture({ cache, assetHeaders });
+    assert.equal(await (await handle(request(`${id}/AV1/init_0.mp4`), env, ctx)).text(), "media bytes");
+    await ctx.drain();
+    assert.equal(cache.puts.length, 0);
+  }
+  const cache = memoryCache();
+  const { handle } = fixture({ cache, assetHeaders: { "Content-Length": "11" } });
+  assert.equal(await (await handle(request(`${id}/AV1/init_0.mp4`), env)).text(), "media bytes");
+  assert.equal(cache.puts.length, 0);
+});
+
+test("cache failures fall back to authorized origin playback", async () => {
+  for (const cache of [
+    { async match() { throw new Error("Cache unavailable"); }, async put() { throw new Error("Cache full"); } },
+    { async match() {}, put() { throw new Error("Synchronous cache failure"); } },
+  ]) {
+    const ctx = executionContext();
+    const { handle } = fixture({ cache, assetHeaders: { "Content-Length": "11" } });
+    assert.equal(await (await handle(request(`${id}/AV1/init_0.mp4`), env, ctx)).text(), "media bytes");
+    await ctx.drain();
+  }
+});
+
+test("media caching never buffers playback before response headers", async () => {
+  const cache = memoryCache();
+  const ctx = executionContext();
+  let release;
+  const ready = new Promise(resolve => { release = resolve; });
+  const { handle } = fixture({ cache, assetHeaders: { "Content-Length": "4" }, assetBody: () => new ReadableStream({ async start(controller) {
+    await ready;
+    controller.enqueue(new Uint8Array([120, 0, 255, 8]));
+    controller.close();
+  } }) });
+  const response = await handle(request(`${id}/AV1/init_0.mp4`), env, ctx);
+  assert.equal(response.status, 200);
+  release();
+  assert.deepEqual(new Uint8Array(await response.arrayBuffer()), new Uint8Array([120, 0, 255, 8]));
+  await ctx.drain();
+  assert.equal(cache.puts.length, 1);
 });
 
 test("catalogue preserves real uploader index-only tags, HDR and date after fresh authorization", async () => {
