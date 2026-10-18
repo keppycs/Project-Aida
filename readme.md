@@ -128,22 +128,34 @@ An uploaded video uses the authenticated local preview; choosing its original
 source file again is unnecessary. The picker saves an SDR still from the
 decoded video without changing the video renditions.
 
-Opening a video checks B2 when configured, including older uploads without a
-saved editor state. A failed online check leaves local drafts available.
+Opening a video checks the central publisher when configured, including older
+uploads without a saved editor state. A failed online check leaves local drafts
+available.
 **Save locally** keeps a draft on this PC; **Save to website** updates an
 existing upload's details and changed thumbnail without resending its video.
 A new local video still needs its first upload. **Refresh online** includes
 private and unlisted uploads, and local previews keep storage credentials out
-of the player. The optional editor on the public website is a later step and
-is not enabled by this local Studio release.
+of the player. The owner editor and its deployment procedure are described in
+[Owner editor](docs/OWNER_EDITOR.md); these security changes still need deployment
+and live validation.
 
-Cloud refreshes and revision checks detect stale forms and changed online
-details. Failed uploads keep a retryable draft. This is a single-owner local
-writer, not an atomic lock against a simultaneous external writer; a future
-live editor must share a central write service before claiming that guarantee.
-The old bulk catalogue-upload button now opens Videos so publication cannot
-bypass review. CLI catalogue uploads merge current remote metadata and retain
-other online entries.
+With central mode configured, the PC uses a 30-day Cloudflare Access service
+token and needs no reusable B2 key. New uploads obtain five-minute grants for
+exact media assets, bound to path, size, type, Content-MD5 and a SHA-256 header;
+Access credentials stay with the publisher API. The gateway checks the bounded
+DASH/HLS package, every declared video rendition's 120 fps rate and referenced
+asset completeness before finalizing metadata, thumbnails and the catalogue.
+This is package validation, not decoded-frame validation. Cloud refreshes and
+revision checks detect stale forms; failed uploads keep a retryable draft. The
+central writer serializes supported publishers, while older direct B2 writers
+must be stopped or upgraded. Central mode rejects direct bulk publication.
+
+Missing or invalid legacy visibility appears as **Visibility needs review**,
+with no option preselected; publishing requires an explicit choice. New uploads
+still default explicitly to Private. Watch pages now pin the published Shaka
+5.0.7 script with SHA-384 integrity, and authenticated editor/preview pages use
+restricted script and connection policies. See the owner-editor guide for the
+remaining deployment and verification steps.
 
 Changed local files are kept in `.agent-trash/` with restore instructions;
 uploads preserve previous B2 versions. The optional archive-after-upload moves
@@ -200,6 +212,10 @@ Upload the newly generated `thumbnail_share.jpg` to the corresponding video dire
 
 New encodes put descriptions in per-video metadata for the website. For older videos, `py src/sync_catalog.py` previews description and catalogue changes. After reviewing the dry run, `py src/sync_catalog.py --apply --upload` applies and uploads those changes together, keeping previous local metadata in `.agent-trash/`. For local changes only, use `--apply`. The uploader sends only metadata changed during that run, so a separate upload run after a local-only apply will not republish those files. Share previews use the playback summary instead of this written description.
 
+The direct bulk upload commands above apply to legacy mode. In central mode,
+save changes locally and publish reviewed videos through **Videos**; bulk
+publication is rejected.
+
 **Player embeds:** once the Worker is active, `/embed?v=VIDEO_ID` presents just the existing player without autoplay. For example:
 
 ```html
@@ -245,7 +261,7 @@ These checks use fixture metadata, fake HTTP responses and mocked FFmpeg. They d
 
 ### Private storage and CDN visibility
 
-`edge/cdn-worker.mjs` replaces the original unconditional B2 proxy on `cdn.keppy.dev`. It serves only the ProjectAida public catalogue and the pipeline's known metadata, thumbnail, DASH, HLS, init and segment filenames. Every video request, including HEAD and byte ranges, checks fresh origin metadata before returning any file. Public and unlisted videos remain playable; private, unknown and malformed visibility is denied. Private owner previews and editing on the live site are a later feature; local previews retain their existing private-video opt-in.
+`edge/cdn-worker.mjs` replaces the original unconditional B2 proxy on `cdn.keppy.dev`. It serves only the ProjectAida public catalogue and the pipeline's known metadata, thumbnail, DASH, HLS, init and segment filenames. Every video request, including HEAD and byte ranges, checks fresh origin metadata before returning any file. Public and unlisted videos remain playable; private, unknown and malformed visibility is denied. Private owner previews and editing belong to the separate authenticated owner Worker; see its [deployment guide](docs/OWNER_EDITOR.md). Local previews retain their existing private-video opt-in.
 
 The B2 bucket stays **private**, with encryption enabled. The CDN needs a dedicated classic single-bucket application key restricted to ProjectAida with **readFiles** only, stored as encrypted `B2_KEY_ID` and `B2_SECRET_KEY` Worker secrets. Keep upload/maintenance credentials separate and remove bucket-administration capabilities they do not need. Do not expose the local transcoding admin.
 

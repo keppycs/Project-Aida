@@ -252,10 +252,10 @@ class VideoLibrary:
             if field not in metadata and entry and field in entry:
                 metadata[field] = entry[field]
         metadata["id"] = video_id
-        if "visibility" not in metadata:
-            metadata["visibility"] = "unlisted" if metadata.get("unlisted") else (entry or {}).get("visibility", "private")
-        if metadata["visibility"] not in ("public", "unlisted", "private"):
-            metadata["visibility"] = "private"
+        # Legacy flags and catalog membership do not establish owner intent.
+        # Keep uncertainty visible until a valid visibility is chosen explicitly.
+        if metadata.get("visibility") not in ("public", "unlisted", "private"):
+            metadata["visibility"] = "unknown"
         metadata.pop("unlisted", None)
         metadata.setdefault("description", "")
         metadata.setdefault("tags", [])
@@ -280,6 +280,7 @@ class VideoLibrary:
                 fingerprints[name] = sha256(path.read_bytes()).hexdigest()
         revision = _digest({"metadata": local_metadata, "state": state, "entry": entry, "thumbnails": fingerprints})
         return {"id": video_id, "metadata": metadata, "revision": revision, "local": local_metadata is not None,
+                "visibility_review_required": metadata["visibility"] == "unknown",
                 "uploaded": bool(state.get("uploaded")), "pending": bool(state.get("pending")),
                 "remoteChecked": bool(state.get("remoteChecked")), "remoteChanged": bool(state.get("remoteChanged")),
                 "preferRemoteAssets": bool(state.get("uploaded")),
@@ -562,6 +563,8 @@ class VideoLibrary:
         return merged
 
     def _publish(self, video_id: str, metadata: dict, state: dict) -> None:
+        if metadata.get("visibility") not in ("private", "unlisted", "public"):
+            raise VideoLibraryError("Visibility needs review. Choose private, unlisted or public before publishing.")
         if not state.get("remoteChecked"):
             raise VideoConflictError("Refresh this video from cloud storage before publishing, then review your draft.")
         if state.get("needsReview"):
@@ -647,7 +650,7 @@ class VideoLibrary:
                 # upload_folder owns reservation, media-only transfer and the
                 # single central finalization, including thumbnails/catalogue.
                 from upload import upload_folder
-                client, bucket = self._client()
+                client, bucket = None, "ProjectAida"
                 entry = next((item for item in self._index() if item.get("id") == video_id), {})
                 if not upload_folder(client, bucket, self._path(video_id, "metadata.json").parent, video_id,
                                      logging.getLogger("video-library"), entry=entry):
@@ -780,6 +783,16 @@ class VideoLibrary:
                 raise VideoLibraryError("Refresh this video from cloud storage before using its online preview.")
             if range_header is not None and (not isinstance(range_header, str) or not re.fullmatch(r"bytes=(?:[0-9]+-[0-9]*|-[0-9]+)", range_header)):
                 raise VideoLibraryError("Invalid preview byte range.")
+        writer = self._writer()
+        if writer is not None:
+            try:
+                return writer.open_asset(video_id, relative, range_header=range_header)
+            except AdminClientError as exc:
+                if exc.status_code == 404:
+                    raise VideoNotFoundError("This preview file is missing from cloud storage.") from None
+                error = VideoLibraryError("That byte range is outside the preview file." if exc.status_code == 416 else "Could not read the online video preview.")
+                error.status_code = 416 if exc.status_code == 416 else 503
+                raise error from None
         client, bucket = self._client()
         kwargs = {"Range": range_header} if range_header is not None else {}
         try:

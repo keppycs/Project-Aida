@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 
 export const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 export const WORKER = "aida-owner-editor";
-export const MODULES = Object.freeze(["admin-worker.mjs", "admin-auth.mjs", "admin-b2.mjs", "admin-library.mjs", "admin-assets.mjs", "generated/admin-assets.mjs"]);
+export const MODULES = Object.freeze(["admin-worker.mjs", "admin-auth.mjs", "admin-b2.mjs", "admin-package.mjs", "admin-upload.mjs", "admin-library.mjs", "admin-assets.mjs", "generated/admin-assets.mjs"]);
 const PLAIN = ["SITE_ORIGIN", "ACCESS_TEAM_DOMAIN", "ACCESS_AUD", "OWNER_EMAIL", "ACCESS_SERVICE_CLIENT_ID", "B2_BUCKET_ID"];
 const SECRET = ["B2_KEY_ID", "B2_SECRET_KEY"];
 const KEYS = ["CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_API_TOKEN", ...PLAIN, ...SECRET, "LEGACY_VISIBILITY"];

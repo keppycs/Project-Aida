@@ -17,6 +17,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Streamin
 from pydantic import BaseModel, ConfigDict, Field
 
 from config import b2_configured
+from admin_client import AdminClientError, central_client
 from video_library import MEDIA, THUMBNAILS, VIDEO_ID, VideoLibrary, VideoLibraryError, VideoNotFoundError, VideoConflictError
 
 
@@ -271,7 +272,13 @@ def install_editor(app, root: Path, library: VideoLibrary | None = None) -> None
                 result = service.get_video(video_id)
                 set_local_preview_fallback(video_id, True, token)
                 return {**view(result), "online_check_error": "Online status can be checked after the current job finishes. You can edit the local copy."}
-            if not b2_configured():
+            try:
+                cloud_configured = central_client() is not None or b2_configured()
+            except AdminClientError:
+                result = service.get_video(video_id)
+                set_local_preview_fallback(video_id, True, token)
+                return {**view(result), "online_check_error": "Could not check online status. Your saved local edits are kept."}
+            if not cloud_configured:
                 result = service.get_video(video_id)
                 set_local_preview_fallback(video_id, True, token)
                 return {**view(result), "online_check_error": "Cloud storage is not configured. You can edit the local copy."}

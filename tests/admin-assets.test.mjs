@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import assets from "../edge/generated/admin-assets.mjs";
 import { serveAdminAsset } from "../edge/admin-assets.mjs";
+import { readFile } from "node:fs/promises";
 
 const request = (path, method = "GET") => new Request(`https://keppy.dev${path}`, { method });
 
@@ -34,4 +35,18 @@ test("only embedded owner previews receive the player-only projection before fir
   const environment = await (await serveAdminAsset(request("/edit/preview/js/site-env.js"))).text();
   assert.match(environment, /window\.shouldUseLocalCmaf = \(\) => true/);
   assert.equal(assets["/edit/assets/editor.js"].binary, false);
+});
+
+test("public and private previews pin the published Shaka artifact with identical anonymous SRI", async () => {
+  const publicHTML = await readFile(new URL("../web/watch.html", import.meta.url), "utf8");
+  const privateHTML = await (await serveAdminAsset(request("/edit/preview/watch.html?v=private120&embed=1"))).text();
+  const script = /<script\b[^>]*src="https:\/\/cdn\.jsdelivr\.net\/npm\/shaka-player@[^\"]+"[^>]*><\/script>/g;
+  const publicScripts = [...publicHTML.matchAll(script)].map(match => match[0]);
+  const privateScripts = [...privateHTML.matchAll(script)].map(match => match[0]);
+  assert.equal(publicScripts.length, 1);
+  assert.deepEqual(privateScripts, publicScripts);
+  assert.match(publicScripts[0], /@5\.0\.7\/dist\/shaka-player\.compiled\.js"/);
+  assert.match(publicScripts[0], /integrity="sha384-QmUMkgEfxfKsqPJEzI\+KDHoe3v4Ci8Xql0RFiGN093TYQZUBJLXARMl8fVNhubqw"/);
+  assert.match(publicScripts[0], /crossorigin="anonymous"/);
+  assert.equal(assets["/edit/assets/editor.js"].body, await readFile(new URL("../admin/editor.js", import.meta.url), "utf8"));
 });

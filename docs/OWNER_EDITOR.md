@@ -5,17 +5,23 @@ transcoding stay in local Studio. The live editor can save a private draft,
 publish text/visibility changes, and choose an SDR thumbnail from an image or
 an existing video frame. A draft does not change the public video.
 
+The security changes described here still require Worker/static-site deployment
+and live validation. Passing local checks does not establish a completed rollout.
+
 ## Authentication
 
 Protect `/edit` and all its child paths with one Cloudflare Access application.
 Use an **Allow** policy containing the exact owner's email and email-code login.
 Selecting the OTP login method alone is not an email allowlist. Use a separate
-**Service Auth** policy for the local uploader's service token.
+**Service Auth** policy for the local uploader's service token, issued with a
+30-day expiry. Renew it before it expires.
 
 The Worker independently verifies the Access JWT signature, issuer, audience,
 expiry, and owner email. The service identity can use `/edit/api/` only; it cannot
-open the editor or private browser previews. Browser writes also require the
-site's exact Origin, JSON, and `X-Aida-Editor: 1`.
+open the editor or `/edit/preview/` browser pages. Local Studio streams private
+preview assets through the authenticated `/edit/api/media/ID/ASSET` alias, with
+fixed asset names and byte ranges, so those reads also need no B2 key on the PC.
+Browser writes require the site's exact Origin, JSON, and `X-Aida-Editor: 1`.
 
 Required Worker configuration:
 
@@ -33,9 +39,24 @@ Required Worker configuration:
 The B2 key needs `readFiles`, `writeFiles`, and `listFiles`, restricted to
 ProjectAida with no filename prefix. The implementation does not delete B2
 versions. Keep credentials out of source, generated browser assets, and logs.
-If reviewed legacy videos have no visibility field, configure the same explicit
-`LEGACY_VISIBILITY` mapping as the existing CDN; otherwise the editor defaults
-unknown visibility to private.
+In central mode the PC needs only the `AIDA_ADMIN_URL` and Access service-token
+settings below, with no reusable B2 key. Storage signing credentials stay in the
+Worker's encrypted secrets. Access service headers go only to the publisher API;
+they are never forwarded to B2.
+
+Missing or invalid stored visibility is `unknown`, with
+`visibility_review_required: true`. The editor shows **Visibility needs review**,
+selects no visibility option, and requires an explicit Private, Unlisted or Public
+choice before saving to the website. A legacy CDN mapping, index membership or
+old `unlisted` flag does not count as that choice. Existing explicit visibility
+values keep their meaning; new uploads continue to start explicitly private.
+
+Public and private watch pages pin the published Shaka Player 5.0.7
+`shaka-player.compiled.js` file with SHA-384 Subresource Integrity and anonymous
+CORS. The generated CDN `.min.js` alias is unsuitable for an immutable integrity
+pin. The authenticated editor/preview CSP permits same-origin scripts plus that
+exact vendor URL and same-origin connections, while retaining the embedded
+preview's styles and blob media.
 
 ## Build and check
 
@@ -43,7 +64,9 @@ Run from the repository root with Node:
 
 ```text
 node scripts/build-admin-assets.mjs
-node --test tests/admin-auth.test.mjs tests/admin-assets.test.mjs tests/admin-b2.test.mjs tests/admin-library.test.mjs tests/admin-worker.test.mjs
+node --test tests/admin-auth.test.mjs tests/admin-assets.test.mjs tests/admin-b2.test.mjs tests/admin-package.test.mjs tests/admin-library.test.mjs tests/admin-upload.test.mjs tests/admin-worker.test.mjs
+node tests/admin-security.browser.mjs
+node tests/player-focus.browser.mjs
 ```
 
 The asset build includes named application code and icons only. It does not
@@ -59,10 +82,12 @@ playback routes stay separate.
 
 ## Cutover
 
-1. Pause older Studio/uploader processes. Back up the project `.env` before
-   changing it; preserve its existing B2 upload credentials.
+1. Pause older Studio/uploader processes. Back up project settings privately
+   before changing them. Plan removal and rotation of the PC's old reusable B2
+   credentials once the central path passes live checks.
 2. Create the email allowlist, dedicated machine credential, and bucket-scoped
-   B2 key. Deploy the new Worker with its SQLite binding and encrypted secrets.
+   B2 key held only by the Worker. Deploy the new Worker with its SQLite binding
+   and encrypted secrets.
    Establish Access protection before making the editor routes reachable.
 3. Set these in the project's `.env` or the launching process environment:
 
@@ -78,9 +103,14 @@ playback routes stay separate.
 4. Restart local Studio. Check authenticated reads, a private draft, a conflicting
    save, and private preview access before changing a public video. Verify that
    anonymous requests cannot read editor assets, APIs, metadata, or media.
-5. Configure every other local/CLI publisher before resuming it. New large media
-   uploads go directly to B2 only after reserving a fresh ID centrally; metadata,
-   thumbnails, and the public index are finalized through the shared writer.
+5. Configure every other local/CLI publisher before resuming it. New uploads
+   reserve a fresh ID centrally, then request five-minute PUT grants for exact
+   approved media assets. Each grant signs the object path, content length,
+   content type, Content-MD5 and SHA-256 header. The PC verifies the file's size
+   and both digests before streaming it to the exact B2 S3 endpoint. B2 enforces
+   Content-MD5; the signed SHA-256 header is not an independent B2 body check.
+   Expired grants are renewed through the publisher. Metadata, thumbnails and
+   the public index are finalized only through the shared writer.
 
 Central mode rejects direct bulk-index and bulk-sync publication. Older binaries
 and anyone holding a direct B2 write key can bypass this coordination; stop or
@@ -99,7 +129,16 @@ to legacy direct-B2 mode. Pause writers until a compatible gateway is restored.
 Local drafts and upload reservations remain in each video's backed-up editor
 state; B2 versions and reversible `.agent-trash` backups remain available.
 
-The service checks declared 120 fps manifests on finalization. Actual decoded
-frame-rate validation remains the local pipeline's responsibility. Choosing an
-SDR still changes only thumbnail selection; video HDR and 120 fps sources remain
-intact.
+Finalization verifies the declared AV1/HEVC package before publishing metadata:
+every DASH video rendition and HLS video variant must declare 120 fps, local
+references and durations must agree, and every referenced init/media segment
+must exist with a positive size. Unsupported or external references and
+incomplete packages fail closed. Verification is bounded to 16 representations,
+20,000 referenced files, 512 KiB per manifest/playlist, 4 MB total text, four
+inventory pages and 24 storage requests. Packages exceeding those bounds need
+review rather than partial acceptance.
+
+These checks parse manifests and inventory; they do not decode every frame.
+Genuine source motion and encoded-frame validation remain the local pipeline's
+responsibility. Every rendition still requires 120 fps. Choosing an SDR still
+changes only thumbnail selection; video HDR and 120 fps sources remain intact.

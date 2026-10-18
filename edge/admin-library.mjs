@@ -1,5 +1,6 @@
 /** One durable writer owns every metadata/catalog/thumbnail change. */
-import { AdminProblem, BUCKET, VIDEO_ID, METADATA_LIMIT, CATALOG_LIMIT, boundedJSON, createB2Store, digest } from "./admin-b2.mjs";
+import { AdminProblem, BUCKET, VIDEO_ID, MEDIA, METADATA_LIMIT, CATALOG_LIMIT, boundedJSON, createB2Store, digest } from "./admin-b2.mjs";
+import { createUploadSigner } from "./admin-upload.mjs";
 
 const encoder = new TextEncoder();
 const EDITABLE = ["title", "description", "tags", "visibility"];
@@ -9,6 +10,9 @@ const OPERATION = /^[A-Za-z0-9_-]{16,128}$/;
 const REQUEST_LIMIT = 12_000_000;
 const VARIANT_LIMIT = 1_900_000;
 const NEW_METADATA = new Set([...CATALOG_FIELDS, "colorPrimaries", "colorTransfer", "colorSpace"]);
+const MEDIA_LIMIT = 512 * 1024 * 1024;
+const PLAYLIST_LIMIT = 512 * 1024;
+const INIT_LIMIT = 32 * 1024 * 1024;
 
 function plain(value) { return value !== null && typeof value === "object" && !Array.isArray(value); }
 function canonical(value) {
@@ -22,17 +26,25 @@ function bytesJSON(value, limit, label) {
   if (bytes.byteLength > limit) throw new AdminProblem(413, `${label} is too large for the website.`);
   return bytes;
 }
-function id(value) { if (!VIDEO_ID.test(value || "")) throw new AdminProblem(400, "Invalid video ID."); return value; }
-function checkOperation(value) { if (typeof value !== "string" || !OPERATION.test(value)) throw new AdminProblem(400, "A valid operation_id is required."); return value; }
-function normalizeMetadata(raw, videoId, entry, legacy = {}) {
+function id(value) { if (typeof value !== "string" || /\s/.test(value) || !VIDEO_ID.test(value)) throw new AdminProblem(400, "Invalid video ID."); return value; }
+function checkOperation(value) { if (typeof value !== "string" || /\s/.test(value) || !OPERATION.test(value)) throw new AdminProblem(400, "A valid operation_id is required."); return value; }
+function normalizeMetadata(raw, videoId, entry) {
   if (!plain(raw) || typeof raw.title !== "string") throw new AdminProblem(502, "Saved video metadata is invalid.");
   const metadata = { ...raw, id: videoId };
-  if (!Object.hasOwn(raw, "visibility")) metadata.visibility = legacy[videoId] || (raw.unlisted === true ? "unlisted" : entry?.visibility || "private");
-  if (!["public", "unlisted", "private"].includes(metadata.visibility)) metadata.visibility = "private";
+  // Neither an old catalogue entry nor this Worker's compatibility settings
+  // prove which visibility the public CDN currently enforces.
+  if (!["public", "unlisted", "private"].includes(metadata.visibility)) metadata.visibility = "unknown";
   metadata.description = typeof raw.description === "string" ? raw.description : "";
   for (const key of ["tags", "date", "hdr"]) if (!Object.hasOwn(metadata, key) && entry && Object.hasOwn(entry, key)) metadata[key] = entry[key];
   if (!Array.isArray(metadata.tags)) metadata.tags = [];
   delete metadata.unlisted;
+  return metadata;
+}
+function editorMetadata(origin, draft) {
+  const metadata = { ...origin, ...(draft?.fields || {}) };
+  // Older drafts may contain an automatically inferred visibility. Only an
+  // explicit choice saved by the reviewed-visibility API resolves that state.
+  if (origin.visibility === "unknown" && !draft?.visibilityReviewed) metadata.visibility = "unknown";
   return metadata;
 }
 function fields(body) {
@@ -51,6 +63,20 @@ function fields(body) {
 }
 function checkKeys(body, allowed) {
   if (!plain(body) || Object.keys(body).some(key => !allowed.includes(key))) throw new AdminProblem(400, "Unsupported edit fields.");
+}
+function uploadFiles(files) {
+  if (!Array.isArray(files) || !files.length || files.length > 64) throw new AdminProblem(400, "Request between 1 and 64 media upload links.");
+  const seen = new Set();
+  return files.map(file => {
+    checkKeys(file, ["path", "size", "sha256", "md5", "content_type"]);
+    if (typeof file.path !== "string" || file.path.length > 256 || /\s/.test(file.path) || !MEDIA.test(file.path) || seen.has(file.path)) throw new AdminProblem(400, "Upload links support unique packaged media files only.");
+    seen.add(file.path);
+    const type = file.path.endsWith(".mpd") ? "application/dash+xml" : file.path.endsWith(".m3u8") ? "application/vnd.apple.mpegurl" : "video/mp4";
+    const limit = /\.(mpd|m3u8)$/.test(file.path) ? PLAYLIST_LIMIT : /\/init_[0-9]+\.mp4$/.test(file.path) ? INIT_LIMIT : MEDIA_LIMIT;
+    if (!Number.isSafeInteger(file.size) || file.size < 1 || file.size > limit || typeof file.sha256 !== "string" || file.sha256.length !== 64 || !/^[a-f0-9]{64}$/.test(file.sha256) ||
+        typeof file.md5 !== "string" || file.md5.length !== 24 || !/^[A-Za-z0-9+/]{22}==$/.test(file.md5) || btoa(atob(file.md5)) !== file.md5 || file.content_type !== type) throw new AdminProblem(400, "A media upload needs its bounded size, checksums and exact content type.");
+    return { path: file.path, size: file.size, sha256: file.sha256, md5: file.md5, content_type: type };
+  });
 }
 function mergeCatalog(catalog, videoId, metadata) {
   const previous = catalog.find(entry => entry.id === videoId) || {};
@@ -108,8 +134,8 @@ export function validateVariants(variants) {
 function json(value, status = 200) { return Response.json(value, { status, headers: { "Cache-Control": "no-store", "CDN-Cache-Control": "no-store", "X-Content-Type-Options": "nosniff" } }); }
 
 export class AdminLibraryService {
-  constructor({ storage, store, now = Date.now, legacy = {} }) {
-    this.storage = storage; this.store = store; this.now = now; this.legacy = legacy; this.tail = Promise.resolve();
+  constructor({ storage, store, uploadSigner, now = Date.now }) {
+    this.storage = storage; this.store = store; this.uploadSigner = uploadSigner; this.now = now; this.tail = Promise.resolve();
   }
   enqueue(task) { const result = this.tail.then(task); this.tail = result.catch(() => {}); return result; }
   async origin(videoId) {
@@ -118,17 +144,18 @@ export class AdminLibraryService {
     if (!Array.isArray(catalog) || catalog.some(entry => !plain(entry) || typeof entry.id !== "string")) throw new AdminProblem(502, "The cloud video list is invalid.");
     const entry = catalog.find(item => item.id === videoId) || null;
     const revision = await digest(stableJSON({ metadata: raw, entry }));
-    return { raw, catalog, entry, revision, metadata: raw === null ? null : normalizeMetadata(raw, videoId, entry, this.legacy) };
+    return { raw, catalog, entry, revision, metadata: raw === null ? null : normalizeMetadata(raw, videoId, entry) };
   }
   async detail(videoId, origin) {
     origin ||= await this.origin(videoId);
     if (!origin.metadata) throw new AdminProblem(404, "Video not found.");
     const draft = await this.storage.get(`draft:${videoId}`);
-    const metadata = { ...origin.metadata, ...(draft?.fields || {}) };
+    const metadata = editorMetadata(origin.metadata, draft);
     if (draft?.thumbnails?.length) { metadata.thumbnailMode = "sdr"; metadata.thumbnailUpdatedAt = draft.thumbnailUpdatedAt; }
     const revision = await digest(stableJSON({ origin: origin.revision, draft: draft || null }));
     return { ...metadata, id: videoId, metadata, published_metadata: origin.metadata, entry: origin.entry,
       revision, origin_revision: origin.revision, pending: Boolean(draft), remoteChanged: Boolean(draft && draft.base !== origin.revision),
+      visibility_review_required: metadata.visibility === "unknown",
       has_remote: true, uploaded: true, remoteChecked: true, has_local: false, local: false, can_preview: true,
       preview_url: `/edit/preview/watch.html?v=${videoId}&local=1`,
       thumbnail_url: `/edit/preview/local/${videoId}/thumbnail_sdr_720p.webp?revision=${revision}`,
@@ -180,6 +207,10 @@ export class AdminLibraryService {
     const currentHash = await digest(stableJSON(current.raw));
     const desiredHash = await digest(stableJSON(journal.metadata));
     const baseHash = journal.baseMetadataHash;
+    if (!["public", "unlisted", "private"].includes(journal.metadata.visibility) ||
+        (current.metadata?.visibility === "unknown" && journal.action === "publish" && !journal.draft?.visibilityReviewed)) {
+      throw new AdminProblem(409, "Review and explicitly choose this video's visibility before publishing. Your draft is kept.");
+    }
     if (![baseHash, desiredHash].includes(currentHash)) throw new AdminProblem(409, "The live video changed outside this save. Your draft is kept.");
     const images = journal.staged.length ? journal.staged : journal.draft?.thumbnails || [];
     const privateFirst = journal.metadata.visibility === "private" && current.raw !== null;
@@ -234,8 +265,23 @@ export class AdminLibraryService {
     return this.apply(journal);
   }
   async mutate(videoId, body, action, principal) {
+    // Check before replay: a completed service operation is still service-only.
+    if (["reserve", "finalize", "upload-grants"].includes(action) && principal.kind !== "service") throw new AdminProblem(403, "New uploads are prepared in local Studio.");
     const operationId = checkOperation(body.operation_id), hash = await digest(stableJSON({ action, videoId, body }));
     return this.enqueue(async () => {
+      if (action === "upload-grants") {
+        const files = uploadFiles(body.files);
+        await this.recover();
+        const reservation = await this.storage.get(`reservation:${videoId}`);
+        if (!reservation || reservation.finalized || reservation.media_uploads !== "signed-put" || body.lease !== reservation.lease || body.reservation_operation_id !== reservation.operationId) throw new AdminProblem(409, "A fresh active upload reservation is required.");
+        const origin = await this.origin(videoId);
+        if (origin.raw !== null || origin.entry) throw new AdminProblem(409, "That video is already published. Upload links cannot replace it.");
+        const replay = await this.replay(operationId, hash); if (replay) return replay;
+        if (typeof this.uploadSigner !== "function") throw new AdminProblem(503, "Media upload links are not configured.");
+        const result = await this.uploadSigner({ videoId, files, expiresIn: 300 });
+        await this.storage.put(`operation:${operationId}`, { hash, status: 200, body: result });
+        return json(result);
+      }
       let replay = await this.replay(operationId, hash); if (replay) return replay;
       await this.recover(); replay = await this.replay(operationId, hash); if (replay) return replay;
       if (action === "reserve") {
@@ -249,7 +295,7 @@ export class AdminLibraryService {
         const origin = await this.origin(videoId);
         if (existing || origin.raw !== null || origin.entry || await this.store.hasPrefix(videoId)) throw new AdminProblem(409, "That video ID already exists. Choose a new ID.");
         const lease = crypto.randomUUID() + crypto.randomUUID();
-        await this.storage.put(`reservation:${videoId}`, { lease, operationId, hash, createdAt: this.now(), finalized: false });
+        await this.storage.put(`reservation:${videoId}`, { lease, operationId, hash, createdAt: this.now(), finalized: false, media_uploads: "signed-put" });
         const result = { id: videoId, lease };
         await this.storage.put(`operation:${operationId}`, { hash, status: 200, body: result });
         return json(result);
@@ -261,6 +307,7 @@ export class AdminLibraryService {
         const origin = await this.origin(videoId);
         if (origin.raw !== null || origin.entry) throw new AdminProblem(409, "That video ID appeared online. The local encode is kept.");
         if (!plain(body.metadata) || body.metadata.id !== videoId || Object.keys(body.metadata).some(key => !NEW_METADATA.has(key)) || body.metadata.frameRate !== 120 ||
+            !["public", "unlisted", "private"].includes(body.metadata.visibility) ||
             !Array.isArray(body.metadata.codecs) || !body.metadata.codecs.length || body.metadata.codecs.length > 2 || new Set(body.metadata.codecs).size !== body.metadata.codecs.length || body.metadata.codecs.some(codec => !["AV1", "HEVC"].includes(codec)) ||
             !Number.isFinite(body.metadata.duration) || body.metadata.duration <= 0 || !Number.isInteger(body.metadata.width) || !Number.isInteger(body.metadata.height) || body.metadata.width < 1 || body.metadata.height < 1 || body.metadata.width > 16384 || body.metadata.height > 16384) throw new AdminProblem(400, "New metadata must describe the completed 120 fps encode.");
         const metadata = normalizeMetadata({ ...body.metadata, ...fields(body.metadata) }, videoId, plain(body.entry) ? body.entry : null);
@@ -282,11 +329,13 @@ export class AdminLibraryService {
       const images = validateVariants(body.variants);
       const draft = { fields: { ...(previous?.fields || {}), ...fields(body) }, base: previous?.base || origin.revision,
         thumbnails: previous?.thumbnails || [], version: (previous?.version || 0) + 1,
+        ...(previous?.visibilityReviewed || (origin.metadata.visibility === "unknown" && Object.hasOwn(body, "visibility")) ? { visibilityReviewed: true } : {}),
         ...(previous?.thumbnailUpdatedAt ? { thumbnailUpdatedAt: previous.thumbnailUpdatedAt } : {}) };
       if (images.length) draft.thumbnailUpdatedAt = new Date(this.now()).toISOString();
-      const metadata = { ...origin.metadata, ...draft.fields };
+      const metadata = editorMetadata(origin.metadata, draft);
       if (images.length || draft.thumbnails.length) { metadata.thumbnailMode = "sdr"; metadata.thumbnailUpdatedAt = draft.thumbnailUpdatedAt; }
       bytesJSON(metadata, METADATA_LIMIT, "Video metadata"); bytesJSON(mergeCatalog(origin.catalog, videoId, metadata), CATALOG_LIMIT, "Video list");
+      if (body.publish && metadata.visibility === "unknown") { const error = new AdminProblem(409, "Review and explicitly choose this video's visibility before publishing. Your draft is kept."); error.current = current; throw error; }
       if (body.publish && draft.base !== origin.revision) { const error = new AdminProblem(409, "The live video changed. Your draft is kept for review."); error.current = current; throw error; }
       // Persist the text before any remote mutation; retries and object resets
       // retain the owner's intended edit while B2 versions remain recoverable.
@@ -314,7 +363,7 @@ export class AdminLibraryService {
         for (const item of page.ids) { try { videos.push(await this.detail(id(item))); } catch (error) { if (error.status !== 404) throw error; } }
         return json({ videos, next_cursor: page.next_cursor });
       }
-      const videoMatch = /^\/edit\/api\/videos\/([A-Za-z0-9_-]{1,128})(?:\/(thumbnail|reload))?$/.exec(path);
+      const videoMatch = /^\/edit\/api\/videos\/([A-Za-z0-9_-]{1,128})(?:\/(thumbnail|reload|upload-grants))?$/.exec(path);
       const reserve = path === "/edit/api/uploads/reserve";
       const finalize = /^\/edit\/api\/uploads\/([A-Za-z0-9_-]{1,128})\/finalize$/.exec(path);
       if (request.method === "GET" && videoMatch && !videoMatch[2]) { knownQuery(["remote", "check_online"]); return json(await this.detail(id(videoMatch[1]))); }
@@ -325,6 +374,10 @@ export class AdminLibraryService {
       if (finalize) { checkKeys(body, ["lease", "metadata", "entry", "variants", "operation_id", "media_complete"]); videoId = id(finalize[1]); return await this.mutate(videoId, body, "finalize", principal); }
       videoId = id(videoMatch[1]);
       const action = videoMatch[2] || "edit";
+      if (action === "upload-grants") {
+        checkKeys(body, ["lease", "reservation_operation_id", "operation_id", "files"]);
+        return await this.mutate(videoId, body, action, principal);
+      }
       checkKeys(body, action === "reload" ? ["revision", "operation_id"] : [...EDITABLE, "revision", "publish", "operation_id", "variants"]);
       if (typeof body.revision !== "string" || body.revision.length > 128 || (Object.hasOwn(body, "publish") && typeof body.publish !== "boolean")) throw new AdminProblem(400, "A current video revision is required.");
       if (action === "thumbnail" && !body.variants) throw new AdminProblem(400, "Choose a thumbnail image.");
@@ -342,9 +395,7 @@ export class AdminLibraryService {
 
 export class AidaLibrary {
   constructor(state, env) {
-    let legacy = {};
-    try { legacy = JSON.parse(env.LEGACY_VISIBILITY || "{}"); } catch {}
-    this.service = new AdminLibraryService({ storage: state.storage, store: createB2Store(env), legacy });
+    this.service = new AdminLibraryService({ storage: state.storage, store: createB2Store(env), uploadSigner: createUploadSigner(env) });
   }
   fetch(request) {
     let principal;

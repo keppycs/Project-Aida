@@ -8,7 +8,7 @@ import { pipeline } from "node:stream/promises";
 export const PUBLIC_VIDEO_ID = "XxY3g8Qzx_k";
 export const PUBLIC_CDN = "https://cdn.keppy.dev/file/ProjectAida";
 const WEB_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../../web");
-const SHAKA_URL = "https://cdn.jsdelivr.net/npm/shaka-player@5.0.7/dist/shaka-player.compiled.min.js";
+const SHAKA_URL = "https://cdn.jsdelivr.net/npm/shaka-player@5.0.7/dist/shaka-player.compiled.js";
 const MIME = {
   ".html": "text/html; charset=utf-8", ".css": "text/css; charset=utf-8",
   ".js": "text/javascript; charset=utf-8", ".json": "application/json",

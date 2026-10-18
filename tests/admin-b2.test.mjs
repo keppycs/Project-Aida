@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createB2Store, digest, AdminProblem, boundedJSON } from '../edge/admin-b2.mjs';
 import { AdminLibraryService } from '../edge/admin-library.mjs';
+import { packageFixture } from './admin-package-fixtures.mjs';
 
 const bucketId = '123456789012345678abcdef';
 const env = { B2_KEY_ID: 'fake-test-key', B2_SECRET_KEY: 'fake-test-secret', B2_BUCKET_ID: bucketId };
@@ -75,14 +76,61 @@ test('root listing includes private folders with a validated cursor and no publi
   await assert.rejects(() => h.store.listVideoIds('../secret'), error => error.status === 400);
 });
 
-test('JSON bounds and manifest declarations reject excess bytes and non120 media', async () => {
+test('JSON bounds and structurally incomplete or non120 manifests fail closed', async () => {
   await assert.rejects(() => boundedJSON(new Response('{"x":"123456"}'), 5), error => error.status === 413);
-  for (const rate of ['60','30','240/2']) {
-    const h = harness(() => new Response(`<MPD><Representation frameRate="${rate}"/></MPD>`));
-    await assert.rejects(() => h.store.verifyPackage('video120', { codecs: ['AV1'], frameRate: 120 }), error => error.status === 400);
+  for (const rate of ['60','30','119.88']) {
+    const f=packageFixture(),h=harness(()=>new Response(f.mpd.replace('frameRate="120/1"',`frameRate="${rate}"`)));
+    await assert.rejects(() => h.store.verifyPackage('video120', f.metadata), error => error.status === 400 && /120 fps/.test(error.message));
   }
-  const good = harness(() => new Response('<MPD><Representation frameRate="120"/><Representation frameRate="120/1"/></MPD>'));
-  await good.store.verifyPackage('video120', { codecs: ['AV1','HEVC'], frameRate: 120 });
+  const fake = harness(() => new Response('<!-- frameRate="120" --><MPD><Representation frameRate="120"/></MPD>'));
+  await assert.rejects(() => fake.store.verifyPackage('video120', { codecs: ['AV1'], frameRate: 120, duration:8 }), error => error.status === 400);
+});
+
+function packageHarness({ objects = packageFixture().objects, missing, empty, pageSize=5000, expire=false, inventory=value=>value }={}) {
+  const expired=new Set();
+  return harness((url,init)=>{
+    if(expire&&!expired.has(url.pathname)){expired.add(url.pathname);return new Response(null,{status:401});}
+    if(url.pathname.endsWith('/b2_list_file_names')){
+      const body=JSON.parse(init.body);assert.equal(body.prefix,'video120/');assert.equal(body.maxFileCount,5000);
+      const all=[...objects].filter(([key])=>key!==missing).map(([key,value])=>({fileName:'video120/'+key,action:'upload',fileId:'version-'+key,contentLength:key===empty?0:typeof value==='string'?Buffer.byteLength(value):value.length})).sort((a,b)=>a.fileName.localeCompare(b.fileName));
+      const begin=body.startFileName?all.findIndex(file=>file.fileName>=body.startFileName):0;
+      return Response.json(inventory({files:all.slice(begin,begin+pageSize),nextFileName:all[begin+pageSize]?.fileName||null}));
+    }
+    const key=url.pathname.replace('/file/ProjectAida/video120/','');
+    assert.ok(key.endsWith('.mpd')||key.endsWith('.m3u8'),'Verifier must not GET media bodies');
+    return objects.has(key)&&key!==missing?new Response(objects.get(key)):new Response(null,{status:404});
+  });
+}
+
+test('package verification checks every audio/video reference using bounded inventory instead of media downloads',async()=>{
+  const objects=new Map([...packageFixture('AV1').objects,...packageFixture('HEVC').objects]);
+  const h=packageHarness({objects,pageSize:15});
+  const result=await h.store.verifyPackage('video120',{frameRate:120,duration:8,codecs:['AV1','HEVC']});
+  assert.equal(result.representations,6);assert.equal(result.referencedFiles,28);assert.equal(result.inventoryPages,2);assert.equal(result.requests,h.calls.length);assert.ok(result.requests<=24);
+  assert.ok(h.calls.every(({url})=>!url.pathname.includes('b2_upload')&&!url.pathname.includes('b2_copy')));
+});
+
+test('missing middle/final chunks, empty init and absent HLS renditions block finalization',async()=>{
+  for(const missing of ['AV1/chunk_0_1.fmp4','AV1/chunk_1_2.fmp4','AV1/chunk_2_2.fmp4','AV1/media_2.m3u8','AV1/master.m3u8']){
+    const h=packageHarness({missing});await assert.rejects(()=>h.store.verifyPackage('video120',{frameRate:120,duration:8,codecs:['AV1']}),error=>error.status===409,missing);
+  }
+  const h=packageHarness({empty:'AV1/init_1.mp4'});await assert.rejects(()=>h.store.verifyPackage('video120',{frameRate:120,duration:8,codecs:['AV1']}),error=>error.status===409);
+});
+
+test('production six-tier plus audio packages fit verifier request budget; repeated auth refresh stops before excess fetches',async()=>{
+  const objects=new Map([...packageFixture('AV1',6).objects,...packageFixture('HEVC',6).objects]);
+  const h=packageHarness({objects});const result=await h.store.verifyPackage('video120',{frameRate:120,duration:8,codecs:['AV1','HEVC']});
+  assert.equal(result.representations,14);assert.equal(result.requests,20);
+  const retry=packageHarness({objects,expire:true});await assert.rejects(()=>retry.store.verifyPackage('video120',{frameRate:120,duration:8,codecs:['AV1','HEVC']}),error=>error.status===503);assert.equal(retry.calls.length,24);
+});
+
+test('inventory cursors/pages and invalid text encoding cannot escape verification bounds',async()=>{
+  for(const inventory of [page=>({...page,nextFileName:page.files[0].fileName}),page=>({...page,files:[{...page.files[0],fileName:'another-video/metadata.json'}]})]){
+    const h=packageHarness({inventory});await assert.rejects(()=>h.store.verifyPackage('video120',{frameRate:120,duration:8,codecs:['AV1']}),error=>error.status===502);
+  }
+  const pages=packageHarness({pageSize:3});await assert.rejects(()=>pages.store.verifyPackage('video120',{frameRate:120,duration:8,codecs:['AV1']}),error=>error.status===413);assert.equal(pages.calls.filter(({url})=>url.pathname.endsWith('b2_list_file_names')).length,4);
+  const malformed=packageFixture().objects;malformed.set('AV1/manifest.mpd',new Uint8Array([0xc3,0x28]));
+  await assert.rejects(()=>packageHarness({objects:malformed}).store.verifyPackage('video120',{frameRate:120,duration:8,codecs:['AV1']}),error=>error.status===400);
 });
 
 test('stalled JSON body expires through its deadline and releases the mutation queue', async () => {

@@ -1,6 +1,8 @@
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
-from hashlib import sha256
+from hashlib import sha256, md5
+import base64
+import time
 from pathlib import Path
 from threading import Lock
 from typing import Any, Callable
@@ -234,9 +236,14 @@ def upload_folder(
         if publication[2]["centralUpload"].get("media_complete"):
             _finalize_central_package(writer, *publication)
             return True
-        # Only immutable rendition assets bypass the shared writer. Neither
-        # metadata, thumbnails nor the whole local index reach B2 directly.
         files = [path for path in files if _MEDIA_ASSET.fullmatch(path.relative_to(local_dir).as_posix())]
+        if not _upload_central_media(writer, publication, local_dir, files, log, max_workers, on_progress):
+            return False
+        publication[2]["centralUpload"]["media_complete"] = True
+        publication[0]._save_state(publication[1], publication[2])
+        _finalize_central_package(writer, *publication)
+        log.info("  Upload complete through the central publisher")
+        return True
     total = len(files)
     failed: list[str] = []
     done  = 0
@@ -334,6 +341,63 @@ def _reserve_central_package(writer, folder: Path, video_id: str, files: list[Pa
         operation["lease"] = writer.reserve(video_id, operation["reserve_operation_id"])
         library._save_state(video_id, state)
     return library, video_id, state, metadata, entry, images
+
+
+def _upload_central_media(writer, publication, folder, files, log, max_workers, on_progress):
+    """Short-lived grants only: no reusable storage credential on this PC."""
+    _, video_id, state, *_ = publication
+    operation = state["centralUpload"]
+    done, failed = 0, []
+    workers = max(1, min(max_workers, 20))
+    # Mint only for the active wave; queued waves must get their own five minutes.
+    for offset in range(0, len(files), workers):
+        paths = files[offset:offset + workers]
+        descriptors = []
+        for path in paths:
+            size = path.stat().st_size
+            if not 0 < size <= 512 * 1024 * 1024:
+                raise AdminClientError("A video file exceeds the upload size limit. Your package is kept.", 413)
+            sha, checksum = sha256(), md5()
+            with path.open("rb") as stream:
+                for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                    sha.update(chunk)
+                    checksum.update(chunk)
+            descriptors.append({"path": path.relative_to(folder).as_posix(), "size": size, "sha256": sha.hexdigest(),
+                "md5": base64.b64encode(checksum.digest()).decode(),
+                "content_type": "application/vnd.apple.mpegurl" if path.suffix == ".m3u8" else MIME_MAP[path.suffix]})
+        for attempt in range(2):
+            result = writer.upload_grants(video_id, operation["lease"], operation["reserve_operation_id"], descriptors, operation_id=str(uuid4()))
+            if result["expires_timestamp"] > time.time() + 10:
+                break
+        else:
+            raise AdminClientError("Upload permissions expired. Retry the upload; your package is kept.")
+        grants = {grant["path"]: grant for grant in result["grants"]}
+        def transfer(pair):
+            path, descriptor = pair
+            try:
+                writer.upload_media(video_id, path, descriptor, grants[descriptor["path"]])
+            except AdminClientError as exc:
+                if exc.status_code != 403:
+                    raise
+                # A link can expire while a file is checked or a slow connection
+                # starts. Renew once with the same immutable file descriptor.
+                renewed = writer.upload_grants(video_id, operation["lease"], operation["reserve_operation_id"], [descriptor], operation_id=str(uuid4()))
+                writer.upload_media(video_id, path, descriptor, renewed["grants"][0])
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = {pool.submit(transfer, pair): pair[1]["path"] for pair in zip(paths, descriptors)}
+            for future in as_completed(futures):
+                try:
+                    future.result()
+                except Exception:
+                    # Signed URLs and provider error bodies must never enter logs.
+                    failed.append(futures[future])
+                done += 1
+                if on_progress:
+                    on_progress(done, len(files))
+        if failed:
+            log.error("  Video upload interrupted; local files are kept. Failed files: %s", ", ".join(failed))
+            return False
+    return True
 
 
 def _finalize_central_package(writer, library, video_id, state, metadata, entry, images):
@@ -490,7 +554,7 @@ if __name__ == "__main__":
     log.addHandler(handler)
     log.propagate = False
 
-    b2, bucket = make_b2_client()
+    b2, bucket = (None, "ProjectAida") if central_client() is not None else make_b2_client()
 
     log.info(f"Folder : {folder}")
     log.info(f"Prefix : {prefix}")

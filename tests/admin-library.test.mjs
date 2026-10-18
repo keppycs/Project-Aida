@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { AdminLibraryService, validateVariants } from '../edge/admin-library.mjs';
-import { AdminProblem } from '../edge/admin-b2.mjs';
+import { AdminLibraryService, stableJSON, validateVariants } from '../edge/admin-library.mjs';
+import { AdminProblem, digest } from '../edge/admin-b2.mjs';
+import { createHandler } from '../edge/cdn-worker.mjs';
 
 const clone = value => value === undefined ? undefined : structuredClone(value);
 class MemoryStorage {
@@ -41,9 +42,9 @@ const meta = (extra = {}) => ({ id: 'video120', title: 'Original', description: 
 const owner = { kind: 'owner', email: 'owner@example.test' }, machine = { kind: 'service' };
 let count = 0;
 const operation = () => `operation_${String(++count).padStart(16, '0')}`;
-function fixture(metadata = meta()) {
+function fixture(metadata = meta(), legacy = {}, uploadSigner) {
   const storage = new MemoryStorage(), store = new VersionedStore(metadata);
-  const create = () => new AdminLibraryService({ storage, store, now: () => 1_700_000_000_000 });
+  const create = () => new AdminLibraryService({ storage, store, uploadSigner, now: () => 1_700_000_000_000, legacy });
   const service = create();
   async function request(path, body, principal = owner, target = service) {
     return target.handle(new Request(`https://keppy.dev/edit/api/${path}`, body === undefined ? {} : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }), principal);
@@ -56,17 +57,112 @@ const webp = 'UklGRjQAAABXRUJQVlA4ICgAAABwAQCdASoCAAIAAUAmJaACdAFAAAD++s8//3wJ//
 // Minimal structurally valid SOF frame: only dimensions are inspected server-side.
 const jpeg = Buffer.from([255,216,255,192,0,11,8,0,2,0,2,1,1,17,0,255,217]).toString('base64');
 const variants = () => ({ 'thumbnail_sdr.webp': { type: 'image/webp', data: webp }, 'thumbnail_sdr_720p.webp': { type: 'image/webp', data: webp }, 'thumbnail_share.jpg': { type: 'image/jpeg', data: jpeg } });
+function legacyMetadata(extra = {}) { const { visibility, ...metadata } = meta(extra); return metadata; }
+function anonymousMetadata(store, legacy) {
+  const handler = createHandler({ fetcher: async input => {
+    const url = new URL(String(input));
+    if (url.href === 'https://api.backblazeb2.com/b2api/v2/b2_authorize_account') return Response.json({ downloadUrl: 'https://f003.backblazeb2.com', authorizationToken: 'fake-read-token', allowed: { bucketName: 'ProjectAida', capabilities: ['readFiles'] } });
+    assert.equal(url.href, 'https://f003.backblazeb2.com/file/ProjectAida/video120/metadata.json');
+    return Response.json(store.data.get('video120/metadata.json'));
+  } });
+  return () => handler(new Request('https://cdn.keppy.dev/file/ProjectAida/video120/metadata.json'), { B2_KEY_ID: 'fake', B2_SECRET_KEY: 'fake', LEGACY_VISIBILITY: JSON.stringify(legacy) });
+}
 
-test('private owner reads preserve technical fields and normalize unsafe visibility', async () => {
+test('owner reads preserve technical fields and require review for unsafe visibility', async () => {
   const f = fixture(meta({ id: 'historical-id', visibility: 'garbage' }));
   const detail = await f.read();
-  assert.equal(detail.id, 'video120'); assert.equal(detail.visibility, 'private'); assert.equal(detail.frameRate, 120);
+  assert.equal(detail.id, 'video120'); assert.equal(detail.visibility, 'unknown'); assert.equal(detail.visibility_review_required, true); assert.equal(detail.frameRate, 120);
   assert.equal(detail.metadata.colorTransfer, 'smpte2084'); assert.equal(detail.has_remote, true); assert.equal(detail.can_preview, true);
   assert.equal((await f.request('videos/video120', undefined, null)).status, 403);
   assert.equal((await f.request('videos/video120?remote=banana')).status, 400);
   assert.equal((await f.request('videos/video120?remote=true&check_online=true')).status, 200);
   const list = await (await f.request('videos?cursor=video120/')).json();
-  assert.equal(list.videos[0].visibility, 'private'); assert.equal(f.store.cursor, 'video120/');
+  assert.equal(list.videos[0].visibility, 'unknown'); assert.equal(list.videos[0].visibility_review_required, true); assert.equal(f.store.cursor, 'video120/');
+});
+
+test('legacy visibility remains unknown when the public CDN uses its own reviewed unlisted mapping', async () => {
+  const f = fixture(legacyMetadata()), publicRead = anonymousMetadata(f.store, { video120: 'unlisted' });
+  const response = await publicRead();
+  assert.equal(response.status, 200); assert.equal((await response.json()).visibility, 'unlisted');
+  const detail = await f.read();
+  assert.equal(detail.visibility, 'unknown'); assert.equal(detail.published_metadata.visibility, 'unknown');
+  assert.equal(detail.visibility_review_required, true); assert.equal(detail.pending, false);
+  assert.equal(f.store.calls.length, 0); assert.equal(Object.hasOwn(f.store.data.get('video120/metadata.json'), 'visibility'), false);
+
+  for (const metadata of [legacyMetadata({ unlisted: true }), meta({ visibility: null }), meta({ visibility: false }), meta({ visibility: [] })]) {
+    const other = fixture(metadata, { video120: 'public' });
+    other.store.data.set('index.json', [meta({ visibility: 'public' })]);
+    assert.equal((await other.read()).visibility, 'unknown', 'Neither a legacy flag, a separate map nor a catalogue entry proves stored visibility');
+    assert.equal((await other.read()).visibility_review_required, true);
+  }
+});
+
+test('a stale public catalogue cannot release unknown legacy metadata through title-only publication', async () => {
+  const f = fixture(legacyMetadata(), { video120: 'public' });
+  f.store.data.set('index.json', [meta({ title: 'Stale public catalogue' })]);
+  const publicRead = anonymousMetadata(f.store, {});
+  assert.equal((await publicRead()).status, 404);
+  const draft = await (await f.edit({ title: 'My title draft', publish: false })).json();
+  assert.equal(draft.title, 'My title draft'); assert.equal(draft.pending, true); assert.equal(draft.visibility_review_required, true);
+  const result = await f.edit({ title: 'Title-only publish', publish: true });
+  assert.equal(result.status, 409); assert.match((await result.json()).detail, /explicitly choose.*visibility/);
+  assert.equal((await f.read()).title, 'My title draft');
+  assert.equal(f.store.calls.length, 0); assert.equal((await publicRead()).status, 404);
+  assert.equal(Object.hasOwn(f.store.data.get('video120/metadata.json'), 'visibility'), false);
+});
+
+test('valid stored visibility is authoritative and an explicit private video stays private', async () => {
+  for (const visibility of ['public', 'unlisted', 'private']) {
+    const f = fixture(meta({ visibility }), { video120: visibility === 'private' ? 'public' : 'private' });
+    f.store.data.set('index.json', [meta({ visibility: 'public' })]);
+    const detail = await f.read();
+    assert.equal(detail.visibility, visibility); assert.equal(detail.published_metadata.visibility, visibility);
+    assert.equal(detail.visibility_review_required, false); assert.equal(detail.pending, false);
+  }
+  const f = fixture(meta({ visibility: 'private' }));
+  assert.equal((await f.edit({ title: 'Still private', publish: true })).status, 200);
+  assert.equal(f.store.data.get('video120/metadata.json').visibility, 'private');
+  assert.equal((await f.read()).visibility_review_required, false);
+});
+
+test('reviewed draft visibility persists across resets and stale revisions still conflict', async () => {
+  const f = fixture(legacyMetadata()), before = await f.read();
+  const saved = await (await f.edit({ title: 'Reviewed title', visibility: 'unlisted', publish: false })).json();
+  assert.equal(saved.visibility, 'unlisted'); assert.equal(saved.visibility_review_required, false); assert.equal(saved.pending, true);
+  assert.equal(saved.published_metadata.visibility, 'unknown'); assert.equal(f.store.calls.length, 0);
+  assert.equal((await f.request('videos/video120', { revision: before.revision, title: 'Stale', visibility: 'public', publish: true, operation_id: operation() })).status, 409);
+  const result = await f.request('videos/video120', { revision: saved.revision, publish: true, operation_id: operation() }, owner, f.create());
+  assert.equal(result.status, 200);
+  const published = await result.json();
+  assert.equal(published.pending, false); assert.equal(published.visibility, 'unlisted'); assert.equal(published.visibility_review_required, false);
+  assert.equal(f.store.data.get('video120/metadata.json').visibility, 'unlisted');
+  assert.equal(f.store.data.get('video120/metadata.json').colorTransfer, 'smpte2084');
+
+  const other = fixture(legacyMetadata());
+  await other.edit({ visibility: 'private', publish: false });
+  other.store.data.set('video120/metadata.json', legacyMetadata({ title: 'Changed outside the editor' }));
+  const conflict = await other.edit({ publish: true });
+  assert.equal(conflict.status, 409); assert.equal((await conflict.json()).current.remoteChanged, true);
+  assert.equal(other.store.calls.length, 0);
+});
+
+test('pre-fix inferred drafts and unfinished publications need a fresh explicit visibility review', async () => {
+  const f = fixture(legacyMetadata());
+  const origin = await f.service.origin('video120');
+  const draft = { fields: { title: 'Old inferred draft', visibility: 'public' }, base: origin.revision, thumbnails: [], version: 1 };
+  await f.storage.put('draft:video120', draft);
+  assert.equal((await f.read()).visibility, 'unknown'); assert.equal((await f.read()).visibility_review_required, true);
+  assert.equal((await f.edit({ publish: true })).status, 409); assert.equal(f.store.calls.length, 0);
+  const operationId = operation();
+  await f.storage.put('journal', { id: operationId, hash: 'old-publish-hash', videoId: 'video120', action: 'publish', draft,
+    metadata: { ...legacyMetadata(), ...draft.fields }, images: [], staged: [],
+    baseMetadataHash: await digest(stableJSON(origin.raw)), baseEntryHash: await digest(stableJSON(origin.entry)), desiredEntryHash: 'unused' });
+  await f.create().recover();
+  assert.equal((await f.storage.get(`operation:${operationId}`)).status, 409); assert.equal(await f.storage.get('journal'), undefined);
+  assert.equal((await f.read()).title, 'Old inferred draft'); assert.equal((await f.read()).visibility, 'unknown');
+  assert.equal(f.store.calls.length, 0);
+  const reviewed = await (await f.edit({ visibility: 'private', publish: true })).json();
+  assert.equal(reviewed.visibility, 'private'); assert.equal(reviewed.pending, false); assert.equal(reviewed.visibility_review_required, false);
 });
 
 test('text drafts write no B2 objects, preserve technical metadata, and detect outside changes', async () => {
@@ -182,14 +278,112 @@ test('new uploads require service reservation, completed 120fps media and replay
   assert.equal((await f.request('uploads/reserve', reserve)).status, 403);
   const held = await (await f.request('uploads/reserve', reserve, machine)).json();
   assert.ok(held.lease); assert.deepEqual(await (await f.request('uploads/reserve', reserve, machine)).json(), held);
+  assert.equal((await f.request('uploads/reserve', reserve, owner)).status, 403, 'A cached service response remains service-only');
   assert.equal((await f.request('uploads/reserve', { ...reserve, operation_id: operation() }, machine)).status, 409);
   const finish = { lease: held.lease, metadata: meta({ id: 'new120' }), entry: {}, variants: variants(), media_complete: true, operation_id: operation() };
   assert.equal((await f.request('uploads/new120/finalize', { ...finish, metadata: meta({ id: 'new120', frameRate: 60 }) }, machine)).status, 400);
+  const { visibility, ...missingVisibility } = finish.metadata;
+  assert.equal((await f.request('uploads/new120/finalize', { ...finish, metadata: missingVisibility, entry: { visibility: 'public' } }, machine)).status, 400);
+  assert.equal(f.store.calls.length, 0);
   const result = await f.request('uploads/new120/finalize', finish, machine); assert.equal(result.status, 200);
   const calls = f.store.calls.length;
   assert.equal((await f.request('uploads/new120/finalize', finish, machine, f.create())).status, 200);
   assert.equal(f.store.calls.length, calls); assert.equal(f.store.data.get('new120/metadata.json').frameRate, 120);
   assert.equal(f.store.calls.filter(([kind]) => kind === 'verify').length, 1);
+});
+
+test('reservation IDs and operation IDs reject coercion and trailing newlines', async () => {
+  const f = fixture(null);
+  for (const id of ['new120\n', 'new120\r', 123, ['new120'], {}, null, '', 'a'.repeat(129)]) {
+    assert.equal((await f.request('uploads/reserve', { id, operation_id: operation() }, machine)).status, 400);
+  }
+  for (const operation_id of [operation() + '\n', operation() + '\r', 123, [operation()]]) {
+    assert.equal((await f.request('uploads/reserve', { id: 'new120', operation_id }, machine)).status, 400);
+  }
+  assert.equal(f.storage.data.size, 0); assert.equal(f.store.calls.length, 0);
+});
+
+const mediaFile = (extra = {}) => ({ path: 'AV1/chunk_0_1.fmp4', size: 1024, sha256: 'a'.repeat(64), md5: Buffer.alloc(16).toString('base64'), content_type: 'video/mp4', ...extra });
+async function reservedFixture(uploadSigner) {
+  const f = fixture(null, {}, uploadSigner);
+  const reserve = { id: 'new120', operation_id: operation() };
+  const held = await (await f.request('uploads/reserve', reserve, machine)).json();
+  return { ...f, reserve, grants: { lease: held.lease, reservation_operation_id: reserve.operation_id, operation_id: operation(), files: [mediaFile()] } };
+}
+
+test('media grants bind a fresh unpublished reservation, fixed assets and idempotent service operation', async () => {
+  const signed = [];
+  const signer = async value => {
+    signed.push(clone(value));
+    return { expires_at: '2023-11-14T22:18:20.000Z', grants: value.files.map(file => ({ path: file.path, url: `https://s3.eu-central-003.backblazeb2.com/ProjectAida/${value.videoId}/${file.path}?fake-signature=${signed.length}`, headers: { 'Content-Type': file.content_type, 'X-Amz-Content-Sha256': file.sha256, 'Content-MD5': file.md5, 'Content-Length': String(file.size) } })) };
+  };
+  const f = await reservedFixture(signer), path = 'videos/new120/upload-grants';
+  assert.equal((await f.request(path, f.grants, owner)).status, 403); assert.equal(signed.length, 0);
+  assert.equal((await f.storage.get('reservation:new120')).media_uploads, 'signed-put');
+  f.store.data.set('new120/AV1/init_0.mp4', new Uint8Array([1,2,3]));
+  const response = await f.request(path, f.grants, machine);
+  assert.equal(response.status, 200);
+  const result = await response.json();
+  assert.deepEqual(signed, [{ videoId: 'new120', files: f.grants.files, expiresIn: 300 }]);
+  assert.equal(result.grants[0].headers['X-Amz-Content-Sha256'], f.grants.files[0].sha256);
+  assert.equal(result.grants[0].headers['Content-MD5'], f.grants.files[0].md5, 'B2 enforces this signed payload checksum');
+  assert.equal(f.store.calls.length, 0, 'Grant requests write no B2 metadata, catalogue, thumbnails or media');
+  assert.deepEqual(await (await f.request(path, f.grants, machine, f.create())).json(), result);
+  assert.equal(signed.length, 1, 'Lost-response retry returns the same signed request');
+  assert.equal((await f.request(path, f.grants, owner)).status, 403, 'Replay cannot bypass service authorization');
+  assert.equal((await f.request(path, { ...f.grants, files: [mediaFile({ size: 2 })] }, machine)).status, 409);
+  assert.equal(signed.length, 1);
+  // An expired replay carries the original expiry; clients must use a new
+  // operation_id to obtain fresh links rather than altering an old request.
+  assert.equal((await (await f.request(path, f.grants, machine)).json()).expires_at, result.expires_at);
+  assert.equal((await f.request(path, { ...f.grants, operation_id: operation() }, machine)).status, 200);
+  assert.equal(signed.length, 2);
+
+  f.store.data.set('new120/metadata.json', meta({ id: 'new120' }));
+  assert.equal((await f.request(path, f.grants, machine)).status, 409, 'Publishing the ID invalidates grant replay too');
+  assert.equal((await f.request(path, { ...f.grants, operation_id: operation() }, machine)).status, 409);
+  assert.equal(signed.length, 2);
+});
+
+test('media grants reject stale reservations and fail closed without a signer', async () => {
+  let calls = 0;
+  const f = await reservedFixture(async () => { calls++; return { grants: [] }; });
+  const path = 'videos/new120/upload-grants';
+  for (const values of [{ lease: 'wrong' }, { reservation_operation_id: operation() }]) {
+    assert.equal((await f.request(path, { ...f.grants, ...values, operation_id: operation() }, machine)).status, 409);
+  }
+  const reservation = await f.storage.get('reservation:new120');
+  await f.storage.put('reservation:new120', { ...reservation, finalized: true });
+  assert.equal((await f.request(path, f.grants, machine)).status, 409);
+  const { media_uploads, ...oldReservation } = reservation;
+  await f.storage.put('reservation:new120', oldReservation);
+  assert.equal((await f.request(path, f.grants, machine)).status, 409, 'Pre-cutover reservations cannot mint grants');
+  await f.storage.put('reservation:new120', reservation);
+  f.store.data.set('index.json', [meta({ id: 'new120' })]);
+  assert.equal((await f.request(path, f.grants, machine)).status, 409, 'A catalogue-only existing ID is not fresh');
+  assert.equal(calls, 0);
+  const unconfigured = await reservedFixture(undefined);
+  assert.equal((await unconfigured.request(path, unconfigured.grants, machine)).status, 503);
+});
+
+test('media grants enforce filename, batch, content type, hash and asset size limits before signing', async () => {
+  let calls = 0;
+  const f = await reservedFixture(async () => { calls++; return { grants: [] }; });
+  const bad = [
+    [], Array.from({ length: 65 }, (_, index) => mediaFile({ path: `AV1/chunk_0_${index}.fmp4` })), [mediaFile(), mediaFile()],
+    ...['index.json', 'metadata.json', 'thumbnail_sdr.webp', '../AV1/manifest.mpd', 'AV1/../../index.json', 'AV1/manifest.mpd?versionId=x', 'AV1/%2e%2e/init_0.mp4', 'AV1/manifest.mpd\n'].map(path => [mediaFile({ path })]),
+    [mediaFile({ size: 0 })], [mediaFile({ size: -1 })], [mediaFile({ size: 1.5 })], [mediaFile({ size: 512 * 1024 * 1024 + 1 })],
+    [mediaFile({ sha256: 'A'.repeat(64) })], [mediaFile({ sha256: 'a'.repeat(64) + '\n' })], [mediaFile({ sha256: 'a'.repeat(63) })],
+    [mediaFile({ md5: undefined })], [mediaFile({ md5: '' })], [mediaFile({ md5: 'A'.repeat(21) + 'B==' })], [mediaFile({ md5: Buffer.alloc(15).toString('base64') })], [mediaFile({ md5: Buffer.alloc(16).toString('base64') + '\n' })],
+    [mediaFile({ content_type: 'application/octet-stream' })], [mediaFile({ path: 'AV1/manifest.mpd', content_type: 'application/dash+xml', size: 512 * 1024 + 1 })],
+    [mediaFile({ path: 'HEVC/media_0.m3u8', content_type: 'application/vnd.apple.mpegurl', size: 512 * 1024 + 1 })],
+    [mediaFile({ path: 'HEVC/init_0.mp4', size: 32 * 1024 * 1024 + 1 })], [mediaFile({ unsupported: true })],
+  ];
+  for (const files of bad) assert.equal((await f.request('videos/new120/upload-grants', { ...f.grants, operation_id: operation(), files }, machine)).status, 400, JSON.stringify(files).slice(0, 120));
+  assert.equal(calls, 0); assert.equal(f.store.calls.length, 0);
+  const allowed = [mediaFile({ size: 512 * 1024 * 1024 }), mediaFile({ path: 'AV1/manifest.mpd', size: 512 * 1024, content_type: 'application/dash+xml' }), mediaFile({ path: 'HEVC/master.m3u8', size: 512 * 1024, content_type: 'application/vnd.apple.mpegurl' }), mediaFile({ path: 'HEVC/init_0.mp4', size: 32 * 1024 * 1024 })];
+  assert.equal((await f.request('videos/new120/upload-grants', { ...f.grants, files: allowed }, machine)).status, 200);
+  assert.equal(calls, 1);
 });
 
 test('oversized metadata/catalog and unsupported edits fail before B2 mutations', async () => {

@@ -23,6 +23,12 @@ function security(response) {
   assert.equal(response.headers.get('X-Frame-Options'),'SAMEORIGIN');
   assert.equal(response.headers.get('X-Content-Type-Options'),'nosniff');
   assert.match(response.headers.get('Content-Security-Policy'), /frame-ancestors 'self'/);
+  const csp = response.headers.get('Content-Security-Policy');
+  assert.match(csp, /(?:^|; )script-src 'self' https:\/\/cdn\.jsdelivr\.net\/npm\/shaka-player@5\.0\.7\/dist\/shaka-player\.compiled\.js(?:;|$)/);
+  assert.match(csp, /(?:^|; )connect-src 'self'(?:;|$)/);
+  assert.match(csp, /(?:^|; )script-src-attr 'none'(?:;|$)/);
+  assert.match(csp, /(?:^|; )media-src 'self' blob:(?:;|$)/);
+  assert.doesNotMatch(csp, /script-src[^;]*(?:unsafe-inline|unsafe-eval|\*)|connect-src[^;]*(?:https:|\*)/);
   assert.equal(response.headers.has('Set-Cookie'),false); assert.equal(response.headers.has('X-Bz-File-Id'),false);
 }
 
@@ -67,6 +73,28 @@ test('draft thumbnails read only the DO supplied private object and missing IDs 
   const image = await s.request('/edit/preview/local/private120/thumbnail_sdr.webp?revision=abc'); assert.equal(image.status,206); assert.equal(s.reads[0].key,key);
   assert.equal(image.headers.get('Content-Type'),'image/webp');
   const absent = setup({ missing:true }); assert.equal((await absent.request('/edit/preview/local/private120/AV1/manifest.mpd')).status,404); assert.equal(absent.reads.length,0);
+});
+
+test('service media API streams private assets without granting browser previews or forwarding raw API paths', async()=>{
+  const s=setup({principal:{kind:'service',sub:'machine'}});
+  const response=await s.request('/edit/api/media/private120/AV1/chunk_0_1.fmp4',{headers:{Range:'bytes=0-3'}});
+  assert.equal(response.status,206);security(response);assert.deepEqual(new Uint8Array(await response.arrayBuffer()),new Uint8Array([120,255,0,1]));
+  assert.deepEqual(s.reads[0],{key:'private120/AV1/chunk_0_1.fmp4',method:'GET',range:'bytes=0-3'});
+  assert.equal(new URL(s.forwarded[0].url).pathname,'/edit/api/videos/private120');
+  assert.equal(JSON.parse(s.forwarded[0].headers.get('X-Aida-Internal-Principal')).kind,'service');
+  const head=await s.request('/edit/api/media/private120/AV1/init_0.mp4',{method:'HEAD'});assert.equal(head.status,206);assert.equal(await head.text(),'');
+  const metadata=await s.request('/edit/api/media/private120/metadata.json');assert.equal((await metadata.json()).visibility,'private');
+  assert.equal((await s.request('/edit/preview/local/private120/AV1/init_0.mp4')).status,403);
+});
+
+test('service media alias keeps strict path/query/range/method and missing-video gates',async()=>{
+  const s=setup({principal:{kind:'service',sub:'machine'}});
+  for(const path of ['/edit/api/media/private120/.env','/edit/api/media/private120/AV1/source.mp4','/edit/api/media/private120/AV1/init_0.mp4?token=fake','/edit/api/media/private120/AV1/init_0.mp4?revision=a&revision=b','/edit/api/media/private120/AV1/init_0.mp4?revision='+ 'x'.repeat(129),'/edit/api/media/private120/%2e%2e%2f.env'])assert.equal((await s.request(path)).status,404,path);
+  assert.equal((await s.request('/edit/api/media/private120/AV1/init_0.mp4',{headers:{Range:'bytes=0-1,4-5'}})).status,416);
+  assert.equal((await s.request('/edit/api/media/private120/AV1/init_0.mp4',{method:'POST',body:'{}'})).status,405);
+  assert.equal(s.reads.length,0);
+  const missing=setup({principal:{kind:'service'},missing:true});assert.equal((await missing.request('/edit/api/media/private120/AV1/init_0.mp4')).status,404);assert.equal(missing.reads.length,0);
+  const anonymous=setup({authorize:async()=>{throw new AdminAuthError(401,'Sign in.');}});assert.equal((await anonymous.request('/edit/api/media/private120/AV1/init_0.mp4')).status,401);assert.equal(anonymous.reads.length,0);
 });
 
 test('unknown files, paths, queries and multiranges cannot reach the private bucket', async () => {

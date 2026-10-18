@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import base64
+from datetime import datetime, timezone
+from hashlib import md5, sha256
 from io import StringIO
 import json
 import os
@@ -10,7 +12,7 @@ from pathlib import Path
 import re
 import stat
 from urllib.error import HTTPError, URLError
-from urllib.parse import quote, urlsplit
+from urllib.parse import quote, urlsplit, parse_qsl
 from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
 from uuid import uuid4
 
@@ -66,6 +68,7 @@ class AdminClient:
         self.client_id = client_id
         self.client_secret = client_secret
         self.opener = opener
+        self.upload_opener = None
 
     @staticmethod
     def _id(video_id: str) -> str:
@@ -126,6 +129,54 @@ class AdminClient:
             raise AdminClientError("The central video details are incomplete.")
         return result
 
+    def open_asset(self, video_id: str, relative: str, range_header: str | None = None) -> dict:
+        """Authenticated, streaming private preview. Caller owns Body.close()."""
+        self._id(video_id)
+        if not isinstance(relative, str) or not (relative in (*VARIANTS, "thumbnail_hdr.avif", "thumbnail_hdr_720p.avif", "metadata.json") or
+                re.fullmatch(r"(?:AV1|HEVC)/(?:manifest\.mpd|master\.m3u8|media_[0-9]+\.m3u8|init_[0-9]+\.mp4|chunk_[0-9]+_[0-9]+\.fmp4)", relative)):
+            raise AdminClientError("Invalid private preview asset.", 400)
+        if range_header is not None and (not isinstance(range_header, str) or len(range_header) > 100 or not re.fullmatch(r"bytes=(?:[0-9]+-[0-9]*|-[0-9]+)", range_header)):
+            raise AdminClientError("Invalid preview byte range.", 416)
+        if self.opener is None:
+            self.opener = build_opener(ProxyHandler({}), _NoRedirect())
+        headers = {"User-Agent": "ProjectAidaStudio/1.0", "Accept-Encoding": "identity", "CF-Access-Client-Id": self.client_id, "CF-Access-Client-Secret": self.client_secret}
+        if range_header is not None:
+            headers["Range"] = range_header
+        response = None
+        try:
+            try:
+                response = self.opener.open(Request(self.url + f"/media/{video_id}/{relative}", headers=headers), timeout=30)
+            except HTTPError as exc:
+                response = exc
+            if response.status not in (200, 206):
+                raise AdminClientError("The private preview is unavailable.", response.status if response.status in (404, 416) else 503)
+            content_type = response.headers.get("Content-Type", "").split(";", 1)[0].lower()
+            expected = "application/json" if relative == "metadata.json" else "image/avif" if relative.endswith(".avif") else VARIANTS.get(relative) or ("application/dash+xml" if relative.endswith(".mpd") else "application/vnd.apple.mpegurl" if relative.endswith(".m3u8") else "video/mp4")
+            if content_type != expected or response.headers.get("Content-Encoding", "identity").lower() != "identity":
+                raise AdminClientError("The private preview returned an unexpected file.")
+            result = {"Body": response, "ContentType": content_type, "ContentEncoding": "identity"}
+            if response.headers.get("Content-Length") is not None:
+                length = response.headers["Content-Length"]
+                if not re.fullmatch(r"[0-9]+", length):
+                    raise AdminClientError("The private preview size is invalid.")
+                result["ContentLength"] = int(length)
+            if response.headers.get("Content-Range") is not None:
+                content_range = response.headers["Content-Range"]
+                if not re.fullmatch(r"bytes [0-9]+-[0-9]+/[0-9]+", content_range) or response.status != 206:
+                    raise AdminClientError("The private preview byte range is invalid.")
+                result["ContentRange"] = content_range
+            if response.status == 206 and "ContentRange" not in result:
+                raise AdminClientError("The private preview byte range is incomplete.")
+            return result
+        except (URLError, OSError, TimeoutError):
+            if response is not None:
+                response.close()
+            raise AdminClientError("The private preview connection was interrupted.") from None
+        except Exception:
+            if response is not None:
+                response.close()
+            raise
+
     def list_videos(self) -> list[dict]:
         videos, seen, cursor = [], set(), None
         while True:
@@ -152,6 +203,90 @@ class AdminClient:
         if images:
             payload["variants"] = encode_variants(images)
         return self._request(f"/uploads/{self._id(video_id)}/finalize", payload)
+
+    def upload_grants(self, video_id: str, lease: str, reservation_operation_id: str, files: list[dict], *, operation_id: str):
+        result = self._request(f"/videos/{self._id(video_id)}/upload-grants", {"lease": lease,
+            "reservation_operation_id": reservation_operation_id, "files": files, "operation_id": operation_id})
+        grants = result.get("grants") if isinstance(result, dict) else None
+        try:
+            expiration = datetime.fromisoformat(result["expires_at"].replace("Z", "+00:00"))
+            if expiration.utcoffset() is None or expiration.utcoffset().total_seconds() != 0:
+                raise ValueError()
+            expires = expiration.timestamp()
+            if expires > datetime.now(timezone.utc).timestamp() + 305:
+                raise ValueError()
+        except (ValueError, KeyError, TypeError, AttributeError):
+            raise AdminClientError("The upload permissions are incomplete.") from None
+        if not isinstance(grants, list) or len(grants) != len(files):
+            raise AdminClientError("The upload permissions are incomplete.")
+        expected = {file["path"]: file for file in files}
+        seen = set()
+        for grant in grants:
+            if not isinstance(grant, dict) or grant.get("path") not in expected or grant["path"] in seen:
+                raise AdminClientError("The upload permissions contain unexpected files.")
+            self._validate_upload_grant(video_id, grant, expected[grant["path"]])
+            try:
+                signed_at = datetime.strptime(dict(parse_qsl(urlsplit(grant["url"]).query))["X-Amz-Date"], "%Y%m%dT%H%M%SZ").replace(tzinfo=timezone.utc).timestamp()
+            except ValueError:
+                raise AdminClientError("The upload permission date is invalid.") from None
+            if not 0 <= expires - signed_at - 300 < 1:
+                raise AdminClientError("The upload permission expiry is inconsistent.")
+            seen.add(grant["path"])
+        return {**result, "expires_timestamp": expires}
+
+    @staticmethod
+    def _validate_upload_grant(video_id: str, grant: dict, file: dict):
+        try:
+            if not isinstance(grant["url"], str) or any(character.isspace() or ord(character) < 32 or ord(character) == 127 for character in grant["url"]):
+                raise ValueError()
+            parsed = urlsplit(grant["url"])
+            pairs = parse_qsl(parsed.query, strict_parsing=True)
+            query = dict(pairs)
+            headers = grant["headers"]
+            valid = (parsed.scheme == "https" and parsed.netloc == "s3.eu-central-003.backblazeb2.com" and
+                parsed.path == f"/ProjectAida/{video_id}/{file['path']}" and not parsed.fragment and
+                len(query) == len(pairs) == 6 and set(query) == {"X-Amz-Algorithm", "X-Amz-Credential", "X-Amz-Date", "X-Amz-Expires", "X-Amz-SignedHeaders", "X-Amz-Signature"} and
+                query["X-Amz-Algorithm"] == "AWS4-HMAC-SHA256" and query["X-Amz-Expires"] == "300" and
+                re.fullmatch(r"[A-Za-z0-9]+/\d{8}/eu-central-003/s3/aws4_request", query["X-Amz-Credential"]) and query["X-Amz-Credential"].split("/")[1] == query["X-Amz-Date"][:8] and
+                re.fullmatch(r"\d{8}T\d{6}Z", query["X-Amz-Date"]) and re.fullmatch(r"[a-f0-9]{64}", query["X-Amz-Signature"]) and
+                query["X-Amz-SignedHeaders"] == "content-length;content-md5;content-type;host;x-amz-content-sha256" and
+                headers == {"Content-Length": str(file["size"]), "Content-MD5": file["md5"], "Content-Type": file["content_type"], "X-Amz-Content-Sha256": file["sha256"]})
+        except (ValueError, TypeError, KeyError):
+            valid = False
+        if not valid:
+            raise AdminClientError("The upload permissions point to an unexpected destination.")
+
+    def upload_media(self, video_id: str, path: Path, file: dict, grant: dict):
+        """PUT exactly the granted bytes; Access credentials never leave the publisher."""
+        self._validate_upload_grant(self._id(video_id), grant, file)
+        if self.upload_opener is None:
+            self.upload_opener = build_opener(ProxyHandler({}), _NoRedirect())
+        if not 0 < file["size"] <= 512 * 1024 * 1024:
+            raise AdminClientError("The upload file is too large.", 413)
+        response = None
+        try:
+            with path.open("rb") as stream:
+                sha, checksum, size = sha256(), md5(), 0
+                for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                    size += len(chunk)
+                    if size > file["size"]:
+                        break
+                    sha.update(chunk)
+                    checksum.update(chunk)
+                if size != file["size"] or sha.hexdigest() != file["sha256"] or base64.b64encode(checksum.digest()).decode() != file["md5"]:
+                    raise AdminClientError("The video package changed. Keep it for review.", 409)
+                stream.seek(0)
+                try:
+                    response = self.upload_opener.open(Request(grant["url"], data=stream, headers=grant["headers"], method="PUT"), timeout=90)
+                except HTTPError as exc:
+                    response = exc
+            if not 200 <= response.status < 300:
+                raise AdminClientError("A video file could not be uploaded. Your local package is kept.", response.status)
+        except (URLError, OSError, TimeoutError):
+            raise AdminClientError("A video upload was interrupted. Your local package is kept.") from None
+        finally:
+            if response is not None:
+                response.close()
 
     def publish(self, video_id: str, fields: dict, revision: str, *, images=None, operation_id: str | None = None):
         payload = {**{key: fields[key] for key in ("title", "description", "tags", "visibility") if key in fields},

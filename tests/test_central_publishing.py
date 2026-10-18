@@ -1,6 +1,9 @@
 """Fake central writer/B2 integration; no network, media decoding or credentials."""
 
 from copy import deepcopy
+import base64
+from hashlib import md5, sha256
+import time
 import json
 import logging
 from pathlib import Path
@@ -23,9 +26,7 @@ class FakeMedia:
         self.fail = None
 
     def upload_file(self, path, bucket, key, ExtraArgs):
-        if self.fail and key.endswith(self.fail):
-            raise OSError("Synthetic media failure")
-        self.writes.append((key, Path(path).read_bytes()))
+        raise AssertionError("Central uploads must not use reusable B2 credentials")
 
     def put_object(self, **kwargs):
         raise AssertionError("Central mode must never directly write metadata/catalogue/thumbnails")
@@ -51,6 +52,20 @@ class FakeWriter:
         if self.current:
             raise AdminClientError("Existing ID", 409)
         return "synthetic-lease"
+
+    def upload_grants(self, video_id, lease, reservation_operation_id, files, *, operation_id):
+        self.calls.append(("grants", video_id, deepcopy(files)))
+        return {"expires_timestamp": time.time() + 300, "grants": [{"path": file["path"]} for file in files]}
+
+    def upload_media(self, video_id, path, descriptor, grant):
+        key = f"{video_id}/{descriptor['path']}"
+        if self.media.fail and key.endswith(self.media.fail):
+            raise AdminClientError("Synthetic media failure")
+        data = path.read_bytes()
+        assert descriptor["size"] == len(data)
+        assert descriptor["sha256"] == sha256(data).hexdigest()
+        assert descriptor["md5"] == base64.b64encode(md5(data).digest()).decode()
+        self.media.writes.append((key, data))
 
     def _result(self, metadata, entry):
         self.current = {"id": metadata["id"], "metadata": deepcopy(metadata), "published_metadata": deepcopy(metadata),
@@ -94,6 +109,7 @@ class CentralPublishingTests(unittest.TestCase):
             (self.folder / name).write_bytes(b"synthetic image; validated by fake server")
         (self.folder / "thumbnail_hdr.avif").write_bytes(b"local HDR thumbnail remains local")
         self.media, self.writer = FakeMedia(), FakeWriter()
+        self.writer.media = self.media
         self.library = video_library.VideoLibrary(self.project, self.local, client_factory=lambda: (self.media, "fixture"))
         self.log = logging.getLogger("central-publishing-test")
         for module in (upload, video_library, sync_catalog):
@@ -131,6 +147,36 @@ class CentralPublishingTests(unittest.TestCase):
         self.assertEqual(operation["reserve_operation_id"], first_operation["reserve_operation_id"])
         self.assertEqual(operation["operation_id"], first_operation["operation_id"])
         self.assertEqual(sum(call[0] == "reserve" for call in self.writer.calls), 1)
+
+    def test_slow_upload_waves_get_fresh_grants_after_prior_files_finish(self):
+        for index in range(1, 4):
+            (self.folder / "AV1" / f"chunk_0_{index}.fmp4").write_bytes(b"synthetic chunk")
+        original = self.writer.upload_grants
+        def grants(*args, **kwargs):
+            previous = sum(call[0] == "grants" for call in self.writer.calls)
+            self.assertEqual(len(self.media.writes), previous)
+            self.assertEqual(len(args[3]), 1)
+            return original(*args, **kwargs)
+        self.writer.upload_grants = grants
+        self.assertTrue(upload.upload_folder(None, "fixture", self.folder, "video", self.log,
+            max_workers=1, on_progress=lambda *_: None, entry=self.entry))
+        self.assertEqual(len(self.media.writes), 5)
+
+    def test_expiry_during_upload_renews_only_that_file_once(self):
+        original = self.writer.upload_media
+        attempts = []
+        def transfer(video_id, path, descriptor, grant):
+            if descriptor["path"].endswith("init_0.mp4"):
+                attempts.append(1)
+                if len(attempts) == 1:
+                    raise AdminClientError("Synthetic expired link", 403)
+            return original(video_id, path, descriptor, grant)
+        self.writer.upload_media = transfer
+        self.assertTrue(self.upload())
+        self.assertEqual(len(attempts), 2)
+        grant_calls = [call for call in self.writer.calls if call[0] == "grants"]
+        self.assertEqual(len(grant_calls), 2)
+        self.assertEqual([file["path"] for file in grant_calls[-1][2]], ["AV1/init_0.mp4"])
 
     def test_finalize_failure_retry_does_not_reupload_media_or_change_operation(self):
         self.writer.failure = AdminClientError("Synthetic timeout")
@@ -199,12 +245,13 @@ class CentralPublishingTests(unittest.TestCase):
         self.assertEqual(set(call[2]), {"title", "description", "tags", "visibility"})
 
     def test_local_editor_first_publication_uses_reserve_media_and_finalize(self):
+        self.library._client = lambda: self.fail("Central publication must never load B2 credentials")
         current = self.library.get_video("video", remote=True)
         saved = self.library.save_video("video", {"title": "First upload", "visibility": "private"}, current["revision"], publish=True)
         self.assertFalse(saved["pending"])
         self.assertTrue(saved["uploaded"])
         self.assertEqual(saved["metadata"]["frameRate"], 120)
-        self.assertEqual([call[0] for call in self.writer.calls if call[0] != "read"], ["reserve", "finalize"])
+        self.assertEqual([call[0] for call in self.writer.calls if call[0] != "read"], ["reserve", "grants", "finalize"])
         self.assertEqual(len(self.media.writes), 2)
 
     def test_existing_pending_stills_publish_with_details_in_one_revision_checked_call(self):

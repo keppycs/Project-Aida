@@ -92,8 +92,8 @@ def run_pipeline(
     # Validate B2 credentials early so a missing config doesn't surprise
     # you after a multi-hour encode.
     if upload_to_b2:
-        central_client()  # Invalid enabled central auth fails before encoding.
-        get_b2_credentials()
+        if central_client() is None:
+            get_b2_credentials()
 
     video_id = video_id or f"0{int(time.time())}"
     local_store = VideoLibrary(ROOT, LOCAL_DIR)
@@ -101,7 +101,7 @@ def run_pipeline(
         raise ValueError("That video already exists. Use the video editor to change it.")
     b2 = bucket = None
     if upload_to_b2:
-        b2, bucket = make_b2_client()
+        b2, bucket = (None, "ProjectAida") if central_client() is not None else make_b2_client()
         if is_already_uploaded(b2, bucket, video_id, logging.getLogger("transcode")):
             raise ValueError("That video ID already exists online. Open it in Videos to edit it.")
     title = title.strip() or video_file.stem

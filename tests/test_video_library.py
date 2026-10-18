@@ -7,6 +7,7 @@ from pathlib import Path
 import runpy
 import tempfile
 from threading import Event
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -108,6 +109,15 @@ class VideoLibraryTests(unittest.TestCase):
         self.assertEqual(self.client_calls, 0)
         self.assertFalse(self.b2.puts)
 
+    def test_new_central_upload_does_not_look_up_b2_credentials(self):
+        calls = []
+        fake_upload = SimpleNamespace(upload_folder=lambda *args, **kwargs: calls.append((args, kwargs)) or False)
+        with patch.dict("sys.modules", {"upload": fake_upload}), self.assertRaisesRegex(VideoLibraryError, "Upload did not finish"):
+            self.library._publish_central(object(), "video-a", self.metadata, {"uploaded": False})
+        self.assertEqual(self.client_calls, 0)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0][0][:2], (None, "ProjectAida"))
+
     def test_only_editorial_fields_are_editable_and_technical_fields_survive(self):
         for fields in ({"frameRate": 60}, {"source": "outside.mkv"}, {"id": "other"}, {"title": " "}, {"visibility": "published"}):
             with self.subTest(fields=fields), self.assertRaises(VideoLibraryError):
@@ -148,15 +158,50 @@ class VideoLibraryTests(unittest.TestCase):
         self.assertEqual(saved["metadata"]["frameRate"], 120)
         self.assertEqual(saved["metadata"]["colorTransfer"], "smpte2084")
 
-    def test_explicit_invalid_visibility_is_private_even_with_public_legacy_index(self):
-        for visibility in (None, "PUBLIC", False, "bad"):
+    def test_invalid_or_missing_visibility_needs_review_despite_legacy_public_listing(self):
+        for visibility in (None, "PUBLIC", False, "bad", [], {}):
             with self.subTest(visibility=visibility):
                 self.cloud({**self.metadata, "visibility": visibility}, [{"id": "video-a", "visibility": "public"}])
-                self.assertEqual(self.view(remote=True)["metadata"]["visibility"], "private")
+                view = self.view(remote=True)
+                self.assertEqual(view["metadata"]["visibility"], "unknown")
+                self.assertTrue(view["visibility_review_required"])
+                listed = self.library.list_videos()[0]
+                self.assertEqual(listed["visibility"], "unknown")
+                self.assertTrue(listed["visibility_review_required"])
         legacy = dict(self.metadata)
         del legacy["visibility"]
+        legacy["unlisted"] = True
         self.cloud(legacy, [{"id": "video-a", "visibility": "public"}])
-        self.assertEqual(self.view(remote=True)["metadata"]["visibility"], "public")
+        view = self.view(remote=True)
+        self.assertEqual(view["metadata"]["visibility"], "unknown")
+        self.assertTrue(view["visibility_review_required"])
+        self.assertNotIn("unlisted", view["metadata"])
+
+    def test_local_unknown_visibility_preserves_drafts_but_requires_choice_before_publication(self):
+        legacy = {key: value for key, value in self.metadata.items() if key != "visibility"}
+        self.write_local(legacy)
+        self.cloud(legacy, [{"id": "video-a", "visibility": "public"}])
+        self.assertTrue(self.view()["visibility_review_required"])
+        self.view(remote=True)
+        saved = self.save({"title": "Keep this draft without inferring access"})
+        self.assertEqual(saved["metadata"]["visibility"], "unknown")
+        self.assertTrue(saved["visibility_review_required"])
+        with self.assertRaisesRegex(VideoLibraryError, "Visibility needs review"):
+            self.save(publish=True)
+        self.assertFalse(self.b2.puts)
+        self.assertNotIn("visibility", json.loads(self.b2.objects["video-a/metadata.json"]))
+        chosen = self.save({"visibility": "private"}, publish=True)
+        self.assertFalse(chosen["visibility_review_required"])
+        self.assertEqual(chosen["metadata"]["visibility"], "private")
+        self.assertEqual(json.loads(self.b2.objects["video-a/metadata.json"])["visibility"], "private")
+
+    def test_explicit_visibility_values_keep_their_meaning_without_review(self):
+        for visibility in ("private", "unlisted", "public"):
+            with self.subTest(visibility=visibility):
+                self.write_local({**self.metadata, "visibility": visibility})
+                view = self.view()
+                self.assertEqual(view["metadata"]["visibility"], visibility)
+                self.assertFalse(view["visibility_review_required"])
 
     def test_explicit_refresh_includes_uploaded_only_private_and_unlisted(self):
         self.cloud()

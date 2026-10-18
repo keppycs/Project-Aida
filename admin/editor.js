@@ -10,6 +10,7 @@
   let authenticationExpired = false;
   const studio = { videos: [], rows: new Map(), selected: null, detail: null, baseline: "", dirty: false, busy: false, pendingAction: null, listRequest: 0, detailRequest: 0, listAbort: null, detailAbort: null, onlineAbort: null, lastListRemote: false, conflictMode: null };
   const visibilityText = { private: "Private", unlisted: "Unlisted", public: "Public" };
+  const visibilityLabel = (detail) => detail.visibility_review_required !== true && Object.hasOwn(visibilityText, detail.visibility) ? visibilityText[detail.visibility] : "Visibility needs review";
   const editable = ["#edit-title", "#edit-description", "#edit-tags", 'input[name="edit-visibility"]'];
   const picker = { open: false, epoch: 0, operation: 0, id: null, video: null, document: null, source: "", controller: null, observer: null, callback: null, timeout: null, seekRequest: null, paints: [], ready: false, waiting: false, presented: null, exact: false, target: 0, candidate: null };
 
@@ -103,11 +104,11 @@
   function completeLiveOperation(id, kind) { liveActions.delete(`${id}:${kind}`); }
 
   function fields() {
-    return { title: find("#edit-title").value, description: find("#edit-description").value, tags: find("#edit-tags").value.split(",").map((tag) => tag.trim()).filter(Boolean), visibility: find('input[name="edit-visibility"]:checked')?.value || "private" };
+    return { title: find("#edit-title").value, description: find("#edit-description").value, tags: find("#edit-tags").value.split(",").map((tag) => tag.trim()).filter(Boolean), visibility: find('input[name="edit-visibility"]:checked')?.value || "unknown" };
   }
 
   function fromDetail(detail) {
-    return { title: String(detail.title || ""), description: String(detail.description || ""), tags: Array.isArray(detail.tags) ? detail.tags.map(String) : String(detail.tags || "").split(",").map((tag) => tag.trim()).filter(Boolean), visibility: Object.hasOwn(visibilityText, detail.visibility) ? detail.visibility : "private" };
+    return { title: String(detail.title || ""), description: String(detail.description || ""), tags: Array.isArray(detail.tags) ? detail.tags.map(String) : String(detail.tags || "").split(",").map((tag) => tag.trim()).filter(Boolean), visibility: detail.visibility_review_required !== true && Object.hasOwn(visibilityText, detail.visibility) ? detail.visibility : "unknown" };
   }
 
   function thumbnailURL(raw) {
@@ -141,8 +142,8 @@
     find("#editor-card-title").textContent = draft.title || "Untitled video";
     const frameRate = studio.detail?.frameRate;
     const frameRateLabel = typeof frameRate === "number" && Number.isFinite(frameRate) && frameRate === 120 ? `${frameRate} fps` : "120 fps required";
-    find("#editor-card-visibility").textContent = `${visibilityText[draft.visibility]} · ${frameRateLabel}`;
-    find("#visibility-help").textContent = draft.visibility === "private" ? "Only you can preview a private video here." : draft.visibility === "unlisted" ? "Anyone with the link can watch. It won't appear in the video list." : "Everyone can watch. It appears in the video list after publishing.";
+    find("#editor-card-visibility").textContent = `${visibilityLabel(draft)} · ${frameRateLabel}`;
+    find("#visibility-help").textContent = draft.visibility === "unknown" ? "Visibility needs review. Choose Private, Unlisted or Public before saving." : draft.visibility === "private" ? "Only you can preview a private video here." : draft.visibility === "unlisted" ? "Anyone with the link can watch. It won't appear in the video list." : "Everyone can watch. It appears in the video list after publishing.";
     find("#editor-publish").textContent = liveEditor || studio.detail?.has_remote ? "Save to website" : draft.visibility === "public" ? "Publish video" : "Upload video";
     find("#editor-upload-note").textContent = liveEditor ? "Save a draft, then save to your website when ready." : studio.detail?.has_remote ? "Website saves update details and thumbnails. Your video stays in place." : "Saving locally doesn't change the website.";
   }
@@ -151,6 +152,7 @@
     studio.dirty = Boolean(studio.detail) && JSON.stringify(fields()) !== studio.baseline;
     updateCard();
     if (message) status("#editor-save-state", message);
+    else if (studio.detail && fields().visibility === "unknown") status("#editor-save-state", "Visibility needs review");
     else if (studio.dirty) status("#editor-save-state", "Unsaved changes");
     else status("#editor-save-state", liveEditor ? studio.detail?.pending ? "Draft saved · website changes pending" : "Saved · website is up to date" : studio.detail?.pending ? studio.detail?.has_remote ? "Saved on this PC · website changes pending" : "Saved on this PC · not uploaded" : studio.detail?.has_remote ? "Saved · website is up to date" : "Saved on this PC");
     refreshButtons();
@@ -195,7 +197,7 @@
     showConflict(detail.remoteChanged ? "remote" : null);
     const live = find("#editor-live-link");
     live.href = `https://keppy.dev/watch?v=${encodeURIComponent(detail.id)}`;
-    live.classList.toggle("hidden", !detail.has_remote || detail.visibility === "private");
+    live.classList.toggle("hidden", !detail.has_remote || !["public", "unlisted"].includes(fromDetail(detail).visibility));
     let url = detail.can_preview ? previewURL(detail.preview_url) : "";
     if (url) { const fresh = new URL(url); fresh.searchParams.set("studio_revision", detail.revision); url = fresh.href; }
     const player = find("#editor-player");
@@ -251,7 +253,7 @@
     row.setAttribute("aria-pressed", String(video.id === studio.selected));
     row.querySelector(".video-row-title").textContent = video.title || "Untitled video";
     const place = liveEditor ? video.pending ? "Draft changes" : "Online" : video.pending ? video.has_remote ? "Changes on this PC" : "On this PC" : video.has_remote ? "Online" : "On this PC";
-    row.querySelector(".video-row-meta").textContent = `${visibilityText[video.visibility] || "Private"} · ${place}`;
+    row.querySelector(".video-row-meta").textContent = `${visibilityLabel(video)} · ${place}`;
     const thumb = row.querySelector(".video-row-thumb");
     const url = thumbnailURL(video.thumbnail_url);
     let image = thumb.querySelector("img");
@@ -422,6 +424,7 @@
     stopDetailRead();
     stopOnlineCheck();
     const draft = fields();
+    if (!Object.hasOwn(visibilityText, draft.visibility)) { status("#editor-save-state", "Visibility needs review. Choose Private, Unlisted or Public before saving.", true); return; }
     if (!draft.title.trim()) { status("#editor-save-state", "Give the video a title first.", true); return; }
     const id = studio.detail.id;
     const before = JSON.stringify(draft);
@@ -442,8 +445,9 @@
   }
 
   function refreshButtons() {
-    find("#editor-save").disabled = !studio.detail || studio.busy || authenticationExpired || !studio.dirty;
-    find("#editor-publish").disabled = !studio.detail || studio.busy || authenticationExpired || Boolean(studio.detail.remoteChanged) || studio.conflictMode === "remote";
+    const needsVisibility = !Object.hasOwn(visibilityText, fields().visibility);
+    find("#editor-save").disabled = !studio.detail || studio.busy || authenticationExpired || !studio.dirty || needsVisibility;
+    find("#editor-publish").disabled = !studio.detail || studio.busy || authenticationExpired || needsVisibility || Boolean(studio.detail.remoteChanged) || studio.conflictMode === "remote";
     find("#edit-thumbnail-file").disabled = studio.busy || authenticationExpired || !studio.detail;
     refreshFrameControls();
     find("#conflict-reload").disabled = studio.busy || authenticationExpired;
