@@ -79,7 +79,7 @@ class AdminClient:
         body = json.dumps(payload, ensure_ascii=False, allow_nan=False, separators=(",", ":")).encode("utf-8") if payload is not None else None
         if body is not None and len(body) > MAX_REQUEST:
             raise AdminClientError("The central publication request is too large.", 413)
-        headers = {"Accept": "application/json", "CF-Access-Client-Id": self.client_id, "CF-Access-Client-Secret": self.client_secret}
+        headers = {"Accept": "application/json", "User-Agent": "ProjectAidaStudio/1.0", "CF-Access-Client-Id": self.client_id, "CF-Access-Client-Secret": self.client_secret}
         if body is not None:
             headers["Content-Type"] = "application/json"
         for attempt in range(2):

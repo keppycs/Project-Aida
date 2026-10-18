@@ -69,6 +69,7 @@ class AdminClientTests(unittest.TestCase):
         self.assertEqual(json.loads(first.data), {"title": "Edited", "visibility": "private", "revision": "r1", "publish": True, "operation_id": "fixed-op"})
         self.assertEqual(first.get_header("Cf-access-client-id"), "fake-id")
         self.assertEqual(first.get_header("Cf-access-client-secret"), "fake-secret")
+        self.assertTrue(all(request.get_header("User-agent") == "ProjectAidaStudio/1.0" for request, _ in opener.requests))
         self.assertTrue(all(timeout == 30 for _, timeout in opener.requests))
 
     def test_redirect_is_never_followed_and_login_html_is_not_success(self):
@@ -104,6 +105,7 @@ class AdminClientTests(unittest.TestCase):
         client = AdminClient("https://keppy.dev/edit/api", "fake", "fake", opener=opener)
         self.assertEqual([item["id"] for item in client.list_videos()], ["private", "unlisted"])
         self.assertTrue(opener.requests[1][0].full_url.endswith("?cursor=a%2Fb%2B"))
+        self.assertTrue(all(request.get_header("User-agent") == "ProjectAidaStudio/1.0" for request, _ in opener.requests))
         client.opener = Opener(Response({"videos": [], "next_cursor": "same"}), Response({"videos": [], "next_cursor": "same"}))
         with self.assertRaises(AdminClientError):
             client.list_videos()
