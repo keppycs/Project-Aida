@@ -93,6 +93,8 @@ class UploadTests(unittest.TestCase):
             "botocore.config": botocore_config,
         }):
             self.upload = runpy.run_path(str(ROOT / "src" / "upload.py"))
+        # Direct-mode fixture tests never inspect the real project .env.
+        self.upload["upload_folder"].__globals__["central_client"] = lambda: None
         self.log = logging.getLogger("upload-test")
         self.log.addHandler(logging.NullHandler())
         self.addCleanup(self.log.handlers.pop)

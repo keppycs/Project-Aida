@@ -44,7 +44,7 @@ function renderHero(video) {
   document.getElementById("hero-watch").setAttribute("aria-label", `Watch ${video.title || "the latest video"}`);
   const image = document.createElement("img");
   const base = mediaBase(video.id);
-  const hdr = video.hdr && hdrCapable;
+  const hdr = video.hdr && hdrCapable && video.thumbnailMode !== "sdr";
   image.src = `${base}/${hdr ? "thumbnail_hdr.avif" : "thumbnail_sdr.webp"}`;
   image.dataset.fallbackSources = JSON.stringify(hdr ? [`${base}/thumbnail_sdr.webp`] : []);
   image.alt = "";

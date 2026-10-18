@@ -25,7 +25,7 @@ const profiles = [
   { name: "landscape844", mode: "overlay", width: 844, height: 390, touch: true },
 ].filter(profile => !requested || requested.split(",").includes(profile.name));
 assert.ok(profiles.length, "Choose an existing Studio profile.");
-const results = { fixture: "Synthetic admin APIs and a WebCodecs120fps VP8 clip; no credentials, private source files or external network.", mode: navigationOnly ? "frame-navigation-only" : "full-studio", modes: [], profiles: [], frameNavigation: [] };
+const results = { fixture: "Synthetic admin APIs and a WebCodecs120fps VP8 clip; actual watch DOM/styles without playback bootstrap; no credentials, private source files or external network.", mode: navigationOnly ? "frame-navigation-only" : "full-studio", modes: [], profiles: [], frameNavigation: [], embeddedPreview: [] };
 let frameClip;
 const painted = page => page.evaluate(() => new Promise(resolvePaint => requestAnimationFrame(() => requestAnimationFrame(resolvePaint))));
 const waitText = (page, selector, text) => page.waitForFunction(({ selector, text }) => document.querySelector(selector)?.textContent.includes(text), { selector, text });
@@ -77,14 +77,99 @@ async function focusPresentation(page, selector) {
 async function samePreviewLink(page, fixture, id) {
   const expected = new URL(fixture.view(id).preview_url, fixture.origin);
   expected.searchParams.set("studio_revision", fixture.view(id).revision);
-  assert.equal(await page.locator("#editor-player").getAttribute("src"), expected.href);
+  expected.searchParams.delete("embed");
   assert.equal(await page.locator("#editor-preview-link").getAttribute("href"), expected.href);
+  expected.searchParams.set("embed", "1");
+  assert.equal(await page.locator("#editor-player").getAttribute("src"), expected.href);
   await page.waitForFunction(expected => {
     const iframe = document.querySelector("#editor-player");
     try { return iframe?.contentWindow?.location.href === expected && iframe.contentDocument?.readyState === "complete" && iframe.contentDocument.querySelector("#video")?.readyState >= 2; }
     catch { return false; }
   }, expected.href);
-  await page.frameLocator("#editor-player").locator("h1").waitFor();
+  await page.frameLocator("#editor-player").locator("#video").waitFor();
+  assert.equal(await page.frameLocator("#editor-player").locator(".watch-info").isVisible(), false, "Embedded preview must not repeat the watch-page details");
+}
+
+async function embeddedPreview(page, fixture, profile) {
+  let releaseMedia, mediaStarted;
+  const held = new Promise(resolveHeld => { releaseMedia = resolveHeld; });
+  const started = new Promise(resolveStarted => { mediaStarted = resolveStarted; });
+  const mediaRoute = async route => { mediaStarted(); await held; await route.continue().catch(() => {}); };
+  const geometry = () => {
+    const outer = Object.fromEntries([".video-preview", "#editor-player", "#edit-title", "#editor-heading"].map(selector => {
+      const rect = document.querySelector(selector).getBoundingClientRect();
+      return [selector, { x: rect.x + scrollX, y: rect.y + scrollY, width: rect.width, height: rect.height }];
+    }));
+    const iframe = document.querySelector("#editor-player"), doc = iframe.contentDocument, win = iframe.contentWindow;
+    const rect = doc.querySelector("#player-wrap").getBoundingClientRect();
+    return { outer, inner: { width: win.innerWidth, height: win.innerHeight, scrollWidth: doc.documentElement.scrollWidth, scrollHeight: doc.documentElement.scrollHeight, x: win.scrollX, y: win.scrollY, player: { x: rect.x, y: rect.y, width: rect.width, height: rect.height } } };
+  };
+  const noInnerScroll = value => {
+    assert.ok(value.scrollWidth <= value.width + 1 && value.scrollHeight <= value.height + 1, `Embedded watch document must have no scroll travel: ${JSON.stringify(value)}`);
+    assert.equal(value.x, 0); assert.equal(value.y, 0);
+    for (const [key, expected] of Object.entries({ x: 0, y: 0, width: value.width, height: value.height })) assert.ok(Math.abs(value.player[key] - expected) <= 1, `Embedded player must fill iframe ${key}`);
+  };
+  await page.route("**/__fixture/frame.webm?*", mediaRoute);
+  try {
+    await page.goto(`${fixture.origin}/edit?v=${FIRST_VIDEO}&keep=one%20two#studio`, { waitUntil: "domcontentloaded" });
+    await started;
+    await page.waitForFunction(() => {
+      const iframe = document.querySelector("#editor-player"), doc = iframe?.contentDocument;
+      return doc?.querySelector("#aida-studio-preview-style") && doc.styleSheets.length >= 5 && doc.querySelector("#video")?.readyState === 0 && getComputedStyle(doc.querySelector(".watch-info")).display === "none";
+    });
+    await painted(page);
+    const before = await page.evaluate(geometry);
+    noInnerScroll(before.inner);
+    assert.ok(Math.abs(before.outer[".video-preview"].height - before.outer[".video-preview"].width * 9 / 16) < 1, "Studio preview must reserve16:9 before metadata loads");
+    releaseMedia();
+    await samePreviewLink(page, fixture, FIRST_VIDEO);
+    await painted(page);
+    const after = await page.evaluate(geometry);
+    noInnerScroll(after.inner);
+    for (const selector of Object.keys(before.outer)) for (const key of ["x", "y", "width", "height"]) assert.ok(Math.abs(after.outer[selector][key] - before.outer[selector][key]) < .5, `Metadata must not move ${selector} ${key}`);
+
+    const scrollToPreview = async () => {
+      await page.locator("#editor-player").evaluate(iframe => window.scrollTo(0, iframe.getBoundingClientRect().top + scrollY - 100));
+      await painted(page);
+      return page.locator("#editor-player").boundingBox();
+    };
+    let rect = await scrollToPreview();
+    const wheelBefore = await page.evaluate(() => scrollY);
+    await page.mouse.move(rect.x + rect.width / 2, rect.y + rect.height / 2);
+    await page.mouse.wheel(0, 180);
+    await page.waitForFunction(before => scrollY > before + 40, wheelBefore);
+    noInnerScroll((await page.evaluate(geometry)).inner);
+    const wheelTravel = await page.evaluate(before => scrollY - before, wheelBefore);
+    let touchTravel;
+    if (profile.touch) {
+      rect = await scrollToPreview();
+      const touchBefore = await page.evaluate(() => scrollY), x = rect.x + rect.width / 2, y = rect.y + rect.height / 2;
+      const session = await page.context().newCDPSession(page);
+      try {
+        await session.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x, y }] });
+        for (let step = 1; step <= 6; ++step) await session.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x, y: y - step * 15 }] });
+        await session.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+        await page.waitForFunction(before => scrollY > before + 25, touchBefore);
+        touchTravel = await page.evaluate(before => scrollY - before, touchBefore);
+      } finally { await session.detach(); }
+      noInnerScroll((await page.evaluate(geometry)).inner);
+    }
+    // Opening the separate preview must still show the complete watch page.
+    const fullPreview = await page.context().newPage();
+    try {
+      await fullPreview.goto(await page.locator("#editor-preview-link").getAttribute("href"));
+      await fullPreview.locator("#video").evaluate(video => video.readyState >= 2 || new Promise(resolveReady => video.addEventListener("loadeddata", resolveReady, { once: true })));
+      assert.equal(new URL(fullPreview.url()).searchParams.has("embed"), false);
+      assert.equal(await fullPreview.locator("#aida-studio-preview-style").count(), 0);
+      assert.equal(await fullPreview.locator(".site-header").isVisible(), true);
+      assert.equal(await fullPreview.locator(".watch-info").isVisible(), true);
+      assert.ok(await fullPreview.evaluate(() => document.documentElement.scrollHeight > innerHeight), "Open preview must retain the complete scrollable watch page");
+    } finally { await fullPreview.close(); }
+    results.embeddedPreview.push({ profile: profile.name, before, after, wheelTravel, ...(touchTravel === undefined ? {} : { touchTravel }) });
+  } finally {
+    releaseMedia();
+    await page.unroute("**/__fixture/frame.webm?*", mediaRoute);
+  }
 }
 
 async function reloadPreview(page) {
@@ -783,6 +868,7 @@ try {
       }
       fixture.setFrameClip(frameClip);
       try {
+        if (!navigationOnly) await embeddedPreview(page, fixture, profile);
         await stableFrameNavigation(page, fixture);
         if (!navigationOnly) {
           await workflow(page, fixture);

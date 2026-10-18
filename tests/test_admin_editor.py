@@ -95,6 +95,9 @@ class EditorHTTPTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory(prefix="editor-http-", dir=ROOT / "logs")
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
+        central_env = patch("admin_client.PROJECT_ENV", self.root / ".env")
+        central_env.start()
+        self.addCleanup(central_env.stop)
         self.local = self.root / "web" / "local"
         self.video = self.local / "sample120"
         (self.video / "AV1").mkdir(parents=True)
@@ -627,6 +630,40 @@ class EditorHTTPTests(unittest.TestCase):
                 self.assertEqual(response.status_code, 200)
                 self.assertIn(f'name="aida-session" content="{admin_app.app.state.admin_token}"', response.text)
                 self.assertEqual(response.headers["cache-control"], "no-store")
+
+    def test_standalone_watch_preview_stays_identical_and_embed_projects_only_local_chrome(self):
+        original = (ROOT / "web" / "watch.html").read_bytes()
+        for suffix in ("", "?embed=0"):
+            with self.subTest(suffix=suffix):
+                response = self.client.get("/preview/watch.html" + suffix)
+                self.assertEqual(response.status_code, 200, response.text)
+                self.assertEqual(response.content, original)
+                self.assertNotIn("aida-studio-preview-style", response.text)
+        embedded = self.client.get("/preview/watch.html?embed=1&v=sample120&local=1")
+        self.assertEqual(embedded.status_code, 200, embedded.text)
+        self.assertEqual(embedded.headers["cache-control"], "no-store")
+        self.assertEqual(embedded.headers["x-frame-options"], "SAMEORIGIN")
+        self.assertLess(embedded.text.index('id="aida-studio-preview-style"'), embedded.text.index("</head>"))
+        self.assertLess(embedded.text.index('href="css/watch.css'), embedded.text.index('id="aida-studio-preview-style"'))
+        self.assertIn((ROOT / "admin" / "preview.css").read_text(encoding="utf-8"), embedded.text)
+        # The projection preserves the exact player markup, scripts and native
+        # Settings scroll surface rather than maintaining a second player.
+        self.assertEqual(embedded.text.split("<body>", 1)[1], original.decode("utf-8").replace("\r\n", "\n").split("<body>", 1)[1])
+        self.assertIn('id="settings-body"', embedded.text)
+        self.assertIn("#watch-status-videos", embedded.text)
+        self.assertIn('id="watch-retry"', embedded.text)
+        head = self.client.head("/preview/watch.html?embed=1")
+        self.assertEqual(head.status_code, 200)
+        self.assertEqual(head.content, b"")
+
+    def test_embed_preview_cannot_choose_arbitrary_stylesheets_or_bypass_loopback_boundary(self):
+        baseline = self.client.get("/preview/watch.html?embed=1")
+        supplied = self.client.get("/preview/watch.html?embed=1&stylesheet=../../.env")
+        self.assertEqual(supplied.status_code, 200, supplied.text)
+        self.assertEqual(supplied.content, baseline.content)
+        self.assertEqual(self.client.get("/preview/watch.html?embed=1", headers={"Origin": "http://attacker.invalid"}).status_code, 403)
+        self.assertEqual(self.client.get("/preview/watch.html?embed=1", headers={"Host": "attacker.invalid"}).status_code, 403)
+        self.assertEqual(self.client.get("/preview/admin/preview.css").status_code, 404)
 
     def test_cross_site_host_origin_and_non_loopback_clients_are_denied(self):
         for headers in ({"Host": "attacker.invalid:8765"}, {"Origin": "null"},

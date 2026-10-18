@@ -551,6 +551,16 @@ test("catalogue preserves real uploader index-only tags, HDR and date after fres
   assert.equal(entries[0].date, "17-10-2026");
 });
 
+test("owner SDR thumbnail overrides reach the catalogue while HDR120 video stays intact", async () => {
+  const { handle } = fixture({ metadata: { ...meta, hdr: true, thumbnailMode: "sdr" }, index: [{ id, hdr: true, thumbnailMode: "old" }] });
+  const response = await handle(request("index.json"), env);
+  assert.equal(response.status, 200);
+  const [video] = await response.json();
+  assert.equal(video.thumbnailMode, "sdr");
+  assert.equal(video.hdr, true);
+  assert.equal(video.frameRate, 120);
+});
+
 test("catalogue metadata fanout is limited to four concurrent requests", async () => {
   let inFlight = 0;
   let maximum = 0;

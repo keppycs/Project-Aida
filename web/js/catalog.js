@@ -109,7 +109,7 @@ export function renderVideoCard(video, { hdrCapable = false, local = defaultLoca
   thumbnail.className = "video-card-thumbnail";
   const image = document.createElement("img");
   const base = mediaBase(video.id, { local });
-  const files = video.hdr && hdrCapable
+  const files = video.hdr && hdrCapable && video.thumbnailMode !== "sdr"
     ? ["thumbnail_hdr_720p.avif", "thumbnail_sdr_720p.webp", "thumbnail_sdr.webp"]
     : ["thumbnail_sdr_720p.webp", "thumbnail_sdr.webp"];
   image.src = `${base}/${files.shift()}`;

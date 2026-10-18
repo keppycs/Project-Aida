@@ -81,6 +81,7 @@ The Python backend manages the full encoding flow:
 
 Project documentation lives in `docs/`.
 
+- [Owner editor, login and deployment](docs/OWNER_EDITOR.md)
 
 Project Aida's 120 fps requirement remains defined in [AGENTS.md](AGENTS.md).
 

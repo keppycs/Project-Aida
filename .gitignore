@@ -40,3 +40,6 @@ web/youtube reference/
 
 # Reversible local file replacements; may contain private user data
 .agent-trash/
+
+# Rebuilt from the fixed public-code allowlist with node scripts/build-admin-assets.mjs
+edge/generated/admin-assets.mjs

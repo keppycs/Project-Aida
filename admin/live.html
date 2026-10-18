@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#101112">
+  <meta name="aida-editor-mode" content="live">
+  <meta name="aida-api-root" content="/edit/api">
+  <title>Aida · Edit videos</title>
+  <link rel="stylesheet" href="/edit/assets/admin.css">
+</head>
+<body class="tab-ready live-editor">
+  <main>
+    <header class="studio-header">
+      <div class="brand"><span class="brand-mark" aria-hidden="true">a</span><div><h1>Aida</h1><p class="subtitle">Owner editor</p></div></div>
+      <a class="site-link" href="/" target="_blank" rel="noopener noreferrer">View website <span aria-hidden="true">↗</span></a>
+    </header>
+    <section id="panel-videos" class="panel active" aria-label="Your videos">
+      <div class="section-heading"><div><h2>Your videos</h2><p class="hint">Edit your videos. Save when you're ready.</p></div></div>
+      <div class="library-workspace">
+        <aside class="library" aria-label="Video library">
+          <label class="field library-search"><span class="sr-only">Search videos</span><input id="library-search" type="search" placeholder="Search videos" autocomplete="off"></label>
+          <div class="library-tools"><span id="library-count" class="hint">Your library</span><button id="library-refresh" class="text-btn">Refresh online</button></div>
+          <p id="library-status" class="status" role="status" aria-live="polite">Loading videos…</p>
+          <button id="library-retry" class="btn hidden">Try again</button>
+          <div id="video-list" class="video-list overlay-scroll" aria-label="Videos" tabindex="0"></div>
+        </aside>
+        <div class="editor-workspace">
+          <div id="editor-empty" class="empty-editor"><span class="empty-mark" aria-hidden="true">a</span><h3>Make it yours.</h3><p>Choose a video to edit.</p></div>
+          <div id="video-editor" class="hidden">
+            <div class="editor-heading"><div><h2 id="editor-heading">Edit video</h2><p id="editor-location" class="hint"></p></div><div class="row"><a id="editor-preview-link" class="site-link hidden" target="_blank" rel="noopener noreferrer">Open preview ↗</a><a id="editor-live-link" class="site-link hidden" target="_blank" rel="noopener noreferrer">View live ↗</a></div></div>
+            <div id="draft-prompt" class="notice hidden" role="status"><p>You have unsaved changes.</p><div class="row"><button id="draft-keep" class="btn">Keep editing</button><button id="draft-discard" class="btn">Discard changes</button></div></div>
+            <div id="conflict-notice" class="notice hidden" role="alert"><p>This video changed elsewhere. Your edits are still here.</p><p class="hint">Using the website version replaces your draft. Review it before saving again.</p><button id="conflict-reload" class="btn">Use online version</button></div>
+            <section class="video-preview" aria-label="Playback preview"><div id="editor-player-wrap" class="player-preview hidden"><iframe id="editor-player" title="Video preview" allow="autoplay; fullscreen; picture-in-picture" allowfullscreen></iframe></div><div id="editor-no-player" class="preview-unavailable"><span aria-hidden="true">▷</span><p id="editor-preview-note">Refresh online to preview an uploaded video.</p></div></section>
+            <form id="editor-form" class="editor-form" novalidate>
+              <label class="field"><span>Title</span><input id="edit-title" type="text" maxlength="300" required></label>
+              <label class="field"><span>Description</span><textarea id="edit-description" rows="5" maxlength="20000"></textarea></label>
+              <div class="field-pair"><label class="field"><span>Tags</span><input id="edit-tags" type="text" placeholder="Separate with commas"></label><fieldset class="visibility-field"><legend>Visibility</legend><div class="visibility-options"><label><input type="radio" name="edit-visibility" value="private"><span>Private</span></label><label><input type="radio" name="edit-visibility" value="unlisted"><span>Unlisted</span></label><label><input type="radio" name="edit-visibility" value="public"><span>Public</span></label></div></fieldset></div>
+              <p id="visibility-help" class="hint">Only you can preview a private video here.</p>
+              <section class="thumbnail-editor">
+                <h3>Thumbnail</h3>
+                <div class="thumbnail-options">
+                  <section class="card-preview" aria-label="Website card preview"><div class="card-preview-image"><img id="editor-thumb-preview" alt="" hidden><span id="editor-thumb-placeholder" class="thumbnail-placeholder" aria-hidden="true">a</span></div><div class="card-preview-copy"><h3 id="editor-card-title">Untitled video</h3><p id="editor-card-visibility" class="hint">Private</p></div></section>
+                  <div class="thumbnail-choices"><p class="hint">Preview in your video list</p><div class="row"><label class="btn file-button">Choose image<input id="edit-thumbnail-file" type="file" accept="image/jpeg,image/png,image/webp"></label><button id="thumbnail-frame-toggle" type="button" class="btn" aria-expanded="false" aria-controls="thumbnail-frame-fields">Choose a video frame</button></div></div>
+                </div>
+                <div id="thumbnail-frame-fields" class="frame-fields hidden">
+                  <div class="frame-picker-heading"><p class="hint">Pick a frame from this video.</p><button id="edit-frame-close" type="button" class="text-btn">Close</button></div>
+                  <div class="frame-preview"><canvas id="edit-frame-canvas" role="img" aria-label="Chosen video frame" hidden></canvas><p id="edit-frame-placeholder">Loading video…</p></div>
+                  <label class="field frame-timeline"><span class="sr-only">Thumbnail position</span><input id="edit-frame-seek" type="range" min="0" max="0" step="0.008333333333333333" value="0" aria-label="Thumbnail position" disabled></label>
+                  <div class="frame-position"><output id="edit-frame-time" for="edit-frame-seek">0:00.000</output><label class="field"><span id="edit-frame-number-label">Frame number</span><input id="edit-frame-number" type="number" min="1" step="1" value="1" disabled></label></div>
+                  <div class="frame-navigation"><button id="edit-frame-prev" type="button" class="btn" disabled>Previous frame</button><button id="edit-frame-next" type="button" class="btn" disabled>Next frame</button></div>
+                  <p id="edit-frame-status" class="status" role="status" aria-live="polite"></p>
+                  <div class="row"><button id="edit-frame-apply" type="button" class="btn primary" disabled>Use this frame</button><button id="edit-frame-refresh" type="button" class="text-btn">Refresh online</button></div>
+                </div>
+                <p id="thumbnail-status" class="status" aria-live="polite"></p>
+              </section>
+              <div class="editor-actions"><div><p id="editor-save-state" class="status" role="status" aria-live="polite">Draft saved.</p><p id="editor-upload-note" class="hint">Save a draft, then save to your website when ready.</p></div><div class="row"><button id="editor-save" type="submit" class="btn">Save draft</button><button id="editor-publish" type="button" class="btn primary">Save to website</button></div></div>
+            </form>
+          </div>
+        </div>
+      </div>
+    </section>
+
+  </main>
+  <aside id="auth-notice" class="auth-notice hidden" role="alert" aria-label="Sign-in needed"><div class="notice auth-notice-content overlay-scroll" aria-label="Sign-in message" tabindex="0">
+    <div><p>Sign in again. Your edits are still here.</p><p id="auth-status" class="hint">Open sign-in, then come back to this tab.</p></div>
+    <div class="row"><a id="auth-sign-in" class="btn" href="/edit" target="_blank" rel="noopener noreferrer">Sign in again ↗</a><button id="auth-retry" type="button" class="btn">Check sign-in</button></div>
+  </div></aside>
+  <script src="/edit/assets/editor.js"></script>
+</body>
+</html>

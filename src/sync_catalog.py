@@ -17,6 +17,7 @@ from uuid import uuid4
 
 from config import ROOT, LOCAL_DIR, INDEX_PATH, get_b2_credentials, normalize_visibility
 from upload import make_b2_client, replace_file, upload_index
+from admin_client import AdminClientError, central_client
 
 CATALOG_FIELDS = ("id", "title", "visibility", "createdAt", "description")
 
@@ -172,6 +173,8 @@ def upload_changed_metadata(
     paths: list[Path],
     log: logging.Logger,
 ) -> None:
+    if central_client() is not None:
+        raise AdminClientError("Bulk metadata uploads are disabled with the central publisher. Use Videos to refresh, review and publish.", 409)
     for path in paths:
         video_id = path.parent.name
         key = f"{video_id}/metadata.json"
@@ -223,6 +226,16 @@ def run_sync(
     result = SyncResult(apply=apply, upload=upload)
     if log is None:
         log = setup_logging()
+    if upload:
+        try:
+            if central_client() is not None:
+                result.error = "Bulk cloud sync is disabled with the central publisher. Use Videos to refresh, review and publish."
+                log.error(result.error)
+                return result
+        except AdminClientError as exc:
+            result.error = str(exc)
+            log.error(result.error)
+            return result
 
     log.info(f"Index  : {INDEX_PATH}")
     mode = "apply + upload" if upload else "apply" if apply else "dry-run"

@@ -1,8 +1,13 @@
-/* Local editing never publishes until the Upload/Publish button is pressed. */
+/* Draft saves never publish until the website save button is pressed. */
 (() => {
   "use strict";
   const find = (selector) => document.querySelector(selector);
   const all = (selector) => [...document.querySelectorAll(selector)];
+  const liveEditor = find('meta[name="aida-editor-mode"]')?.content === "live";
+  const apiRoot = liveEditor && find('meta[name="aida-api-root"]')?.content === "/edit/api" ? "/edit/api" : "/api";
+  const previewPath = liveEditor ? "/edit/preview/watch.html" : "/preview/watch.html";
+  const liveActions = new Map();
+  let authenticationExpired = false;
   const studio = { videos: [], rows: new Map(), selected: null, detail: null, baseline: "", dirty: false, busy: false, pendingAction: null, listRequest: 0, detailRequest: 0, listAbort: null, detailAbort: null, onlineAbort: null, lastListRemote: false, conflictMode: null };
   const visibilityText = { private: "Private", unlisted: "Unlisted", public: "Public" };
   const editable = ["#edit-title", "#edit-description", "#edit-tags", 'input[name="edit-visibility"]'];
@@ -17,17 +22,85 @@
 
   async function request(path, options = {}) {
     const headers = { "Content-Type": "application/json", ...options.headers };
-    if (options.method && !["GET", "HEAD"].includes(options.method.toUpperCase())) headers["X-Aida-Session"] = find('meta[name="aida-session"]')?.content || "";
-    const response = await fetch(path, { ...options, headers, credentials: "same-origin", cache: "no-store" });
+    if (options.method && !["GET", "HEAD"].includes(options.method.toUpperCase())) {
+      if (liveEditor) headers["X-Aida-Editor"] = "1";
+      else headers["X-Aida-Session"] = find('meta[name="aida-session"]')?.content || "";
+    }
+    const url = path.startsWith("/api/") ? `${apiRoot}${path.slice(4)}` : path;
+    const response = await fetch(url, { ...options, headers, credentials: "same-origin", cache: "no-store", ...(liveEditor ? { redirect: "manual" } : {}) });
+    const isJSON = response.headers.get("Content-Type")?.toLowerCase().includes("application/json");
+    if (liveEditor && (response.type === "opaqueredirect" || response.status === 401 || response.status === 403 || !isJSON)) {
+      showAuthenticationRequired();
+      const error = new Error("Sign in again. Your edits are still here.");
+      error.status = 401;
+      throw error;
+    }
     const data = await response.json().catch(() => ({}));
     if (!response.ok) {
       const error = new Error(typeof data.detail === "string" ? data.detail : data.message || "Couldn't complete that. Try again.");
       error.status = response.status;
       error.current = data.current;
+      error.operation_id = data.operation_id;
       throw error;
     }
     return data;
   }
+
+  function showAuthenticationRequired() {
+    authenticationExpired = true;
+    closeFramePicker();
+    const notice = find("#auth-notice");
+    if (notice) {
+      const url = new URL("/edit", location.origin);
+      if (studio.selected) url.searchParams.set("v", studio.selected);
+      find("#auth-sign-in").href = url.href;
+      notice.classList.remove("hidden");
+    }
+    refreshButtons();
+  }
+
+  async function checkSession({ recovery = false } = {}) {
+    const retry = find("#auth-retry");
+    if (retry) retry.disabled = true;
+    try {
+      const session = await request("/api/session");
+      if (session.authenticated !== true) { showAuthenticationRequired(); return false; }
+      authenticationExpired = false;
+      find("#auth-notice")?.classList.add("hidden");
+      refreshButtons();
+      if (recovery) {
+        // Refresh reads only. A failed save must always be retried by its button.
+        await loadLibrary(false);
+        if (authenticationExpired) return false;
+        if (studio.detail) {
+          if (!hasAccessiblePreview() && find("#editor-player").getAttribute("src")) find("#editor-player").src = find("#editor-player").getAttribute("src");
+          updateState("Signed in. Your edits are still here. Save when ready.");
+        }
+        else selectInitialVideo();
+      }
+      return true;
+    } catch (error) {
+      if (error.status !== 401) {
+        showAuthenticationRequired();
+        status("#auth-status", "Couldn't check your sign-in. Try again.", true);
+      }
+      return false;
+    } finally { if (retry) retry.disabled = false; }
+  }
+
+  function liveOperation(kind, payload) {
+    if (!liveEditor) return payload;
+    const key = `${studio.selected}:${kind}`;
+    const signature = JSON.stringify(payload);
+    let action = liveActions.get(key);
+    if (!action || action.signature !== signature) {
+      action = { signature, id: crypto.randomUUID() };
+      liveActions.set(key, action);
+    }
+    return { ...payload, operation_id: action.id };
+  }
+
+  function completeLiveOperation(id, kind) { liveActions.delete(`${id}:${kind}`); }
 
   function fields() {
     return { title: find("#edit-title").value, description: find("#edit-description").value, tags: find("#edit-tags").value.split(",").map((tag) => tag.trim()).filter(Boolean), visibility: find('input[name="edit-visibility"]:checked')?.value || "private" };
@@ -43,6 +116,7 @@
       const url = new URL(raw, location.href);
       if (url.username || url.password) return "";
       if (url.origin === location.origin && url.pathname.startsWith("/api/video-media/")) return url.href;
+      if (liveEditor && url.origin === location.origin && url.pathname.startsWith("/edit/preview/local/")) return url.href;
       if (url.origin === "https://cdn.keppy.dev" && url.pathname.startsWith("/file/ProjectAida/")) return url.href;
     } catch { /* An invalid image is shown as an empty thumbnail. */ }
     return "";
@@ -51,8 +125,15 @@
   function previewURL(raw) {
     try {
       const url = new URL(raw, location.href);
-      return url.origin === location.origin && url.pathname === "/preview/watch.html" && !url.username && !url.password ? url.href : "";
+      return url.origin === location.origin && url.pathname === previewPath && !url.username && !url.password ? url.href : "";
     } catch { return ""; }
+  }
+
+  function hasAccessiblePreview() {
+    const frame = find("#editor-player");
+    try {
+      return Boolean(frame.contentDocument?.getElementById("video") && new URL(frame.contentWindow.location.href).pathname === previewPath);
+    } catch { return false; }
   }
 
   function updateCard() {
@@ -62,8 +143,8 @@
     const frameRateLabel = typeof frameRate === "number" && Number.isFinite(frameRate) && frameRate === 120 ? `${frameRate} fps` : "120 fps required";
     find("#editor-card-visibility").textContent = `${visibilityText[draft.visibility]} · ${frameRateLabel}`;
     find("#visibility-help").textContent = draft.visibility === "private" ? "Only you can preview a private video here." : draft.visibility === "unlisted" ? "Anyone with the link can watch. It won't appear in the video list." : "Everyone can watch. It appears in the video list after publishing.";
-    find("#editor-publish").textContent = studio.detail?.has_remote ? "Save to website" : draft.visibility === "public" ? "Publish video" : "Upload video";
-    find("#editor-upload-note").textContent = studio.detail?.has_remote ? "Website saves update details and thumbnails. Your video stays in place." : "Saving locally doesn't change the website.";
+    find("#editor-publish").textContent = liveEditor || studio.detail?.has_remote ? "Save to website" : draft.visibility === "public" ? "Publish video" : "Upload video";
+    find("#editor-upload-note").textContent = liveEditor ? "Save a draft, then save to your website when ready." : studio.detail?.has_remote ? "Website saves update details and thumbnails. Your video stays in place." : "Saving locally doesn't change the website.";
   }
 
   function updateState(message) {
@@ -71,13 +152,8 @@
     updateCard();
     if (message) status("#editor-save-state", message);
     else if (studio.dirty) status("#editor-save-state", "Unsaved changes");
-    else status("#editor-save-state", studio.detail?.pending ? studio.detail?.has_remote ? "Saved on this PC · website changes pending" : "Saved on this PC · not uploaded" : studio.detail?.has_remote ? "Saved · website is up to date" : "Saved on this PC");
-    find("#editor-save").disabled = !studio.detail || studio.busy || !studio.dirty;
-    find("#editor-publish").disabled = !studio.detail || studio.busy || Boolean(studio.detail.remoteChanged) || studio.conflictMode === "remote";
-    find("#edit-thumbnail-file").disabled = studio.busy || !studio.detail;
-    refreshFrameControls();
-    find("#conflict-reload").disabled = studio.busy;
-    find("#editor-form").setAttribute("aria-busy", String(studio.busy));
+    else status("#editor-save-state", liveEditor ? studio.detail?.pending ? "Draft saved · website changes pending" : "Saved · website is up to date" : studio.detail?.pending ? studio.detail?.has_remote ? "Saved on this PC · website changes pending" : "Saved on this PC · not uploaded" : studio.detail?.has_remote ? "Saved · website is up to date" : "Saved on this PC");
+    refreshButtons();
   }
 
   function updateThumbnail(detail) {
@@ -97,7 +173,7 @@
     const paragraphs = notice.querySelectorAll("p");
     const remote = mode === "remote";
     paragraphs[0].textContent = remote ? "This video changed online. Your edits are still here." : "This video changed since you opened it. Your edits are still here.";
-    paragraphs[1].textContent = remote ? "Using the online version replaces your local edits. A backup is kept." : "Review the saved version before trying again. Loading it replaces your unsaved edits.";
+    paragraphs[1].textContent = remote ? liveEditor ? "Using the website version replaces your draft. Review it before saving again." : "Using the online version replaces your local edits. A backup is kept." : "Review the saved version before trying again. Loading it replaces your unsaved edits.";
     find("#conflict-reload").textContent = remote ? "Use online version" : "Review saved version";
   }
 
@@ -115,7 +191,7 @@
     find("#editor-empty").classList.add("hidden");
     find("#video-editor").classList.remove("hidden");
     find("#editor-heading").textContent = "Edit video";
-    find("#editor-location").textContent = detail.has_remote ? detail.pending ? "Changes waiting to save to your website" : "On your website" : "On this PC";
+    find("#editor-location").textContent = liveEditor ? detail.pending ? "Draft changes waiting to save to your website" : "On your website" : detail.has_remote ? detail.pending ? "Changes waiting to save to your website" : "On your website" : "On this PC";
     showConflict(detail.remoteChanged ? "remote" : null);
     const live = find("#editor-live-link");
     live.href = `https://keppy.dev/watch?v=${encodeURIComponent(detail.id)}`;
@@ -127,7 +203,13 @@
     if (preservePreview && wasID === detail.id) url = previewURL(player.getAttribute("src")) || url;
     const previewLink = find("#editor-preview-link");
     previewLink.classList.toggle("hidden", !url);
-    if (url) previewLink.href = url;
+    if (url) {
+      const pageURL = new URL(url);
+      pageURL.searchParams.delete("embed");
+      previewLink.href = pageURL.href;
+      pageURL.searchParams.set("embed", "1");
+      url = pageURL.href;
+    }
     else previewLink.removeAttribute("href");
     find("#editor-player-wrap").classList.toggle("hidden", !url);
     find("#editor-no-player").classList.toggle("hidden", Boolean(url));
@@ -168,7 +250,7 @@
     }
     row.setAttribute("aria-pressed", String(video.id === studio.selected));
     row.querySelector(".video-row-title").textContent = video.title || "Untitled video";
-    const place = video.pending ? video.has_remote ? "Changes on this PC" : "On this PC" : video.has_remote ? "Online" : "On this PC";
+    const place = liveEditor ? video.pending ? "Draft changes" : "Online" : video.pending ? video.has_remote ? "Changes on this PC" : "On this PC" : video.has_remote ? "Online" : "On this PC";
     row.querySelector(".video-row-meta").textContent = `${visibilityText[video.visibility] || "Private"} · ${place}`;
     const thumb = row.querySelector(".video-row-thumb");
     const url = thumbnailURL(video.thumbnail_url);
@@ -191,7 +273,7 @@
       if (list.children[index] !== row) list.insertBefore(row, list.children[index] || null);
     });
     find("#library-count").textContent = `${filtered.length} ${filtered.length === 1 ? "video" : "videos"}`;
-    if (!studio.listAbort) status("#library-status", filtered.length ? "" : term ? "No matching videos." : "No videos yet. Start a new upload, or refresh online.");
+    if (!studio.listAbort) status("#library-status", filtered.length ? "" : term ? "No matching videos." : liveEditor ? "No videos yet. Upload a video from Studio on your PC." : "No videos yet. Start a new upload, or refresh online.");
   }
 
   async function loadLibrary(remote = false) {
@@ -323,7 +405,8 @@
 
   function mutationError(error, selector = "#editor-save-state") {
     const current = error.current;
-    if (error.status !== 409 && current && current.id === studio.selected && typeof current.revision === "string" && current.revision) {
+    const journalRetry = liveEditor && error.status >= 500 && typeof error.operation_id === "string";
+    if (error.status !== 409 && !journalRetry && current && current.id === studio.selected && typeof current.revision === "string" && current.revision) {
       // A failed upload may already have saved a newer local revision. Keep
       // both the typed draft and its original baseline while adopting that
       // server state, so retry never uses an obsolete revision.
@@ -335,7 +418,7 @@
   }
 
   async function saveVideo(publish) {
-    if (!studio.detail || studio.busy) return;
+    if (!studio.detail || studio.busy || authenticationExpired) return;
     stopDetailRead();
     stopOnlineCheck();
     const draft = fields();
@@ -343,31 +426,32 @@
     const id = studio.detail.id;
     const before = JSON.stringify(draft);
     studio.busy = true;
-    const updatingWebsite = Boolean(studio.detail.has_remote);
-    updateState(publish ? updatingWebsite ? "Saving to website…" : "Uploading video…" : "Saving on this PC…");
+    const updatingWebsite = liveEditor || Boolean(studio.detail.has_remote);
+    updateState(publish ? updatingWebsite ? "Saving to website…" : "Uploading video…" : liveEditor ? "Saving draft…" : "Saving on this PC…");
     try {
-      const detail = await request(`/api/videos/${encodeURIComponent(id)}`, { method: "POST", body: JSON.stringify({ ...draft, revision: studio.detail.revision, publish }) });
+      const detail = await request(`/api/videos/${encodeURIComponent(id)}`, { method: "POST", body: JSON.stringify(liveOperation(publish ? "publish" : "save", { ...draft, revision: studio.detail.revision, publish })) });
       if (studio.selected !== id) return;
+      completeLiveOperation(id, publish ? "publish" : "save");
       replaceSummary(detail);
       const changedWhileSaving = JSON.stringify(fields()) !== before;
       studio.baseline = JSON.stringify(fromDetail(detail));
       showDetail(detail, { preserveFields: changedWhileSaving });
-      updateState(changedWhileSaving ? "Saved. Your newest edits still need saving." : publish ? updatingWebsite ? "Saved to website · website updated" : draft.visibility === "public" ? "Published video · website updated" : "Uploaded video · website updated" : "Saved on this PC · website unchanged");
+      updateState(changedWhileSaving ? "Saved. Your newest edits still need saving." : publish ? updatingWebsite ? "Saved to website · website updated" : draft.visibility === "public" ? "Published video · website updated" : "Uploaded video · website updated" : liveEditor ? "Draft saved · website unchanged" : "Saved on this PC · website unchanged");
     } catch (error) { if (studio.selected === id) mutationError(error); }
     finally { studio.busy = false; refreshButtons(); }
   }
 
   function refreshButtons() {
-    find("#editor-save").disabled = !studio.detail || studio.busy || !studio.dirty;
-    find("#editor-publish").disabled = !studio.detail || studio.busy || Boolean(studio.detail.remoteChanged) || studio.conflictMode === "remote";
-    find("#edit-thumbnail-file").disabled = studio.busy || !studio.detail;
+    find("#editor-save").disabled = !studio.detail || studio.busy || authenticationExpired || !studio.dirty;
+    find("#editor-publish").disabled = !studio.detail || studio.busy || authenticationExpired || Boolean(studio.detail.remoteChanged) || studio.conflictMode === "remote";
+    find("#edit-thumbnail-file").disabled = studio.busy || authenticationExpired || !studio.detail;
     refreshFrameControls();
-    find("#conflict-reload").disabled = studio.busy;
+    find("#conflict-reload").disabled = studio.busy || authenticationExpired;
     find("#editor-form").setAttribute("aria-busy", String(studio.busy));
   }
 
   async function saveThumbnail(payload) {
-    if (!studio.detail || studio.busy) return;
+    if (!studio.detail || studio.busy || authenticationExpired) return;
     stopDetailRead();
     stopOnlineCheck();
     const id = studio.detail.id;
@@ -375,13 +459,58 @@
     refreshButtons();
     status("#thumbnail-status", "Preparing thumbnail…");
     try {
-      const detail = await request(`/api/videos/${encodeURIComponent(id)}/thumbnail`, { method: "POST", body: JSON.stringify({ ...payload, revision: studio.detail.revision, publish: false }) });
+      const imagePayload = liveEditor ? { variants: await makeLiveThumbnailVariants(payload) } : payload;
       if (studio.selected !== id) return;
+      const detail = await request(`/api/videos/${encodeURIComponent(id)}/thumbnail`, { method: "POST", body: JSON.stringify(liveOperation("thumbnail", { ...imagePayload, revision: studio.detail.revision, publish: false })) });
+      if (studio.selected !== id) return;
+      completeLiveOperation(id, "thumbnail");
       replaceSummary(detail);
       showDetail(detail, { preserveFields: true });
-      status("#thumbnail-status", detail.has_remote ? "Thumbnail saved on this PC. Save to website when ready." : "Thumbnail saved on this PC. Upload the video when ready.");
+      status("#thumbnail-status", liveEditor ? "Thumbnail saved in your draft. Save to website when ready." : detail.has_remote ? "Thumbnail saved on this PC. Save to website when ready." : "Thumbnail saved on this PC. Upload the video when ready.");
     } catch (error) { if (studio.selected === id) mutationError(error, "#thumbnail-status"); }
     finally { studio.busy = false; refreshButtons(); }
+  }
+
+  async function makeLiveThumbnailVariants(payload) {
+    const binary = atob(payload.image_base64);
+    const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
+    const blob = new Blob([bytes], { type: payload.content_type });
+    const image = await createImageBitmap(blob);
+    try {
+      const encode = async (type, maxWidth, maxHeight) => {
+        const canvas = document.createElement("canvas");
+        let scale = Math.min(1, maxWidth / image.width, maxHeight / image.height);
+        // Keep each saved variant below the owner's draft storage limit.
+        for (let sizeAttempt = 0; sizeAttempt < 5; ++sizeAttempt) {
+          canvas.width = Math.max(1, Math.round(image.width * scale));
+          canvas.height = Math.max(1, Math.round(image.height * scale));
+          const context = canvas.getContext("2d", { colorSpace: "srgb", alpha: false });
+          if (!context) throw new Error("This browser couldn't prepare the thumbnail.");
+          context.fillStyle = "#08090a";
+          context.fillRect(0, 0, canvas.width, canvas.height);
+          context.drawImage(image, 0, 0, canvas.width, canvas.height);
+          for (const quality of [type === "image/jpeg" ? .9 : .86, .76, .66, .56, .46]) {
+            const encoded = await new Promise(resolve => canvas.toBlob(resolve, type, quality));
+            if (!encoded || encoded.type !== type) throw new Error("This browser can't create this thumbnail format. Try a current browser.");
+            if (encoded.size > 1900000) continue;
+            const data = await new Promise((resolve, reject) => {
+              const reader = new FileReader();
+              reader.onload = () => resolve(String(reader.result).split(",")[1]);
+              reader.onerror = () => reject(new Error("Couldn't prepare this thumbnail."));
+              reader.readAsDataURL(encoded);
+            });
+            return { data, type };
+          }
+          scale *= .8;
+        }
+        throw new Error("That image is too large to save. Try a smaller image.");
+      };
+      return {
+        "thumbnail_sdr.webp": await encode("image/webp", 3840, 2160),
+        "thumbnail_sdr_720p.webp": await encode("image/webp", 1280, 720),
+        "thumbnail_share.jpg": await encode("image/jpeg", 1280, 720)
+      };
+    } finally { image.close(); }
   }
 
   async function chooseThumbnail(event) {
@@ -420,7 +549,7 @@
 
   function refreshFrameControls() {
     const live = pickerIsCurrent(), duration = pickerDuration(), fps = pickerFPS();
-    const seekable = live && duration > 0 && picker.video.readyState >= 1 && !picker.video.error && !studio.busy;
+    const seekable = live && duration > 0 && picker.video.readyState >= 1 && !picker.video.error && !studio.busy && !authenticationExpired;
     const ready = seekable && picker.ready && picker.seekRequest === null && !picker.video.seeking && picker.video.readyState >= 2;
     const navigable = seekable && Number.isFinite(picker.presented) && !find("#edit-frame-canvas").hidden;
     const frame = requestedFrameIndex();
@@ -429,7 +558,7 @@
     find("#edit-frame-prev").disabled = !navigable || !fps || frame <= 0;
     find("#edit-frame-next").disabled = !navigable || !fps || frame >= lastFrameIndex();
     find("#edit-frame-apply").disabled = !ready;
-    find("#edit-frame-refresh").disabled = studio.busy;
+    find("#edit-frame-refresh").disabled = studio.busy || authenticationExpired;
     find("#thumbnail-frame-fields").setAttribute("aria-busy", String(picker.waiting));
     if (duration) {
       find("#edit-frame-seek").max = String(fps ? lastFrameIndex() / fps : Math.max(0, duration - .001));
@@ -661,7 +790,7 @@
 
   function openFramePicker() {
     closeFramePicker();
-    if (!studio.detail) return;
+    if (!studio.detail || authenticationExpired) return;
     picker.open = true;
     picker.id = studio.selected;
     picker.scrubbing = false;
@@ -744,7 +873,8 @@
       try {
         const path = `/api/videos/${encodeURIComponent(studio.detail.id)}`;
         const latest = await request(`${path}?remote=false`);
-        const detail = remote ? await request(`${path}/reload`, { method: "POST", body: JSON.stringify({ revision: latest.revision }) }) : latest;
+        const detail = remote ? await request(`${path}/reload`, { method: "POST", body: JSON.stringify(liveOperation("reload", { revision: latest.revision })) }) : latest;
+        if (remote) completeLiveOperation(studio.detail.id, "reload");
         replaceSummary(detail);
         showDetail(detail);
         status("#editor-save-state", remote ? "Latest online version loaded" : "Saved version loaded");
@@ -804,7 +934,8 @@
     find("#library-search").addEventListener("input", renderLibrary);
     find("#library-refresh").addEventListener("click", () => loadLibrary(true));
     find("#library-retry").addEventListener("click", () => loadLibrary(studio.lastListRemote));
-    find("#library-new").addEventListener("click", () => { if (typeof setTab === "function") setTab("encode"); });
+    find("#library-new")?.addEventListener("click", () => { if (typeof setTab === "function") setTab("encode"); });
+    find("#auth-retry")?.addEventListener("click", () => checkSession({ recovery: true }));
     editable.forEach((selector) => all(selector).forEach((field) => field.addEventListener("input", () => {
       if (studio.detailAbort) { stopDetailRead(); status("#library-status", ""); }
       updateState();
@@ -828,7 +959,12 @@
     find("#edit-frame-apply").addEventListener("click", useFrame);
     find("#edit-frame-refresh").addEventListener("click", refreshFrameVideo);
     find("#thumbnail-frame-fields").addEventListener("keydown", (event) => { if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); closeFramePicker({ restoreFocus: true }); } });
-    find("#editor-player").addEventListener("load", () => { if (!picker.open) return; if (picker.document) closeFramePicker(); else attachFrameVideo(); });
+    find("#editor-player").addEventListener("load", () => {
+      if (liveEditor && find("#editor-player").getAttribute("src") && !hasAccessiblePreview()) void checkSession();
+      if (!picker.open) return;
+      if (picker.document) closeFramePicker();
+      else attachFrameVideo();
+    });
     window.addEventListener("aida:tab-change", (event) => { if (event.detail.name !== "videos") closeFramePicker(); });
     document.addEventListener("visibilitychange", () => { if (document.hidden) closeFramePicker(); });
     window.addEventListener("beforeunload", (event) => { if (!studio.dirty && !studio.busy) return; event.preventDefault(); event.returnValue = ""; });
@@ -839,5 +975,19 @@
   }
 
   bind();
-  loadLibrary(false).then(() => { const params = new URLSearchParams(location.search); const id = params.get("v") || params.get("video"); if (id && studio.videos.some((video) => video.id === id)) { if (typeof setTab === "function") setTab("videos"); selectVideo(id); } });
+  function selectInitialVideo() {
+    const params = new URLSearchParams(location.search);
+    const id = params.get("v") || params.get("video");
+    if (id && studio.videos.some((video) => video.id === id)) {
+      if (typeof setTab === "function") setTab("videos");
+      selectVideo(id);
+    }
+  }
+
+  async function start() {
+    if (liveEditor && !await checkSession()) return;
+    await loadLibrary(false);
+    selectInitialVideo();
+  }
+  void start();
 })();

@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from hashlib import sha256
 from io import BytesIO
 import json
+import logging
 import mimetypes
 import os
 from pathlib import Path
@@ -20,6 +21,8 @@ import re
 from threading import RLock
 from typing import Any, Callable
 from uuid import uuid4
+
+from admin_client import AdminClientError, VARIANTS as CENTRAL_THUMBNAILS, central_client
 
 
 ROOT = Path(__file__).absolute().parent.parent
@@ -212,6 +215,34 @@ class VideoLibrary:
             raise VideoLibraryError("The cloud video list is damaged; it was left unchanged.")
         return data
 
+    @staticmethod
+    def _writer():
+        try:
+            return central_client()
+        except AdminClientError as exc:
+            raise VideoLibraryError(str(exc)) from None
+
+    def _remote_snapshot(self, video_id: str):
+        writer = self._writer()
+        if writer is None:
+            client, bucket = self._client()
+            raw = self._remote_json(client, bucket, f"{video_id}/metadata.json")
+            entry = next((item for item in self._remote_index(client, bucket) if item.get("id") == video_id), None)
+            return raw, entry, {}
+        try:
+            detail = writer.get_video(video_id)
+        except AdminClientError as exc:
+            raise VideoLibraryError(str(exc)) from None
+        if detail is None:
+            return None, None, {"writerURL": writer.url, "writerRevision": None}
+        # Local Refresh online continues to mean the published version. An
+        # unfinished browser draft must be reviewed there before another client
+        # can overwrite it with a newly adopted revision.
+        raw = detail.get("published_metadata")
+        if raw is not None and not isinstance(raw, dict):
+            raise VideoLibraryError("The central published metadata is invalid.")
+        return raw, detail.get("entry"), {"writerURL": writer.url, "writerRevision": detail["revision"], "writerDraftPending": bool(detail.get("pending"))}
+
     def _metadata(self, video_id: str, metadata: dict, entry: dict | None = None) -> dict:
         if not isinstance(metadata, dict):
             raise VideoLibraryError("Invalid video metadata.")
@@ -270,9 +301,7 @@ class VideoLibrary:
                 before_revision = None
         # Slow origin reads must not hold the local library lock. Publication
         # still owns that lock for its complete write transaction.
-        client, bucket = self._client()
-        raw = self._remote_json(client, bucket, f"{video_id}/metadata.json")
-        remote_entry = next((item for item in self._remote_index(client, bucket) if item.get("id") == video_id), None)
+        raw, remote_entry, writer_state = self._remote_snapshot(video_id)
         with _LOCK:
             if generation != self._refresh_generations.get(video_id):
                 return self._view(video_id)
@@ -303,6 +332,11 @@ class VideoLibrary:
                 if needs_review:
                     state["remoteChanged"] = True
                     state["needsReview"] = True
+            migration_matches = (state.get("writerURL") != writer_state.get("writerURL")
+                                 and remote_hash == state.get("remoteHash") and _digest(remote_entry) == state.get("remoteEntryHash")
+                                 and not writer_state.get("writerDraftPending"))
+            if not state.get("pending") or not state.get("remoteChecked") or migration_matches:
+                state.update(writer_state)
             state.update(remoteChecked=True, uploaded=raw is not None)
             if raw is not None or self._path(video_id, "metadata.json").exists() or self._path(video_id, ".editor-state.json").exists():
                 self._save_state(video_id, state)
@@ -318,14 +352,18 @@ class VideoLibrary:
                         if child.is_dir() and (self._path(child.name, "metadata.json").is_file() or self._path(child.name, ".editor-state.json").is_file()):
                             ids.add(child.name)
         if refresh_remote:
-            client, bucket = self._client()
             try:
-                pages = client.get_paginator("list_objects_v2").paginate(Bucket=bucket)
-                for page in pages:
-                    for obj in page.get("Contents", []):
-                        parts = obj.get("Key", "").split("/")
-                        if len(parts) == 2 and parts[1] == "metadata.json" and VIDEO_ID.fullmatch(parts[0]):
-                            ids.add(parts[0])
+                writer = self._writer()
+                if writer is not None:
+                    ids.update(item["id"] for item in writer.list_videos())
+                else:
+                    client, bucket = self._client()
+                    pages = client.get_paginator("list_objects_v2").paginate(Bucket=bucket)
+                    for page in pages:
+                        for obj in page.get("Contents", []):
+                            parts = obj.get("Key", "").split("/")
+                            if len(parts) == 2 and parts[1] == "metadata.json" and VIDEO_ID.fullmatch(parts[0]):
+                                ids.add(parts[0])
             except Exception:
                 raise VideoLibraryError("Could not refresh the cloud video list.") from None
         result = []
@@ -436,10 +474,7 @@ class VideoLibrary:
             local_entry = next((item for item in self._index() if item.get("id") == video_id), None)
             intended = self._metadata(video_id, local_metadata, local_entry)
             self.get_video(video_id, remote=True)
-            client, bucket = self._client()
-            raw = self._remote_json(client, bucket, f"{video_id}/metadata.json")
-            catalog = self._remote_index(client, bucket)
-            remote_entry = next((item for item in catalog if item.get("id") == video_id), None)
+            raw, remote_entry, writer_state = self._remote_snapshot(video_id)
             remote_metadata = self._metadata(video_id, raw, remote_entry) if raw is not None else None
             matches = remote_metadata is not None and all(remote_metadata.get(key) == value for key, value in intended.items())
             if intended.get("visibility") == "public":
@@ -458,6 +493,7 @@ class VideoLibrary:
             state.update(remoteHash=_digest(raw), remoteEntryHash=_digest(remote_entry), remoteMetadata=remote_metadata,
                          remoteChecked=True, uploaded=True, pending=False, pendingThumbnails=[], remoteChanged=False,
                          needsReview=False, localAtRefresh=_digest(local_metadata))
+            state.update(writer_state)
             self._save_state(video_id, state)
             return self._view(video_id)
 
@@ -510,6 +546,8 @@ class VideoLibrary:
             return [str(destination.relative_to(self.root)) for _, destination in moved]
 
     def _put(self, client, bucket: str, key: str, body, content_type: str) -> None:
+        if self._writer() is not None:
+            raise VideoLibraryError("Direct publication is disabled. Refresh online to use the central publisher.")
         try:
             client.put_object(Bucket=bucket, Key=key, Body=body, ContentType=content_type, CacheControl="no-store")
         except Exception:
@@ -528,6 +566,10 @@ class VideoLibrary:
             raise VideoConflictError("Refresh this video from cloud storage before publishing, then review your draft.")
         if state.get("needsReview"):
             raise VideoConflictError("This offline draft has not been compared with the live video. Reload the live version before publishing.")
+        writer = self._writer()
+        if writer is not None:
+            self._publish_central(writer, video_id, metadata, state)
+            return
         client, bucket = self._client()
         current = self._remote_json(client, bucket, f"{video_id}/metadata.json")
         if (_digest(current) if current is not None else None) != state.get("remoteHash"):
@@ -599,20 +641,66 @@ class VideoLibrary:
         state.update(pending=False, pendingThumbnails=[], localAtRefresh=_digest(metadata), remoteEntryHash=_digest(published_entry))
         self._save_state(video_id, state)
 
+    def _publish_central(self, writer, video_id: str, metadata: dict, state: dict) -> None:
+        try:
+            if not state.get("uploaded"):
+                # upload_folder owns reservation, media-only transfer and the
+                # single central finalization, including thumbnails/catalogue.
+                from upload import upload_folder
+                client, bucket = self._client()
+                entry = next((item for item in self._index() if item.get("id") == video_id), {})
+                if not upload_folder(client, bucket, self._path(video_id, "metadata.json").parent, video_id,
+                                     logging.getLogger("video-library"), entry=entry):
+                    raise VideoLibraryError("Upload did not finish. Your local draft and media are kept.")
+                self.mark_uploaded(video_id)
+                return
+            if state.get("writerURL") != writer.url or not state.get("writerRevision"):
+                raise VideoConflictError("Refresh online before publishing through the central writer.")
+            images = {name: self.local_asset_path(video_id, name).read_bytes() for name in CENTRAL_THUMBNAILS} if state.get("pendingThumbnails") else None
+            fields = {key: metadata[key] for key in ("title", "description", "tags", "visibility") if key in metadata}
+            fingerprint = _digest({"fields": fields, "images": {name: sha256(data).hexdigest() for name, data in (images or {}).items()}, "writer": writer.url})
+            operation = state.get("centralPublish")
+            if not isinstance(operation, dict) or operation.get("fingerprint") != fingerprint:
+                if state.get("writerDraftPending"):
+                    raise VideoConflictError("Finish or discard the online editor draft before publishing from this PC.")
+                operation = {"fingerprint": fingerprint, "revision": state["writerRevision"], "operation_id": str(uuid4())}
+                state["centralPublish"] = operation
+                self._save_state(video_id, state)
+            detail = writer.publish(video_id, fields, operation["revision"], images=images, operation_id=operation["operation_id"])
+            published = detail.get("published_metadata")
+            if (not isinstance(published, dict) or published.get("id") != video_id or detail.get("pending") is not False
+                    or not isinstance(detail.get("revision"), str) or not detail["revision"]
+                    or any(published.get(key) != value for key, value in fields.items())):
+                raise VideoLibraryError("The central writer did not confirm publication. Your local draft is kept.")
+            remote_entry = detail.get("entry")
+            metadata = self._metadata(video_id, published, remote_entry)
+            state.update(remoteHash=_digest(published), remoteEntryHash=_digest(remote_entry), remoteMetadata=metadata,
+                         remoteChecked=True, uploaded=True, pending=False, pendingThumbnails=[], remoteChanged=False,
+                         needsReview=False, writerRevision=detail["revision"], writerURL=writer.url, writerDraftPending=False)
+            state.pop("centralPublish", None)
+            self._save_local(video_id, metadata, state)
+            state["localAtRefresh"] = _digest(metadata)
+            self._save_state(video_id, state)
+        except AdminClientError as exc:
+            if exc.status_code == 409:
+                state["remoteChanged"] = True
+                self._save_state(video_id, state)
+                raise VideoConflictError(str(exc)) from None
+            raise VideoLibraryError(str(exc)) from None
+
     def discard_draft(self, video_id: str, revision: str) -> dict:
         """Explicitly reload cloud metadata, preserving the replaced local draft."""
         with _LOCK:
             video_id = self._id(video_id)
             self._check_revision(video_id, revision)
-            client, bucket = self._client()
-            raw = self._remote_json(client, bucket, f"{video_id}/metadata.json")
+            raw, remote_entry, writer_state = self._remote_snapshot(video_id)
             if raw is None:
                 raise VideoNotFoundError("There is no live version to reload. Your local draft is kept.")
-            remote_entry = next((item for item in self._remote_index(client, bucket) if item.get("id") == video_id), None)
             metadata = self._metadata(video_id, raw, remote_entry)
             state = {"remoteChecked": True, "uploaded": True, "remoteHash": _digest(raw), "remoteMetadata": metadata,
                      "remoteEntryHash": _digest(remote_entry), "pending": False, "pendingThumbnails": [],
                      "remoteChanged": False, "localAtRefresh": _digest(metadata)}
+            state.update(writer_state)
             # Pending stills cannot be represented as live previews after a
             # reload. Archive them as well; the remote preview remains usable.
             old_state = self._state(video_id)

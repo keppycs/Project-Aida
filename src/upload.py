@@ -1,5 +1,6 @@
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
+from hashlib import sha256
 from pathlib import Path
 from threading import Lock
 from typing import Any, Callable
@@ -10,10 +11,12 @@ import os
 import re
 import stat
 import sys
+from uuid import uuid4
 import boto3
 from botocore.config import Config
 
 from config import get_b2_credentials, normalize_visibility
+from admin_client import AdminClientError, VARIANTS as CENTRAL_THUMBNAILS, central_client
 
 
 MIME_MAP = {
@@ -113,6 +116,7 @@ def replace_file(
     log: logging.Logger | None = None,
 ) -> None:
     """Upload a new current version while preserving previous B2 versions."""
+    _reject_direct_publication(key)
     b2.upload_file(str(local_path), bucket, key, ExtraArgs={"ContentType": content_type})
 
 
@@ -125,11 +129,20 @@ def replace_object(
     log: logging.Logger | None = None,
 ) -> None:
     """Write a new current version while preserving previous B2 versions."""
+    _reject_direct_publication(key)
     b2.put_object(Bucket=bucket, Key=key, Body=body, ContentType=content_type)
+
+
+def _reject_direct_publication(key: str) -> None:
+    if central_client() is not None and (key == "index.json" or key.endswith("/metadata.json") or key.rsplit("/", 1)[-1] in _THUMBNAILS):
+        raise AdminClientError("Metadata, thumbnails and the public list must use the central publisher.", 409)
 
 
 def is_already_uploaded(b2: Any, bucket: str, video_id: str, log: logging.Logger) -> bool:
     """Check the current metadata key; uncertain reads must never permit reuse."""
+    writer = central_client()
+    if writer is not None:
+        return writer.get_video(video_id) is not None
     try:
         b2.head_object(Bucket=bucket, Key=f"{video_id}/metadata.json")
         return True
@@ -196,6 +209,8 @@ def upload_folder(
     log: logging.Logger,
     max_workers: int = 20,
     on_progress: Callable[[int, int], None] | None = None,
+    *,
+    entry: dict | None = None,
 ) -> bool:
     """Upload known video package assets under b2_prefix, concurrently.
 
@@ -212,6 +227,16 @@ def upload_folder(
     if not files:
         log.error("  No packaged video assets were found")
         return False
+    writer = central_client()
+    publication = None
+    if writer is not None:
+        publication = _reserve_central_package(writer, local_dir, b2_prefix, files, entry)
+        if publication[2]["centralUpload"].get("media_complete"):
+            _finalize_central_package(writer, *publication)
+            return True
+        # Only immutable rendition assets bypass the shared writer. Neither
+        # metadata, thumbnails nor the whole local index reach B2 directly.
+        files = [path for path in files if _MEDIA_ASSET.fullmatch(path.relative_to(local_dir).as_posix())]
     total = len(files)
     failed: list[str] = []
     done  = 0
@@ -263,8 +288,69 @@ def upload_folder(
         log.error(f"  {len(failed)} file(s) failed: {', '.join(failed)}")
         return False
 
+    if publication is not None:
+        library, video_id, state, metadata, catalog_entry, images = publication
+        state["centralUpload"]["media_complete"] = True
+        library._save_state(video_id, state)
+        _finalize_central_package(writer, *publication)
+
     log.info(f"  Upload complete -> b2://{bucket}/{b2_prefix}/")
     return True
+
+
+def _reserve_central_package(writer, folder: Path, video_id: str, files: list[Path], entry: dict | None):
+    from video_library import VideoLibrary
+    if not _VIDEO_ID.fullmatch(video_id) or folder.name != video_id:
+        raise AdminClientError("Central uploads must use the package's exact video ID.", 400)
+    metadata_path = next((path for path in files if path.name == "metadata.json"), None)
+    if metadata_path is None or metadata_path.stat().st_size > _METADATA_LIMIT:
+        raise AdminClientError("A central upload needs bounded metadata.json.", 400)
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    if not isinstance(metadata, dict) or metadata.get("id") != video_id or metadata.get("frameRate") != 120:
+        raise AdminClientError("A central upload needs verified120fps metadata with the same ID.", 400)
+    media = [path for path in files if _MEDIA_ASSET.fullmatch(path.relative_to(folder).as_posix())]
+    if not any(path.name == "manifest.mpd" for path in media):
+        raise AdminClientError("The completed video package needs a DASH manifest.", 400)
+    images = {path.name: path.read_bytes() for path in files if path.name in CENTRAL_THUMBNAILS}
+    # Validate all bytes before obtaining a lease or uploading any media.
+    from admin_client import encode_variants
+    encode_variants(images)
+    entry = dict(metadata if entry is None else entry)
+    if entry.get("id") != video_id:
+        raise AdminClientError("The central catalog entry has a different video ID.", 400)
+    fingerprint = sha256(json.dumps({"metadata": metadata, "entry": entry, "writer": writer.url,
+        "images": {name: sha256(data).hexdigest() for name, data in images.items()},
+        "media": [(path.relative_to(folder).as_posix(), path.stat().st_size, path.stat().st_mtime_ns) for path in sorted(media)]}, sort_keys=True, allow_nan=False).encode()).hexdigest()
+    library = VideoLibrary(_PROJECT_ROOT, folder.parent)
+    state = library._state(video_id)
+    operation = state.get("centralUpload")
+    if operation is not None and (not isinstance(operation, dict) or operation.get("fingerprint") != fingerprint):
+        raise AdminClientError("This reserved package changed. Keep it for review and choose a new video ID.", 409)
+    if operation is None:
+        operation = {"fingerprint": fingerprint, "reserve_operation_id": str(uuid4()), "operation_id": str(uuid4()), "media_complete": False}
+        state["centralUpload"] = operation
+        library._save_state(video_id, state)
+    if not operation.get("lease"):
+        operation["lease"] = writer.reserve(video_id, operation["reserve_operation_id"])
+        library._save_state(video_id, state)
+    return library, video_id, state, metadata, entry, images
+
+
+def _finalize_central_package(writer, library, video_id, state, metadata, entry, images):
+    from video_library import _digest
+    operation = state["centralUpload"]
+    result = writer.finalize(video_id, operation["lease"], metadata, entry, images=images, operation_id=operation["operation_id"])
+    published = result.get("published_metadata") if isinstance(result, dict) else None
+    if (not isinstance(published, dict) or result.get("pending") is not False or not isinstance(result.get("revision"), str) or not result["revision"]
+            or any(published.get(key) != value for key, value in metadata.items() if key not in ("thumbnailMode", "thumbnailUpdatedAt"))):
+        raise AdminClientError("The central publisher did not confirm the completed video. Your local package is kept.")
+    operation["confirmed"] = True
+    canonical = library._metadata(video_id, published, result.get("entry"))
+    state.update(remoteHash=_digest(published), remoteEntryHash=_digest(result.get("entry")), remoteMetadata=canonical,
+                 uploaded=True, remoteChecked=True, remoteChanged=False, pending=False, pendingThumbnails=[], needsReview=False,
+                 writerURL=writer.url, writerRevision=result["revision"], writerDraftPending=False, localAtRefresh=_digest(canonical))
+    library._save_local(video_id, canonical, state)
+    library._save_state(video_id, state)
 
 
 def _read_remote_json(b2: Any, bucket: str, key: str, limit: int) -> Any:
@@ -334,6 +420,8 @@ def upload_index(b2: Any, bucket: str, index_path: Path, log: logging.Logger) ->
     catalogue entries remain intact, and candidates without uploaded metadata
     are omitted. Failures propagate so callers cannot report a successful sync.
     """
+    if central_client() is not None:
+        raise AdminClientError("The central publisher owns index.json. Finalize each video; bulk local index uploads are disabled.", 409)
     try:
         local = _catalogue_entries(json.loads(index_path.read_text(encoding="utf-8")), "Local index")
         raw_remote = _read_remote_json(b2, bucket, "index.json", _CATALOG_LIMIT)

@@ -32,7 +32,7 @@ const CATALOG_CONCURRENCY = 4;
 // publishing new metadata. Normal metadata edits invalidate it immediately.
 const MEDIA_CACHE_SECONDS = 300;
 const MAX_CACHEABLE_MEDIA_BYTES = 32 * 1024 * 1024;
-const CATALOG_FIELDS = ["title", "description", "tags", "date", "createdAt", "duration", "width", "height", "frameRate", "hdr", "codecs"];
+const CATALOG_FIELDS = ["title", "description", "tags", "date", "createdAt", "duration", "width", "height", "frameRate", "hdr", "codecs", "thumbnailMode"];
 const INDEX_ONLY_FIELDS = new Set(["tags", "date", "hdr"]);
 
 function routeRequest(request) {

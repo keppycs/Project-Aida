@@ -1,0 +1,27 @@
+name = "aida-owner-editor"
+main = "admin-worker.mjs"
+compatibility_date = "2026-10-18"
+workers_dev = false
+preview_urls = false
+
+# Create the exact /edit Access application and fail-closed Worker routes before use.
+# Routes are managed in the dashboard; ordinary watch routes remain separate.
+[build]
+command = "node scripts/build-admin-assets.mjs"
+cwd = ".."
+watch_dir = ["../admin", "../web/css", "../web/js"]
+
+[vars]
+SITE_ORIGIN = "https://keppy.dev"
+ACCESS_TEAM_DOMAIN = ""
+ACCESS_AUD = ""
+OWNER_EMAIL = ""
+ACCESS_SERVICE_CLIENT_ID = ""
+
+[[durable_objects.bindings]]
+name = "LIBRARY"
+class_name = "AidaLibrary"
+
+[[migrations]]
+tag = "owner-library-v1"
+new_sqlite_classes = ["AidaLibrary"]

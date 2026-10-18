@@ -29,6 +29,7 @@ class PipelineEditorTests(unittest.TestCase):
         self.probe = {"streams":[{"codec_type":"video", "codec_name":"av1", "r_frame_rate":"120/1", "width":1920, "height":1080, "pix_fmt":"yuv420p"}], "format":{"duration":"1"}}
         stack = ExitStack()
         self.addCleanup(stack.close)
+        stack.enter_context(patch.object(main, "central_client", return_value=None))
         for name, value in (("ROOT",self.root),("LOCAL_DIR",self.local),("INDEX_PATH",self.index)):
             stack.enter_context(patch.object(main,name,value))
         stack.enter_context(patch.object(main,"ZoneInfo",return_value=timezone.utc))
@@ -99,6 +100,31 @@ class PipelineEditorTests(unittest.TestCase):
         verify.assert_not_called()
         archive.assert_not_called()
         self.assertTrue((self.local / "new120" / "AV1" / "init_0.mp4").is_file())
+
+    def test_central_finalization_precedes_verification_and_skips_bulk_index(self):
+        calls = []
+        def finalized(*args, **kwargs):
+            self.assertEqual(kwargs["entry"]["frameRate"], 120)
+            self.assertEqual(kwargs["entry"]["id"], "new120")
+            calls.append("central-finalized")
+            return True
+        with patch.object(main, "central_client", return_value=object()), \
+             patch.object(main, "make_b2_client", return_value=(Mock(), "fixture")), \
+             patch.object(main, "is_already_uploaded", return_value=False), \
+             patch.object(main, "upload_folder", side_effect=finalized), \
+             patch.object(main, "upload_index", side_effect=AssertionError("No whole-catalogue write in central mode")), \
+             patch.object(main.VideoLibrary, "mark_uploaded", side_effect=lambda *_: calls.append("verify")), \
+             patch.object(main.VideoLibrary, "archive_encoded_media", side_effect=lambda *_: calls.append("archive")):
+            self.run_pipeline(upload_to_b2=True, delete_after_upload=True)
+        self.assertEqual(calls, ["central-finalized", "verify", "archive"])
+
+    def test_incomplete_central_credentials_stop_before_encoding_or_b2_setup(self):
+        with patch.object(main, "central_client", side_effect=RuntimeError("Missing central credentials")), \
+             patch.object(main, "make_b2_client", side_effect=AssertionError("No direct fallback")):
+            with self.assertRaisesRegex(RuntimeError, "Missing central"):
+                self.run_pipeline(upload_to_b2=True)
+        self.ffmpeg.assert_not_called()
+        self.assertFalse((self.local / "new120").exists())
 
 
 if __name__ == "__main__":

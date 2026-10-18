@@ -8,6 +8,7 @@ import runpy
 import tempfile
 from threading import Event
 import unittest
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).absolute().parents[1]
@@ -72,6 +73,9 @@ class VideoLibraryTests(unittest.TestCase):
             return self.b2, "test-bucket"
 
         self.library = VideoLibrary(self.project, client_factory=factory)
+        direct = patch.dict(self.library._writer.__globals__, {"central_client": lambda: None})
+        direct.start()
+        self.addCleanup(direct.stop)
         self.metadata = {"id": "video-a", "title": "Original", "description": "Before", "visibility": "private",
                          "createdAt": 123, "frameRate": 120, "width": 3840, "height": 2160,
                          "duration": 33.333, "codecs": ["AV1"], "colorTransfer": "smpte2084"}

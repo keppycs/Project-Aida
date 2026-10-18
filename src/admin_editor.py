@@ -386,8 +386,14 @@ def install_editor(app, root: Path, library: VideoLibrary | None = None) -> None
         return media(request, video_id, asset)
 
     @router.api_route("/preview/watch.html", methods=["GET", "HEAD"])
-    def preview_watch():
-        return FileResponse(safe_file(root / "web", "watch.html"), media_type="text/html")
+    def preview_watch(embed: bool = False):
+        source_path = safe_file(root / "web", "watch.html")
+        if not embed:
+            return FileResponse(source_path, media_type="text/html")
+        source = source_path.read_text(encoding="utf-8")
+        projection = safe_file(root / "admin", "preview.css").read_text(encoding="utf-8")
+        style = f'<style id="aida-studio-preview-style">\n{projection}\n</style>\n'
+        return HTMLResponse(source.replace("</head>", style + "</head>", 1))
 
     @router.get("/preview/local/index.json")
     def preview_catalog():

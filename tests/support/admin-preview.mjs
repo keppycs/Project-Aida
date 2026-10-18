@@ -221,7 +221,24 @@ export async function startAdminPreview() {
         return send(response, 200, view(id));
       }
       if (url.pathname.startsWith("/api/video-media/")) return send(response, 200, TEST_IMAGE, "image/png");
-      if (url.pathname === "/preview/watch.html") return send(response, 200, `<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><style>*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}body{margin:0;background:#101112;color:#fafafa;font:16px system-ui}header,main{padding:20px}header{color:#e8ff47}video{width:100%;aspect-ratio:16/9;background:#282b2f}p{line-height:1.6}footer{padding:20px;min-height:250px}</style></head><body><header>Aida · synthetic watch preview</header><main><video id="video" muted playsinline preload="auto" src="/__fixture/frame.webm?v=${encodeURIComponent(url.searchParams.get("v") || "")}"></video><h1>Video preview</h1><p>240 distinct synthetic frames, encoded at120fps for local decoder verification.</p></main><footer>Full watch-page preview.</footer></body></html>`, "text/html; charset=utf-8");
+      if (url.pathname === "/preview/watch.html") {
+        // Exercise the actual watch markup and projection stylesheet while the
+        // decoder uses only our generated clip. Playback/bootstrap scripts are
+        // intentionally omitted: this fixture does not claim player-engine QA.
+        let html = await readFile(resolve(ROOT, "web/watch.html"), "utf8");
+        html = html.replace(/<script\b[^>]*>[\s\S]*?<\/script>/g, "")
+          .replace('<div id="player-wrap" tabindex="0" aria-label="Video player" inert>', '<div id="player-wrap" tabindex="0" aria-label="Video player">')
+          .replace('<div id="watch-status"', '<div hidden id="watch-status"')
+          .replace('<video id="video" playsinline crossorigin="anonymous"></video>', `<video id="video" muted playsinline preload="auto" src="/__fixture/frame.webm?v=${encodeURIComponent(url.searchParams.get("v") || "")}"></video>`);
+        if (url.searchParams.get("embed") === "1") {
+          const projection = await readFile(resolve(ROOT, "admin/preview.css"), "utf8");
+          html = html.replace("</head>", `<style id="aida-studio-preview-style">${projection}</style></head>`);
+        }
+        html = html.replace("</body>", `<script>document.querySelector("#video").addEventListener("loadedmetadata",()=>{document.querySelector("#watch-title").textContent="Synthetic120fps video preview";const description=document.querySelector("#watch-description");description.textContent="240 distinct synthetic frames, encoded at120fps for local decoder verification. ".repeat(8);description.hidden=false;});</script></body>`);
+        return send(response, 200, html, "text/html; charset=utf-8");
+      }
+      const previewAssets = { "/preview/css/site.css": "css/site.css", "/preview/css/player.css": "css/player.css", "/preview/css/player-mobile.css": "css/player-mobile.css", "/preview/css/watch.css": "css/watch.css", "/preview/assets/favicons/flushed.svg": "assets/favicons/flushed.svg" };
+      if (previewAssets[url.pathname]) return send(response, 200, await readFile(resolve(ROOT, "web", previewAssets[url.pathname])), url.pathname.endsWith(".css") ? "text/css; charset=utf-8" : "image/svg+xml");
       const staticFiles = { "/": "index.html", "/edit": "index.html", "/static/admin.css": "admin.css", "/static/admin.js": "admin.js", "/static/editor.js": "editor.js" };
       const name = staticFiles[url.pathname];
       if (name) {

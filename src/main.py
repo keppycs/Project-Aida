@@ -32,6 +32,7 @@ from transcode import (
 from manifest import patch_hls_stream_inf, patch_bandwidth
 from upload import make_b2_client, is_already_uploaded, upload_folder, upload_index
 from video_library import VideoLibrary
+from admin_client import central_client
 
 ROOT = Path(__file__).parent.parent
 
@@ -91,6 +92,7 @@ def run_pipeline(
     # Validate B2 credentials early so a missing config doesn't surprise
     # you after a multi-hour encode.
     if upload_to_b2:
+        central_client()  # Invalid enabled central auth fails before encoding.
         get_b2_credentials()
 
     video_id = video_id or f"0{int(time.time())}"
@@ -324,9 +326,10 @@ def run_pipeline(
         else:
             log.info(f"[START UPLOAD] {video_id} → b2://{bucket}/{video_id}/")
             upload_cb = (lambda d, t: on_progress("Upload", d, t)) if on_progress else None
-            ok = upload_folder(b2, bucket, video_dir, video_id, log, on_progress=upload_cb)
+            ok = upload_folder(b2, bucket, video_dir, video_id, log, on_progress=upload_cb, entry=entry)
             if ok:
-                upload_index(b2, bucket, INDEX_PATH, log)
+                if central_client() is None:
+                    upload_index(b2, bucket, INDEX_PATH, log)
                 local_store.mark_uploaded(video_id)
                 if delete_after_upload:
                     local_store.archive_encoded_media(video_id, encoded_codecs)
