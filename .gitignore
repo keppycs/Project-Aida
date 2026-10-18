@@ -1,7 +1,5 @@
 # Credentials
-.env
-.env.*
-.envrc
+.env*
 .dev.vars*
 src/config_local.py
 config_local.py

@@ -8,7 +8,13 @@ Keep the browser checks and screenshot/demo approval requirements in that docume
 
 ## Credential and publication safety
 
-Follow [Aida security guidance](docs/SECURITY.md). Run `node scripts/scan-secrets.mjs --staged` before committing and `--history` when reviewing repository exposure. Never commit local credentials, logs, recovery trash, saved reference pages or personal editor state. Keep secret reports redacted and stage the public site only through `scripts/stage-public-site.mjs`.
+Follow [Aida security guidance](docs/SECURITY.md). Write documentation solely about Aida's own behavior and rules; do not import descriptions or specifications from other private projects. Review prose for private information as well as credentials, since a secret scanner cannot reliably recognize private project descriptions.
+
+Before committing, stage only explicit intended file paths, review the complete staged diff and run `node scripts/scan-secrets.mjs --staged`. Review commit messages and tag annotations for private information too; the staged check cannot inspect a future commit message. Never commit local credentials, logs, recovery trash, saved reference pages or personal editor state.
+
+Before any authorized push, ensure `.githooks` is the active hooks directory and allow the mandatory pre-push guard to check the outgoing commits, commit messages and tag annotations before transmission. Never bypass findings with `--no-verify`, hook or configuration overrides, baselines or suppressions. Resolve the finding before retrying. Keep recovery refs local and never use `--mirror` or `--all` pushes to publish them. A passing scan does not authorize a push or publication; those actions still require the user's explicit request.
+
+Use `--history` for a forensic audit of all local refs and reflogs; it may report retained recovery material. CI uses `--published` to check the fetched `HEAD` ancestry. Keep secret reports redacted, never place credentials in logs or screenshots, and build public website artifacts only through `scripts/stage-public-site.mjs`. Ignored files are private local material and must not enter repository-directory archives or uploads; an authorized Git archive must contain only reviewed, approved tracked files.
 
 ## Video preference: 120 fps
 

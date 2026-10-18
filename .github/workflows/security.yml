@@ -31,8 +31,10 @@ jobs:
           tar -xzf "$archive" -C "$RUNNER_TEMP/aida-secret-scanner" gitleaks
           echo "$RUNNER_TEMP/aida-secret-scanner" >> "$GITHUB_PATH"
       - name: Verify commit guard behavior
-        run: node --test tests/scan-secrets.test.mjs
-      - name: Scan every fetched commit
         env:
           AIDA_GITLEAKS_PATH: gitleaks
-        run: node scripts/scan-secrets.mjs --history
+        run: node --test tests/scan-secrets.test.mjs tests/publication-guard.integration.test.mjs
+      - name: Scan the published history
+        env:
+          AIDA_GITLEAKS_PATH: gitleaks
+        run: node scripts/scan-secrets.mjs --published

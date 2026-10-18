@@ -1,0 +1,7 @@
+#!/bin/sh
+set -eu
+node_path="$(git config --local --get aida.nodePath || true)"
+if [ -z "$node_path" ]; then
+  node_path=node
+fi
+exec "$node_path" scripts/scan-secrets.mjs --pre-push
