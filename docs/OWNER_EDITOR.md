@@ -49,9 +49,13 @@ node --test tests/admin-auth.test.mjs tests/admin-assets.test.mjs tests/admin-b2
 The asset build includes named application code and icons only. It does not
 include `.env`, local videos, local metadata, source recordings, or credentials.
 `edge/wrangler.admin.toml` describes the separate `aida-owner-editor` Worker and
-its `new_sqlite_classes = ["AidaLibrary"]` migration. Worker routes must cover
-exact `/edit` and `/edit/*` and fail closed. Keep `workers_dev` and preview URLs
-disabled. Existing public playback routes stay separate.
+its `new_sqlite_classes = ["AidaLibrary"]` migration. Use the Worker route
+`keppy.dev/edit*`: [route matching includes query strings](https://developers.cloudflare.com/workers/configuration/routing/routes/#matching-behavior),
+so an exact `/edit` route would miss `/edit?v=ID`. The Worker accepts only
+`/edit` and `/edit/...`; lookalike prefixes such as `/editor` return 404.
+The Access application remains `keppy.dev/edit`, protecting that path and its
+children. Keep `workers_dev` and preview URLs disabled. Existing public
+playback routes stay separate.
 
 ## Cutover
 

@@ -4,7 +4,8 @@ compatibility_date = "2026-10-18"
 workers_dev = false
 preview_urls = false
 
-# Create the exact /edit Access application and fail-closed Worker routes before use.
+# Access application: keppy.dev/edit, including its child paths.
+# Worker route: keppy.dev/edit* covers query strings; the handler rejects lookalikes.
 # Routes are managed in the dashboard; ordinary watch routes remain separate.
 [build]
 command = "node scripts/build-admin-assets.mjs"
