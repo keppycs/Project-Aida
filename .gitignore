@@ -1,6 +1,30 @@
 # Credentials
 .env
+.env.*
+.envrc
+.dev.vars*
 src/config_local.py
+config_local.py
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore
+id_rsa*
+id_ecdsa*
+id_ed25519*
+credentials.*
+secrets.*
+service-account*.json
+private-key*
+private_key*
+
+# Local deployment and personal editor state
+.wrangler/
+.cursor/
+.aws/
+.ssh/
 
 # Python
 __pycache__/

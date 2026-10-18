@@ -2,19 +2,17 @@
 
 #### My personal, semi-automated video transcoding + streaming pipeline with a lightweight web frontend.
 
-Built with **Python 3.12**, **FFmpeg 8.1 Hoare**, and **Shaka Player 5.0.7**, Project Aida turns master videos into efficient, adaptive streaming formats and serves them on **[keppy.dev](https://keppy.dev "😳")** where I exclusively upload my 120 fps videos!
+Built with **Python 3.12**, **FFmpeg 8.1 Hoare**, and **Shaka Player 5.0.7**, Project Aida turns master videos into efficient, adaptive streaming formats and serves them on **[keppy.dev](https://keppy.dev "😳")** for my 120 fps uploads!
 
 ---
 
-## 🎯 Core requirement: 120 fps
+## 🎯 Preferred target: 120 fps
 
-**120 fps is the point of Project Aida. Anything below 120 fps is not an acceptable video rendition or fallback.** This applies to VOD, future live streams, every resolution and bitrate tier, and both HDR and SDR versions.
+**120 fps is my preference for Project Aida.** Resolution, bitrate, HDR and compatibility choices can adapt to the source, bandwidth and playback device, including lower-frame-rate fallbacks where appropriate.
 
-- Resolution and bitrate may decrease to fit bandwidth or processing capacity; the 120 fps target stays fixed.
-- 4K and HDR are desirable additions. They are secondary to preserving 120 fps.
-- HDR-to-SDR tone-mapped versions must also remain at 120 fps.
-- Codec, protocol, browser, or device limitations do not justify introducing 30 or 60 fps compatibility versions. Report a limitation when a client cannot sustain 120 fps.
-- Preserve genuine source motion at 120 fps; duplicating lower-frame-rate frames or changing metadata does not satisfy this requirement.
+Lower-frame-rate videos are on my YouTube channel at `https://www.youtube.com/watch?v=VIDEO_ID`, using the same video ID as Aida's `/watch?v=VIDEO_ID` links.
+
+Preserve genuine source motion and label frame rates accurately. Duplicating frames or changing metadata does not turn a lower-frame-rate source into genuine 120 fps video. This preference does not imply that every source rate or fallback is already supported by the current pipeline.
 
 ---
 
@@ -39,7 +37,7 @@ Project Aida handles the full video workflow:
   - Supports both SDR and HDR
 - **FFmpeg Wizardry**
   - Ladder: 2160p, 1440p, 1080p, 720p, 540p, 360p. (fuck 480p✌️)
-  - All at 120 fps of course :smirk:
+  - Tuned for my preferred 120 fps uploads :smirk:
   - Manifest patching for broader and more robust compatibility
 - **Upload / Hosting (optional)**
   - Backblaze B2 for storage
@@ -79,11 +77,13 @@ The Python backend manages the full encoding flow:
 
 ## Project documentation
 
-Project documentation lives in `docs/`.
+Project documentation lives in `docs/`. Aida's design rules cover its loud yellow accent (`#e8ff47`), controls, keyboard focus, scrolling and player interactions.
 
+- [Aida design and interaction rules](docs/AIDA_DESIGN.md)
+- [Credential safety, secret scanning and publication](docs/SECURITY.md)
 - [Owner editor, login and deployment](docs/OWNER_EDITOR.md)
 
-Project Aida's 120 fps requirement remains defined in [AGENTS.md](AGENTS.md).
+Contributor guidance and the 120 fps preference are defined in [AGENTS.md](AGENTS.md).
 
 ## 🌍 Web Frontend
 
@@ -109,7 +109,7 @@ On **any other host** (localhost, LAN, preview), add **`&local=1`** to the watch
 
 Player interaction checks live in `tests/player-*.browser.mjs`. Settings motion has a traced layout budget and native touch interruption checks in `tests/player-settings-performance.browser.mjs`; Smooth Pause has unit and browser checks. Use the local preview and review the UI before publishing.
 
-The videos page and watch page share neutral surfaces, system fonts and native scrollbars with reserved gutters. Search filters the collection without removing the featured content above the search field, and the query stays in the URL. Local previews load the optional mobile debug console only with `&debug=1`.
+The videos page and watch page share neutral surfaces, system fonts and native scrolling. Search filters the collection without removing the featured content above the search field, and the query stays in the URL. Local previews load the optional mobile debug console only with `&debug=1`.
 
 Run `node tests/site-ux.browser.mjs` for shared UI changes. It checks real classic/overlay scrollbar modes, loading/search/empty/error states, short and long pages, player Settings overflow, enlarged text, touch targets and native scrolling. `AIDA_PLAYWRIGHT_MODULE`, `AIDA_BROWSER_EXECUTABLE` and `AIDA_REVIEW_DIR` can select the test runtime, browser and artifact directory. Keep `tests/player-focus.browser.mjs` and the player motion tests alongside this check.
 
@@ -118,8 +118,7 @@ Run `node tests/site-ux.browser.mjs` for shared UI changes. It checks real class
 Install `requirements.txt`, run `launch.bat`, and open `http://127.0.0.1:8765`.
 Video editor links use `http://127.0.0.1:8765/edit?v=ID`.
 Studio uses Aida's yellow/dark design. **New upload** selects a source, creates
-120 fps renditions and thumbnails, and can upload privately. Sources below or
-above the 120 fps target are rejected rather than relabelled or duplicated.
+120 fps renditions and thumbnails, and can upload privately.
 
 **Videos** edits existing titles, descriptions, tags, visibility and thumbnails.
 Choose an image or open the visual frame picker to scrub the existing video,
@@ -170,7 +169,7 @@ fake storage; they do not run FFmpeg or write to the real bucket.
 
 ### GitHub Pages
 
-The static site is published from `web/` by [the Pages workflow](.github/workflows/pages.yml). The artifact contains the contents of `web/` at its root, preserving public URLs such as `/watch.html`, `/css/` and `/js/`. Local encodes in `web/local/` and saved pages in `web/youtube reference/` are excluded from the artifact. `docs/` is project documentation and is not part of the website artifact.
+The static site is published from `web/` by [the Pages workflow](.github/workflows/pages.yml), after the secret scan succeeds. [Public asset staging](scripts/stage-public-site.mjs) copies only reviewed website files to the artifact root, preserving URLs such as `/watch.html`, `/css/` and `/js/`. Unexpected files and linked paths block staging. Local encodes in `web/local/`, saved pages in `web/youtube reference/` and project documentation in `docs/` are excluded.
 
 **Before publishing this directory reorganization**, change the repository's **Settings → Pages → Build and deployment → Source** to **GitHub Actions**. Branch publishing only supports the repository root or `/docs`; leaving it pointed at `/docs` would publish the design documents instead of the website. Then push to `main` or run **Deploy website to Pages** manually. Keep the existing `keppy.dev` custom domain in Pages settings. See [GitHub's custom-workflow documentation](https://docs.github.com/en/pages/getting-started-with-github-pages/using-custom-workflows-with-github-pages).
 

@@ -1,0 +1,26 @@
+title = "Aida secret scanning"
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "aida-service-credential"
+description = "Aida storage, deployment or Access credential literal"
+regex = '''(?i)(?:AIDA_ACCESS_CLIENT_SECRET|ACCESS_SERVICE_CLIENT_SECRET|B2_APP_KEY|B2_SECRET_KEY|CLOUDFLARE_API_TOKEN)["' \t]*[:=][ \t]*["']?([A-Za-z0-9_+./=-]{20,})'''
+secretGroup = 1
+keywords = ["aida_access_client_secret", "access_service_client_secret", "b2_app_key", "b2_secret_key", "cloudflare_api_token"]
+
+[[rules.allowlists]]
+description = "Exact synthetic credentials used by offline tests"
+regexTarget = "secret"
+regexes = ['''^(?:synthetic-api-token-secret|synthetic-access-secret|audit-fake-secret-key-never-real)$''']
+
+[[rules]]
+id = "generic-api-key"
+
+[[rules.allowlists]]
+description = "These two exact statements reference server bindings; neither contains a credential literal"
+condition = "AND"
+paths = ['''(^|/)edge/cdn-worker\.mjs$''']
+regexTarget = "line"
+regexes = ['''^\s*(?:return state && state\.keyId === env\.B2_KEY_ID && state\.secret === env\.B2_SECRET_KEY;|const state = \{ keyId: env\.B2_KEY_ID, secret: env\.B2_SECRET_KEY \};)\s*$''']

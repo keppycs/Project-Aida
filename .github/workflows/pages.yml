@@ -5,6 +5,8 @@ on:
     branches: [main]
     paths:
       - "web/**"
+      - "scripts/stage-public-site.mjs"
+      - "tests/stage-public-site.test.mjs"
       - ".github/workflows/pages.yml"
   workflow_dispatch:
 
@@ -18,7 +20,13 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  secrets:
+    permissions:
+      contents: read
+    uses: ./.github/workflows/security.yml
+
   deploy:
+    needs: secrets
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
@@ -28,16 +36,14 @@ jobs:
         uses: actions/checkout@v4
       - name: Configure Pages
         uses: actions/configure-pages@v5
+      - name: Verify public asset staging
+        run: node --test tests/stage-public-site.test.mjs
       - name: Stage public website
-        shell: bash
-        run: |
-          mkdir -p "$RUNNER_TEMP/aida-pages"
-          rsync -a --exclude='/local/' --exclude='/youtube reference/' web/ "$RUNNER_TEMP/aida-pages/"
-          test -f "$RUNNER_TEMP/aida-pages/index.html"
+        run: node scripts/stage-public-site.mjs logs/pages-public
       - name: Upload website artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: ${{ runner.temp }}/aida-pages
+          path: logs/pages-public
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v5
