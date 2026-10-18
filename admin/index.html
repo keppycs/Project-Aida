@@ -17,7 +17,7 @@
     <nav class="tabs" role="tablist" aria-label="Studio">
       <button id="tab-videos" class="tab active" data-tab="videos" role="tab" aria-controls="panel-videos" aria-selected="true">Videos</button>
       <button id="tab-encode" class="tab" data-tab="encode" role="tab" aria-controls="panel-encode" aria-selected="false" tabindex="-1">New upload</button>
-      <button id="tab-maint" class="tab" data-tab="maint" role="tab" aria-controls="panel-maint" aria-selected="false" tabindex="-1">Maintenance</button>
+      <button id="tab-maint" class="tab" data-tab="maint" role="tab" aria-controls="panel-maint" aria-selected="false" tabindex="-1" hidden>Maintenance</button>
       <button id="tab-creds" class="tab" data-tab="creds" role="tab" aria-controls="panel-creds" aria-selected="false" tabindex="-1">Settings</button>
     </nav>
 
@@ -195,7 +195,8 @@
 
     <!-- Credentials -->
     <section id="panel-creds" class="panel tools-panel" role="tabpanel" aria-labelledby="tab-creds" hidden>
-      <div class="card">
+      <div id="cloud-connection" class="card"><h2>Connection</h2><p id="cloud-connection-status" class="status" role="status">Checking connection…</p></div>
+      <div id="legacy-credentials" class="card" hidden>
         <h2>B2 Credentials</h2>
         <p class="hint">Stored in your OS keyring. Used for uploads and bucket maintenance.</p>
         <label class="field">
@@ -227,7 +228,7 @@
     (function () {
       var key = "aida-admin-tab";
       var saved = localStorage.getItem(key);
-      if (saved && /^(videos|encode|maint|creds)$/.test(saved)) {
+      if (saved && /^(videos|encode|creds)$/.test(saved)) {
         document.querySelectorAll(".tab").forEach(function (tab) {
           var active = tab.dataset.tab === saved;
           tab.classList.toggle("active", active);

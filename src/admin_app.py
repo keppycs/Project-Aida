@@ -36,6 +36,7 @@ from main import probe_source, run_pipeline
 from sync_catalog import SyncResult, format_sync_summary, run_sync
 from admin_editor import editor_html, install_editor, install_local_boundary, safe_file
 from video_library import VIDEO_ID
+from admin_client import AdminClientError, central_client
 
 ROOT = Path(__file__).parent.parent
 ADMIN_DIR = ROOT / "admin"
@@ -132,6 +133,12 @@ class CredentialsOut(BaseModel):
     bucket: str
     endpoint: str
     configured: bool
+    cloud_mode: str = "legacy"
+
+
+class CentralCredentialsOut(BaseModel):
+    cloud_mode: str = "central"
+    configured: bool = True
 
 
 class DefaultsOut(BaseModel):
@@ -345,6 +352,18 @@ def _start_thread(target, *args, **kwargs) -> None:
 # ── Routes ────────────────────────────────────────────────────────────────────
 
 
+def _central_writer():
+    try:
+        return central_client()
+    except AdminClientError:
+        raise HTTPException(status_code=503, detail="The secure uploader configuration needs attention.") from None
+
+
+def _legacy_mode_only() -> None:
+    if _central_writer() is not None:
+        raise HTTPException(status_code=409, detail="This action is unavailable with the secure uploader.")
+
+
 @app.get("/")
 @app.get("/edit")
 def index() -> HTMLResponse:
@@ -365,15 +384,19 @@ def get_defaults() -> DefaultsOut:
 
 @app.get("/api/status")
 def get_status() -> dict[str, Any]:
+    central = _central_writer() is not None
     return {
         "encode_running": _encode_running,
         "maint_running": _maint_running,
-        "b2_configured": b2_configured(),
+        "b2_configured": True if central else b2_configured(),
+        "cloud_mode": "central" if central else "legacy",
     }
 
 
-@app.get("/api/credentials", response_model=CredentialsOut)
-def get_credentials() -> CredentialsOut:
+@app.get("/api/credentials", response_model=CredentialsOut | CentralCredentialsOut)
+def get_credentials() -> CredentialsOut | CentralCredentialsOut:
+    if _central_writer() is not None:
+        return CentralCredentialsOut()
     creds = get_b2_config()
     return CredentialsOut(
         key_id=creds.get("B2_KEY_ID", ""),
@@ -386,6 +409,7 @@ def get_credentials() -> CredentialsOut:
 
 @app.post("/api/credentials")
 def post_credentials(body: CredentialsIn) -> dict[str, str]:
+    _legacy_mode_only()
     app_key = body.app_key.strip()
     if not app_key:
         previous = get_b2_config()
@@ -470,6 +494,7 @@ def post_pipeline(body: PipelineIn) -> dict[str, str]:
 def post_dedupe_scan(body: DedupeScanIn) -> dict[str, str]:
     global _maint_running
 
+    _legacy_mode_only()
     if not b2_configured():
         raise HTTPException(status_code=400, detail="Configure B2 credentials first.")
 
@@ -486,6 +511,7 @@ def post_dedupe_scan(body: DedupeScanIn) -> dict[str, str]:
 def post_dedupe_apply(body: DedupeApplyIn) -> dict[str, str]:
     global _maint_running
 
+    _legacy_mode_only()
     cached = _last_dedupe_scan
     if not cached or not cached.has_duplicates:
         raise HTTPException(status_code=400, detail="Scan the bucket first.")
@@ -509,6 +535,7 @@ def post_dedupe_apply(body: DedupeApplyIn) -> dict[str, str]:
 
 @app.get("/api/dedupe/last")
 def get_last_dedupe() -> dict[str, Any] | None:
+    _legacy_mode_only()
     if _last_dedupe_scan is None:
         return None
     return _dedupe_to_event(_last_dedupe_scan)

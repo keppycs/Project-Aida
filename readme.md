@@ -136,8 +136,7 @@ existing upload's details and changed thumbnail without resending its video.
 A new local video still needs its first upload. **Refresh online** includes
 private and unlisted uploads, and local previews keep storage credentials out
 of the player. The owner editor and its deployment procedure are described in
-[Owner editor](docs/OWNER_EDITOR.md); these security changes still need deployment
-and live validation.
+[Owner editor](docs/OWNER_EDITOR.md), including deployment and live validation.
 
 With central mode configured, the PC uses a 30-day Cloudflare Access service
 token and needs no reusable B2 key. New uploads obtain five-minute grants for

@@ -5,8 +5,8 @@ transcoding stay in local Studio. The live editor can save a private draft,
 publish text/visibility changes, and choose an SDR thumbnail from an image or
 an existing video frame. A draft does not change the public video.
 
-The security changes described here still require Worker/static-site deployment
-and live validation. Passing local checks does not establish a completed rollout.
+When applying these changes, deploy both the Worker and static website, then
+validate the live system. Local checks alone do not establish a completed rollout.
 
 ## Authentication
 
@@ -43,6 +43,10 @@ In central mode the PC needs only the `AIDA_ADMIN_URL` and Access service-token
 settings below, with no reusable B2 key. Storage signing credentials stay in the
 Worker's encrypted secrets. Access service headers go only to the publisher API;
 they are never forwarded to B2.
+Studio Settings shows **Connected through secure uploader** in this mode. The
+raw B2 credential form and legacy bucket-maintenance controls stay hidden;
+their credential-save and deduplication APIs reject central-mode requests.
+Incomplete central configuration fails closed without falling back to keyring.
 
 Missing or invalid stored visibility is `unknown`, with
 `visibility_review_required: true`. The editor shows **Visibility needs review**,

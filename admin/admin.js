@@ -7,6 +7,7 @@ const state = {
   lastDedupe: null,
   lastSync: null,
   probeTimer: null,
+  cloudMode: "unknown",
 };
 
 const TAB_KEY = "aida-admin-tab";
@@ -18,7 +19,7 @@ $$("#encode-progress .progress-row").forEach((row) => {
 });
 
 function setTab(name) {
-  const valid = [...$$(".tab")].some((tab) => tab.dataset.tab === name);
+  const valid = [...$$(".tab")].some((tab) => !tab.hidden && tab.dataset.tab === name);
   if (!valid) return;
 
   $$(".tab").forEach((tab) => {
@@ -186,6 +187,16 @@ async function loadDefaults() {
 async function loadCredentials() {
   try {
     const creds = await api("/api/credentials");
+    state.cloudMode = creds.cloud_mode === "central" ? "central" : "legacy";
+    const legacy = state.cloudMode === "legacy";
+    $("#legacy-credentials").hidden = !legacy;
+    $("#cloud-connection").hidden = legacy;
+    $("#tab-maint").hidden = !legacy;
+    if (localStorage.getItem(TAB_KEY) === "maint") setTab(legacy ? "maint" : "videos");
+    if (!legacy) {
+      setStatus("#cloud-connection-status", "Connected through secure uploader", true);
+      return;
+    }
     $("#cr-key").value = creds.key_id;
     $("#cr-secret").value = creds.app_key;
     $("#cr-secret").placeholder = creds.configured ? "Saved — leave blank to keep" : "Application key";
@@ -198,7 +209,11 @@ async function loadCredentials() {
         : "Missing credentials — fill in all fields and save.",
     );
   } catch (err) {
-    setStatus("#creds-status", `Failed to load credentials: ${err.message}`, false);
+    state.cloudMode = "unavailable";
+    $("#legacy-credentials").hidden = true;
+    $("#tab-maint").hidden = true;
+    $("#cloud-connection").hidden = false;
+    setStatus("#cloud-connection-status", err.message, false);
   }
 }
 
@@ -422,6 +437,7 @@ async function startPipeline() {
 }
 
 async function scanBucket() {
+  if (state.cloudMode !== "legacy") return;
   try {
     await api("/api/dedupe/scan", {
       method: "POST",
@@ -433,6 +449,7 @@ async function scanBucket() {
 }
 
 function openConfirmDialog() {
+  if (state.cloudMode !== "legacy") return;
   const result = state.lastDedupe;
   if (!result || !result.has_duplicates) {
     $("#dedupe-summary").textContent = "Scan the bucket first.";
@@ -448,6 +465,7 @@ function openConfirmDialog() {
 }
 
 async function applyDedupe() {
+  if (state.cloudMode !== "legacy") return;
   try {
     await api("/api/dedupe/apply", {
       method: "POST",
@@ -472,6 +490,7 @@ async function syncCatalog(mode) {
 }
 
 async function saveCredentials() {
+  if (state.cloudMode !== "legacy") return;
   try {
     const res = await api("/api/credentials", {
       method: "POST",
@@ -494,7 +513,7 @@ function bindUi() {
     tab.addEventListener("keydown", (event) => {
       if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
       event.preventDefault();
-      const tabs = [...$$(".tab")];
+      const tabs = [...$$(".tab")].filter(tab => !tab.hidden);
       const index = tabs.indexOf(tab);
       const next = event.key === "Home" ? 0 : event.key === "End" ? tabs.length - 1 : (index + (event.key === "ArrowRight" ? 1 : -1) + tabs.length) % tabs.length;
       setTab(tabs[next].dataset.tab);
@@ -540,14 +559,14 @@ async function init() {
   restoreSourcePath();
   await Promise.all([loadDefaults(), loadCredentials()]);
 
-  try {
+  if (state.cloudMode === "legacy") try {
     const last = await api("/api/dedupe/last");
     if (last) handleDedupeResult(last);
   } catch {
     // no prior scan
   }
 
-  try {
+  if (state.cloudMode === "legacy") try {
     const lastSync = await api("/api/sync/last");
     if (lastSync) handleSyncResult(lastSync);
   } catch {
