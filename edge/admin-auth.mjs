@@ -39,8 +39,9 @@ async function publicKeys(issuer, fetcher, now, refresh = false) {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 5000);
     try {
-      const response = await fetcher(`${issuer}/cdn-cgi/access/certs`, { signal: controller.signal, redirect: "error", headers: { Accept: "application/json" } });
-      if (!response.ok || Number(response.headers.get("content-length") || 0) > 128_000) throw new Error();
+      // Workers implements manual/follow only; reject redirects ourselves.
+      const response = await fetcher(`${issuer}/cdn-cgi/access/certs`, { signal: controller.signal, redirect: "manual", headers: { Accept: "application/json" } });
+      if (!response.ok || Number(response.headers.get("content-length") || 0) > 128_000) { await response.body?.cancel(); throw new Error(); }
       if (!response.body) throw new Error();
       const reader = response.body.getReader();
       const chunks = [];

@@ -99,3 +99,22 @@ test("key rotation is fetched from the fixed issuer without trusting token URLs"
   await authorizeRequest(request(await token({}, { kid: "rotated-key" })), env, { now: now + 31_000, fetcher: rotate });
   assert.equal(calls, 2);
 });
+
+test("signing-key requests use Workers-compatible redirect handling and never follow redirects", async () => {
+  const jwt = await token();
+  const workerFetch = async (url, init) => {
+    if (init.redirect === "error") throw new TypeError("Workers does not implement redirect error mode");
+    assert.equal(init.redirect, "manual");
+    return fetcher(url);
+  };
+  assert.equal((await authorizeRequest(request(jwt), env, { now, fetcher: workerFetch })).kind, "owner");
+  clearPublicKeyCache();
+  let calls = 0;
+  await assert.rejects(authorizeRequest(request(jwt), env, { now, fetcher: async (url, init) => {
+    calls++;
+    assert.equal(url, "https://aida-test.cloudflareaccess.com/cdn-cgi/access/certs");
+    assert.equal(init.redirect, "manual");
+    return new Response(null, { status: 302, headers: { Location: "https://attacker.invalid/keys" } });
+  } }), error => error.status === 503);
+  assert.equal(calls, 1);
+});
