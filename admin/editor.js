@@ -14,6 +14,10 @@
   const editable = ["#edit-title", "#edit-description", "#edit-tags", 'input[name="edit-visibility"]'];
   const picker = { open: false, epoch: 0, operation: 0, id: null, video: null, document: null, source: "", controller: null, observer: null, callback: null, timeout: null, seekRequest: null, paints: [], ready: false, waiting: false, presented: null, exact: false, target: 0, candidate: null };
   const tagLibrary = { tags: [], redirects: {}, serverIDs: new Set(), revision: null, ready: false, offline: false, busy: false, selected: [], action: null, editing: null, managerDirty: false, drafts: new Map() };
+  const tagChoices = [
+    { prefix: "tag-manage", field: "#tag-manage-select", empty: "Create a new tag", active: -1 },
+    { prefix: "tag-merge", field: "#tag-merge-target", empty: "Choose destination tag", active: -1 },
+  ];
   let tagTools = null, tagHelperAttempts = 0;
   let normalizeTag = value => String(value || "").normalize("NFKC").toLowerCase().trim();
   const tagByName = value => tagLibrary.tags.find(tag => [tag.name, ...tag.aliases].some(name => normalizeTag(name) === normalizeTag(value)));
@@ -124,15 +128,114 @@
     tagLibrary.tags = registry.tags;
     tagLibrary.redirects = registry.redirects;
   }
-  function renderTagManager() {
-    for (const selector of ["#tag-manage-select", "#tag-merge-target"]) {
-      const select = find(selector), previous = select.value;
-      select.replaceChildren(new Option(selector === "#tag-manage-select" ? "Create a new tag" : "Choose destination tag", ""));
-      for (const tag of [...tagLibrary.tags].sort((a, b) => a.name.localeCompare(b.name))) select.add(new Option(tag.name, tag.id));
-      if (tagLibrary.tags.some(tag => tag.id === previous)) select.value = previous;
+  function closeTagChoices(restoreFocus = false) {
+    for (const choice of tagChoices) {
+      const button = find(`#${choice.prefix}-button`);
+      const panel = find(`#${choice.prefix}-panel`);
+      if (panel.hidden) continue;
+      panel.hidden = true;
+      button.setAttribute("aria-expanded", "false");
+      const search = find(`#${choice.prefix}-search`);
+      search.setAttribute("aria-expanded", "false");
+      search.removeAttribute("aria-activedescendant");
+      if (restoreFocus && !button.disabled) button.focus({ preventScroll: true });
     }
   }
+  function activateTagChoice(choice, index, scroll = false) {
+    const options = [...find(`#${choice.prefix}-options`).children];
+    choice.active = options.length ? Math.max(0, Math.min(index, options.length - 1)) : -1;
+    options.forEach((option, at) => option.classList.toggle("is-active", at === choice.active));
+    const active = options[choice.active], search = find(`#${choice.prefix}-search`);
+    if (active && !find(`#${choice.prefix}-panel`).hidden) search.setAttribute("aria-activedescendant", active.id);
+    else search.removeAttribute("aria-activedescendant");
+    if (scroll && active) {
+      const list = active.parentElement;
+      const top = active.offsetTop - list.offsetTop;
+      if (top < list.scrollTop) list.scrollTop = top;
+      else if (top + active.offsetHeight > list.scrollTop + list.clientHeight) list.scrollTop = top + active.offsetHeight - list.clientHeight;
+    }
+  }
+  function renderTagChoice(choice) {
+    const field = find(choice.field), term = normalizeTag(find(`#${choice.prefix}-search`).value);
+    const tags = tagLibrary.tags.filter(tag => (choice.prefix !== "tag-merge" || tag.id !== tagLibrary.editing && tagLibrary.serverIDs.has(tag.id)) &&
+      (!term || [tag.name, ...tag.aliases].some(name => normalizeTag(name).includes(term)))).sort((a, b) => a.name.localeCompare(b.name));
+    const entries = [{ id: "", name: choice.empty }, ...tags];
+    const list = find(`#${choice.prefix}-options`);
+    list.replaceChildren(...entries.map((tag, index) => {
+      const option = document.createElement("button");
+      option.type = "button"; option.className = "tag-choice-option"; option.tabIndex = -1;
+      option.id = `${choice.prefix}-option-${index}`; option.dataset.value = tag.id;
+      option.setAttribute("role", "option"); option.setAttribute("aria-selected", String(field.value === tag.id));
+      const name = document.createElement("span"); name.textContent = tag.name; option.append(name);
+      if (field.value === tag.id) {
+        const mark = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+        mark.setAttribute("viewBox", "0 0 24 24"); mark.setAttribute("width", "18"); mark.setAttribute("height", "18"); mark.setAttribute("aria-hidden", "true");
+        const path = document.createElementNS(mark.namespaceURI, "path");
+        path.setAttribute("d", "m5 12 4 4L19 6"); path.setAttribute("fill", "none"); path.setAttribute("stroke", "currentColor"); path.setAttribute("stroke-width", "2"); mark.append(path); option.append(mark);
+      }
+      option.addEventListener("pointerdown", event => { if (event.pointerType !== "touch") event.preventDefault(); });
+      option.addEventListener("click", () => {
+        if (find(`#${choice.prefix}-button`).disabled) return;
+        closeTagChoices();
+        field.value = tag.id;
+        field.dispatchEvent(new Event("input", { bubbles: true }));
+        field.dispatchEvent(new Event("change", { bubbles: true }));
+        renderTagManager();
+        find(`#${choice.prefix}-button`).focus({ preventScroll: true });
+      });
+      return option;
+    }));
+    find(`#${choice.prefix}-empty`).hidden = !term || tags.length > 0;
+    const selected = entries.findIndex(tag => tag.id === field.value);
+    activateTagChoice(choice, selected < 0 ? 0 : selected);
+  }
+  function renderTagManager() {
+    for (const choice of tagChoices) {
+      const field = find(choice.field);
+      if (field.value && !tagLibrary.tags.some(tag => tag.id === field.value)) field.value = "";
+      find(`#${choice.prefix}-value`).textContent = tagByID(field.value)?.name || choice.empty;
+      renderTagChoice(choice);
+    }
+  }
+  function openTagChoice(choice) {
+    const button = find(`#${choice.prefix}-button`);
+    if (button.disabled) return;
+    closeTagChoices();
+    const search = find(`#${choice.prefix}-search`);
+    search.value = "";
+    find(`#${choice.prefix}-panel`).hidden = false;
+    button.setAttribute("aria-expanded", "true"); search.setAttribute("aria-expanded", "true");
+    renderTagChoice(choice);
+    search.focus();
+    activateTagChoice(choice, choice.active, true);
+  }
+  function bindTagChoices() {
+    for (const choice of tagChoices) {
+      const button = find(`#${choice.prefix}-button`), search = find(`#${choice.prefix}-search`);
+      button.addEventListener("click", () => find(`#${choice.prefix}-panel`).hidden ? openTagChoice(choice) : closeTagChoices());
+      button.addEventListener("keydown", event => {
+        if (event.key === "ArrowDown" || event.key === "ArrowUp") { event.preventDefault(); openTagChoice(choice); }
+        else if (event.key === "Escape") { event.preventDefault(); closeTagChoices(); }
+      });
+      search.addEventListener("input", () => { renderTagChoice(choice); activateTagChoice(choice, find(`#${choice.prefix}-options`).children.length > 1 ? 1 : 0, true); });
+      search.addEventListener("keydown", event => {
+        const options = find(`#${choice.prefix}-options`).children;
+        const positions = { ArrowDown: choice.active + 1, ArrowUp: choice.active - 1, PageDown: choice.active + 5, PageUp: choice.active - 5 };
+        if (!search.value) { positions.Home = 0; positions.End = options.length - 1; }
+        if (Object.hasOwn(positions, event.key)) { event.preventDefault(); activateTagChoice(choice, positions[event.key], true); }
+        else if (event.key === "Enter") { event.preventDefault(); options[choice.active]?.click(); }
+        else if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); closeTagChoices(true); }
+      });
+      find(`#${choice.prefix}-panel`).addEventListener("keydown", event => {
+        if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); closeTagChoices(true); }
+      });
+    }
+    for (const name of ["pointerdown", "focusin"]) document.addEventListener(name, event => {
+      if (!event.target.closest(".tag-choice")) closeTagChoices();
+    });
+  }
   function editTag(id = "", seed = "") {
+    closeTagChoices();
     if (tagLibrary.managerDirty) tagLibrary.drafts.set(tagLibrary.editing || "", { name: find("#tag-name").value, aliases: find("#tag-aliases").value });
     tagLibrary.editing = id || null;
     const tag = tagByID(id);
@@ -142,6 +245,7 @@
     find("#tag-aliases").value = draft?.aliases ?? tag?.aliases.join(", ") ?? "";
     find("#tag-merge-fields").hidden = !id || !tagLibrary.serverIDs.has(id);
     find("#tag-merge-target").value = "";
+    renderTagManager();
     tagLibrary.managerDirty = Boolean(draft);
     tagLibrary.action = null;
     find("#tag-manager").hidden = false;
@@ -151,7 +255,8 @@
   }
   function refreshTagButtons() {
     const blocked = tagLibrary.busy || studio.busy || authenticationExpired || !tagLibrary.ready;
-    for (const selector of ["#tag-save", "#tag-merge", "#tag-manage-select"]) find(selector).disabled = blocked;
+    for (const selector of ["#tag-save", "#tag-merge", "#tag-manage-button", "#tag-merge-button"]) find(selector).disabled = blocked;
+    if (blocked) closeTagChoices();
     find("#tag-create").disabled = blocked;
     find("#tag-save").disabled ||= tagLibrary.offline;
     find("#tag-merge").disabled ||= tagLibrary.offline;
@@ -1118,10 +1223,11 @@
   }
 
   function bind() {
+    bindTagChoices();
     find("#tag-search").addEventListener("input", renderTags);
     find("#tag-search").addEventListener("keydown", event => { if (event.key === "Enter") { event.preventDefault(); find("#tag-suggestions button")?.click(); } else if (event.key === "ArrowDown") { event.preventDefault(); find("#tag-suggestions button")?.focus(); } });
     find("#tag-suggestions").addEventListener("keydown", event => { const buttons = [...find("#tag-suggestions").querySelectorAll("button")], index = buttons.indexOf(document.activeElement); if (event.key === "ArrowDown" || event.key === "ArrowUp") { event.preventDefault(); buttons[(index + (event.key === "ArrowDown" ? 1 : buttons.length - 1)) % buttons.length]?.focus(); } else if (event.key === "Escape") find("#tag-search").focus(); });
-    find("#tag-create").addEventListener("click", () => { if (find("#tag-manager").hidden) { if (tagLibrary.managerDirty) { find("#tag-manager").hidden = false; find("#tag-create").setAttribute("aria-expanded", "true"); } else editTag("", find("#tag-search").value.trim()); find("#tag-name").focus(); } else { find("#tag-manager").hidden = true; find("#tag-create").setAttribute("aria-expanded", "false"); } });
+    find("#tag-create").addEventListener("click", () => { closeTagChoices(); if (find("#tag-manager").hidden) { if (tagLibrary.managerDirty) { find("#tag-manager").hidden = false; find("#tag-create").setAttribute("aria-expanded", "true"); } else editTag("", find("#tag-search").value.trim()); find("#tag-name").focus(); } else { find("#tag-manager").hidden = true; find("#tag-create").setAttribute("aria-expanded", "false"); } });
     find("#tag-manage-select").addEventListener("change", event => editTag(event.target.value));
     for (const selector of ["#tag-name", "#tag-aliases", "#tag-merge-target"]) find(selector).addEventListener("input", () => { tagLibrary.managerDirty = true; });
     find("#tag-save").addEventListener("click", () => saveTag());

@@ -109,7 +109,20 @@ dialog::backdrop { background: #000a; }
 .tag-suggestion small { color: var(--text-dim); font-size: .75rem; }
 .tag-chip:disabled, .tag-suggestion:disabled { cursor: default; opacity: .45; }
 .tag-manager { display: flex; flex-direction: column; gap: 12px; padding: 16px; border-radius: var(--radius); background: var(--surface); }
-.tag-manager .field input, .tag-manager .field select { background: var(--surface2); }
+.tag-manager .field input { background: var(--surface2); }
+.tag-choice-trigger { display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; min-width: 0; min-height: 44px; padding: 11px 12px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface2); color: var(--text); text-align: left; }
+.tag-choice-trigger > span { min-width: 0; overflow-wrap: anywhere; }
+.tag-choice-trigger svg { flex-shrink: 0; }
+.tag-choice-trigger:disabled { cursor: default; opacity: .45; }
+.tag-choice-panel { display: flex; flex-direction: column; gap: 8px; padding: 8px; border-radius: var(--radius); background: var(--bg); }
+.tag-choice-options { max-height: min(15rem, 45svh); overflow-y: auto; overscroll-behavior-y: contain; }
+.tag-choice-option { display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; min-width: 44px; min-height: 44px; padding: 10px 12px; border: 0; border-radius: 6px; background: transparent; color: var(--text-muted); text-align: left; overflow-wrap: anywhere; }
+.tag-choice-option > span { min-width: 0; }
+.tag-choice-option > svg { flex-shrink: 0; color: var(--accent); }
+.tag-choice-option[aria-selected="true"] { color: var(--accent); }
+.tag-choice-option.is-active { background: var(--focus-fill); color: var(--text); }
+.tag-choice-panel .scroll-thumb:focus-visible { background: var(--text); }
+@media (hover: hover) and (pointer: fine) { .tag-choice-trigger:not(:disabled):hover, .tag-choice-option:not(:disabled):hover { background: #32363b; color: var(--text); } }
 .tag-manager > .btn { align-self: start; }
 #tag-merge-fields { display: flex; flex-direction: column; align-items: start; gap: 8px; padding-top: 12px; border-top: 1px solid var(--border); }
 #tag-merge-fields .field { width: 100%; }

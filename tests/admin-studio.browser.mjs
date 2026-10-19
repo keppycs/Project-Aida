@@ -31,6 +31,11 @@ let frameClip;
 const painted = page => page.evaluate(() => new Promise(resolvePaint => requestAnimationFrame(() => requestAnimationFrame(resolvePaint))));
 const waitText = (page, selector, text) => page.waitForFunction(({ selector, text }) => document.querySelector(selector)?.textContent.includes(text), { selector, text });
 const countPOST = fixture => fixture.state.requests.filter(request => request.method === "POST").length;
+async function chooseTag(page, prefix, value) {
+  await page.locator(`#${prefix}-button`).click();
+  await page.locator(`#${prefix}-options [role="option"][data-value="${value}"]`).click();
+  assert.equal(await page.locator(`#${prefix}-panel`).isVisible(), false);
+}
 
 async function tagSystem(page, fixture, live) {
   const tagPosts = () => fixture.state.requests.filter(request => request.method === "POST" && request.path.endsWith("/api/tags"));
@@ -50,8 +55,26 @@ async function tagSystem(page, fixture, live) {
   await page.locator("#tag-search").fill("private-only");
   assert.equal(await page.locator("#tag-suggestions button").first().textContent(), "Private-only legacy1 videos", "Private and unlisted legacy tags must be suggested without saving a registry first");
   await page.locator("#tag-create").click();
-  const privateID = await page.locator("#tag-manage-select option").filter({ hasText: "Private-only legacy" }).getAttribute("value");
-  await page.locator("#tag-manage-select").selectOption(privateID);
+  assert.equal(await page.locator("#tag-manager select, #tag-manager datalist").count(), 0, "The tag manager must never invoke a native picker");
+  const beforeChoices = countPOST(fixture);
+  await page.locator("#tag-manage-button").click();
+  assert.equal(await page.locator("#tag-manage-search").evaluate(input => document.activeElement === input), true);
+  await page.locator("#tag-manage-search").fill("cs2");
+  await page.locator("#tag-manage-search").press("Enter");
+  assert.equal(await page.locator("#tag-manage-select").inputValue(), "cs2", "Alias search and Enter choose a custom option");
+  assert.equal(await page.locator("#tag-manage-button").evaluate(button => document.activeElement === button), true);
+  await page.locator("#tag-manage-button").click();
+  await page.locator("#tag-manage-search").fill("no matching tag");
+  assert.equal(await page.locator("#tag-manage-empty").isVisible(), true);
+  await page.keyboard.press("Escape");
+  assert.equal(await page.locator("#tag-manage-panel").isVisible(), false);
+  assert.equal(await page.locator("#tag-manage-select").inputValue(), "cs2", "Escape leaves the selected tag unchanged");
+  await page.locator("#tag-manage-button").click();
+  await page.locator("#tag-name").click();
+  assert.equal(await page.locator("#tag-manage-panel").isVisible(), false, "Outside interaction dismisses the custom picker");
+  assert.equal(countPOST(fixture), beforeChoices, "Opening and searching a picker never saves");
+  const privateID = await page.locator("#tag-manage-options [role=option]").filter({ hasText: "Private-only legacy" }).getAttribute("data-value");
+  await chooseTag(page, "tag-manage", privateID);
   await page.locator("#tag-name").fill("Renamed private game");
   await page.locator("#tag-aliases").fill("RPG");
   await page.locator("#tag-save").click();
@@ -62,7 +85,7 @@ async function tagSystem(page, fixture, live) {
   await page.locator("#tag-aliases").fill("RPG");
   await page.locator("#tag-save").click();
   await waitText(page, "#tag-manager-status", "Shared tag saved");
-  await page.locator("#tag-manage-select").selectOption("");
+  await chooseTag(page, "tag-manage", "");
   await page.locator("#tag-name").fill("Private-only legacy");
   await page.locator("#tag-aliases").fill("");
   await page.locator("#tag-save").click();
@@ -84,7 +107,7 @@ async function tagSystem(page, fixture, live) {
   assert.equal(countPOST(fixture), initialPosts, "Autocomplete and selecting tags must not save");
   await page.locator('#selected-tags button[aria-label="Remove Counter-Strike 2 tag"]').waitFor();
   await page.locator("#tag-create").click();
-  await page.locator("#tag-manage-select").selectOption("cs2");
+  await chooseTag(page, "tag-manage", "cs2");
   await page.locator("#tag-aliases").fill("CS2, motion");
   const tagSavesBeforeCollision = tagPosts().length;
   await page.locator("#tag-save").click();
@@ -103,14 +126,14 @@ async function tagSystem(page, fixture, live) {
   assert.equal(await page.locator("#edit-title").inputValue(), "Keep this unsaved title through tag edits");
   await page.locator('#selected-tags button[aria-label="Remove Counter Strike 2 tag"]').waitFor();
 
-  await page.locator("#tag-manage-select").selectOption("");
+  await chooseTag(page, "tag-manage", "");
   await page.locator("#tag-name").fill("Tactical shooters");
   await page.locator("#tag-aliases").fill("Tactics");
   await page.locator("#tag-save").click();
   await waitText(page, "#tag-manager-status", "Shared tag saved");
   assert.ok(fixture.state.registry.tags.some(tag => tag.name === "Tactical shooters"));
   assert.equal(await page.locator('#selected-tags button[aria-label="Remove Tactical shooters tag"]').count(), 0, "Saving a shared tag is separate from assigning it to a video");
-  await page.locator("#tag-manage-select").selectOption("cs2");
+  await chooseTag(page, "tag-manage", "cs2");
   await page.locator("#tag-aliases").fill("CS2, Counterstrike 2, Competitive");
   fixture.state.nextTagMutation = "conflict";
   await page.locator("#tag-save").click();
@@ -120,8 +143,12 @@ async function tagSystem(page, fixture, live) {
   assert.equal(await page.locator("#tag-aliases").inputValue(), "CS2, Counterstrike 2, Competitive", "Conflict recovery must retain manager input");
   await page.locator("#tag-save").click();
   await waitText(page, "#tag-manager-status", "Shared tag saved");
-  await page.locator("#tag-manage-select").selectOption("csgo");
-  await page.locator("#tag-merge-target").selectOption("cs2");
+  await chooseTag(page, "tag-manage", "csgo");
+  await page.locator("#tag-merge-button").click();
+  assert.equal(await page.locator('#tag-merge-options [data-value="csgo"]').count(), 0, "A tag cannot be offered as its own merge destination");
+  await page.locator("#tag-merge-search").fill("cs2");
+  await page.locator("#tag-merge-search").press("Enter");
+  assert.equal(await page.locator("#tag-merge-target").inputValue(), "cs2");
   await page.locator("#tag-merge").click();
   await waitText(page, "#tag-manager-status", "merged across");
   assert.equal(fixture.state.registry.redirects.csgo, "cs2");
@@ -154,19 +181,91 @@ async function tagSystem(page, fixture, live) {
   }
   await noOverflow(page, `${live ? "live" : "local"} tags`);
   await controlPresentation(page);
-  for (const selector of ["#tag-search", "#tag-name", "#tag-save"]) await focusPresentation(page, selector);
+  for (const selector of ["#tag-search", "#tag-name", "#tag-save", "#tag-manage-button", "#tag-merge-button"]) await focusPresentation(page, selector);
+}
+
+async function tagChoicePresentation(page, profile, live) {
+  for (const prefix of ["tag-manage", "tag-merge"]) {
+    const button = page.locator(`#${prefix}-button`), search = page.locator(`#${prefix}-search`);
+    const list = page.locator(`#${prefix}-options`);
+    const selected = await page.locator(prefix === "tag-manage" ? "#tag-manage-select" : "#tag-merge-target").inputValue();
+    await button.scrollIntoViewIfNeeded();
+    const before = await button.boundingBox();
+    await button.click();
+    assert.equal(await search.getAttribute("aria-expanded"), "true");
+    await controlPresentation(page);
+    const widths = await list.evaluate(element => ({ width: element.getBoundingClientRect().width, client: element.clientWidth }));
+    assert.ok(Math.abs(widths.width - widths.client) < .5, "Custom picker native scrolling must consume zero space");
+    await list.scrollIntoViewIfNeeded();
+    await list.evaluate(element => { element.scrollTop = 0; });
+    let rect = await list.boundingBox();
+    await page.mouse.move(rect.x + 30, rect.y + 30);
+    await page.mouse.wheel(0, 160);
+    await page.waitForFunction(id => document.getElementById(id).scrollTop > 10, `${prefix}-options`);
+    await search.press("Home");
+    assert.equal(await list.evaluate(element => element.scrollTop), 0);
+    await search.press("End");
+    assert.ok(await list.evaluate(element => element.scrollTop) > 0, "Keyboard options must scroll the native list");
+    const active = await search.getAttribute("aria-activedescendant");
+    assert.equal(await page.locator(`#${active}`).getAttribute("role"), "option");
+    await list.evaluate(element => { element.scrollTop = 0; });
+    await painted(page);
+    const thumb = list.locator("..").locator(".scroll-thumb");
+    await thumb.waitFor({ state: "visible" });
+    const thumbFill = await thumb.evaluate(element => getComputedStyle(element).backgroundColor);
+    await search.press("Tab");
+    const focusTarget = await page.evaluate(() => ({ tag: document.activeElement.tagName, id: document.activeElement.id, role: document.activeElement.getAttribute("role") }));
+    assert.equal(await thumb.evaluate(element => document.activeElement === element), true, `Keyboard users can reach the options scrollbar: ${JSON.stringify(focusTarget)}`);
+    assert.notEqual(await thumb.evaluate(element => getComputedStyle(element).backgroundColor), thumbFill, "Scrollbar focus needs visible fill feedback");
+    await page.keyboard.press("PageDown");
+    assert.ok(await list.evaluate(element => element.scrollTop) > 0);
+    await page.keyboard.press("Home");
+    assert.equal(await list.evaluate(element => element.scrollTop), 0);
+    const thumbRect = await thumb.boundingBox();
+    await page.mouse.move(thumbRect.x + thumbRect.width / 2, thumbRect.y + 15);
+    await page.mouse.down();
+    await page.mouse.move(thumbRect.x + thumbRect.width / 2, thumbRect.y + 65, { steps: 5 });
+    await page.mouse.up();
+    assert.ok(await list.evaluate(element => element.scrollTop) > 0, "Overlay thumb must move the actual options list");
+    if (profile.touch) {
+      await list.evaluate(element => { element.scrollTop = 0; });
+      await list.scrollIntoViewIfNeeded();
+      rect = await list.boundingBox();
+      const session = await page.context().newCDPSession(page);
+      const x = rect.x + rect.width / 2, y = rect.y + Math.min(rect.height - 15, 150);
+      try {
+        await session.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x, y }] });
+        for (let step = 1; step <= 6; ++step) await session.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x, y: y - step * 15 }] });
+        await session.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+        await page.waitForFunction(id => document.getElementById(id).scrollTop > 10, `${prefix}-options`);
+      } finally { await session.detach(); }
+    }
+    const after = await button.boundingBox();
+    for (const key of ["x", "width", "height"]) assert.ok(Math.abs(before[key] - after[key]) < .5, `Open picker changed trigger ${key}`);
+    assert.deepEqual(await list.evaluate(element => ({ width: element.getBoundingClientRect().width, client: element.clientWidth })), widths);
+    assert.equal(await page.locator(prefix === "tag-manage" ? "#tag-manage-select" : "#tag-merge-target").inputValue(), selected, "Scrolling and thumb dragging must not select an option");
+    await page.locator(`#${prefix}-choice`).screenshot({ path: resolve(artifacts, `${profile.name}-${live ? "live" : "local"}-${prefix}-open.png`) });
+    await page.evaluate(() => { document.documentElement.style.fontSize = "200%"; });
+    await noOverflow(page, "Open picker with enlarged text");
+    await controlPresentation(page);
+    await page.locator(`#${prefix}-choice`).screenshot({ path: resolve(artifacts, `${profile.name}-${live ? "live" : "local"}-${prefix}-large.png`) });
+    await page.evaluate(() => { document.documentElement.style.fontSize = ""; });
+    await search.press("Escape");
+    assert.equal(await button.evaluate(element => document.activeElement === element), true);
+  }
 }
 
 async function runTagSystems() {
   for (const profile of profiles) for (const live of [false, true]) {
     const fixture = await startAdminPreview({ live, noPreview: true });
-    const browser = await chromium.launch({ executablePath, headless: true });
+    const browser = await chromium.launch({ executablePath, headless: true, ignoreDefaultArgs: ["--hide-scrollbars"], args: [`${profile.mode === "classic" ? "--disable-features" : "--enable-features"}=OverlayScrollbar`] });
     try {
       const context = await browser.newContext({ viewport: { width: profile.width, height: profile.height }, hasTouch: Boolean(profile.touch), isMobile: Boolean(profile.touch) });
       const page = await context.newPage(), errors = [];
       page.on("pageerror", error => errors.push(error.message));
       await context.route("**/*", route => new URL(route.request().url()).origin === fixture.origin ? route.continue() : route.abort());
       await tagSystem(page, fixture, live);
+      await tagChoicePresentation(page, profile, live);
       assert.deepEqual(errors, []);
       await page.screenshot({ path: resolve(artifacts, `${profile.name}-${live ? "live" : "local"}-tags.png`), fullPage: true });
       await page.locator(".tag-editor").screenshot({ path: resolve(artifacts, `${profile.name}-${live ? "live" : "local"}-tag-editor.png`) });

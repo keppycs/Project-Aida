@@ -51,11 +51,32 @@
                 <div class="tag-library-status"><p id="tag-status" class="status" role="status" aria-live="polite"></p><button id="tag-reload" type="button" class="text-btn">Reload tags</button></div>
                 <section id="tag-manager" class="tag-manager" aria-label="Shared tag library" hidden>
                   <p class="hint">Names and aliases are shared across videos. Saving here updates the tag library separately from this video's draft.</p>
-                  <label class="field"><span>Tag to edit</span><select id="tag-manage-select"><option value="">Create a new tag</option></select></label>
+                  <div class="field tag-choice" id="tag-manage-choice">
+                    <span id="tag-manage-label">Tag to edit</span>
+                    <input id="tag-manage-select" type="hidden">
+                    <button id="tag-manage-button" class="tag-choice-trigger" type="button" aria-labelledby="tag-manage-label tag-manage-value" aria-expanded="false" aria-controls="tag-manage-panel"><span id="tag-manage-value">Create a new tag</span><svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="m6 9 6 6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+                    <div id="tag-manage-panel" class="tag-choice-panel" hidden>
+                      <label class="field"><span class="sr-only">Search tags to edit</span><input id="tag-manage-search" type="text" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="tag-manage-options" placeholder="Search name or alias" maxlength="100" autocomplete="off" spellcheck="false"></label>
+                      <div id="tag-manage-options" class="tag-choice-options overlay-scroll" role="listbox" aria-label="Tags to edit" tabindex="-1"></div>
+                      <p id="tag-manage-empty" class="hint" role="status" hidden>No matching tags.</p>
+                    </div>
+                  </div>
                   <label class="field"><span>Master name</span><input id="tag-name" maxlength="100" autocomplete="off"></label>
                   <label class="field"><span>Aliases, separated by commas</span><input id="tag-aliases" maxlength="10000" placeholder="For example: CS2, Counterstrike 2" autocomplete="off"></label>
                   <button id="tag-save" type="button" class="btn">Save shared tag</button>
-                  <div id="tag-merge-fields" hidden><label class="field"><span>Merge this tag into</span><select id="tag-merge-target"><option value="">Choose destination tag</option></select></label><p class="hint">Videos use the destination tag. This tag's names become aliases of it.</p><button id="tag-merge" type="button" class="btn">Merge shared tags</button></div>
+                  <div id="tag-merge-fields" hidden>
+                    <div class="field tag-choice" id="tag-merge-choice">
+                      <span id="tag-merge-label">Merge this tag into</span>
+                      <input id="tag-merge-target" type="hidden">
+                      <button id="tag-merge-button" class="tag-choice-trigger" type="button" aria-labelledby="tag-merge-label tag-merge-value" aria-expanded="false" aria-controls="tag-merge-panel"><span id="tag-merge-value">Choose destination tag</span><svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="m6 9 6 6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+                      <div id="tag-merge-panel" class="tag-choice-panel" hidden>
+                        <label class="field"><span class="sr-only">Search destination tags</span><input id="tag-merge-search" type="text" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="tag-merge-options" placeholder="Search name or alias" maxlength="100" autocomplete="off" spellcheck="false"></label>
+                        <div id="tag-merge-options" class="tag-choice-options overlay-scroll" role="listbox" aria-label="Destination tags" tabindex="-1"></div>
+                        <p id="tag-merge-empty" class="hint" role="status" hidden>No matching tags.</p>
+                      </div>
+                    </div>
+                    <p class="hint">Videos use the destination tag. This tag's names become aliases of it.</p><button id="tag-merge" type="button" class="btn">Merge shared tags</button>
+                  </div>
                   <p id="tag-manager-status" class="status" role="status" aria-live="polite"></p>
                 </section>
               </section>
