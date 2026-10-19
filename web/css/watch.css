@@ -3,7 +3,7 @@
 .back-link { display: inline-flex; align-items: center; min-height: 44px; min-width: 0; gap: 10px; color: var(--text-dim); font-size: 0.875rem; text-decoration: none; overflow-wrap: anywhere; }
 .watch-stage { position: relative; background: #000; border: 1px solid var(--border, rgba(255,255,255,.1)); border-radius: 14px; }
 .watch-stage #player-wrap { width: 100%; border-radius: 14px; box-shadow: none; }
-.watch-status { position: absolute; inset: 0; display: flex; align-items: flex-start; justify-content: center; padding: 24px; overflow: auto; overscroll-behavior: contain; scrollbar-gutter: stable; border-radius: inherit; z-index: 30; background: var(--surface); text-align: center; }
+.watch-status { position: absolute; inset: 0; display: flex; align-items: flex-start; justify-content: center; padding: 24px; overflow: auto; overscroll-behavior: contain; scrollbar-width: none; border-radius: inherit; z-index: 30; background: var(--surface); text-align: center; }
 .watch-status-content { display: grid; justify-items: center; gap: 12px; max-width: 420px; min-width: 0; margin-block: auto; overflow-wrap: anywhere; }
 .watch-status h2 { font-size: clamp(1.125rem, 2vw, 1.5625rem); letter-spacing: -.03em; font-weight: 500; }
 .watch-status p { color: var(--text-dim); font-size: 0.875rem; line-height: 1.6; }
@@ -23,7 +23,6 @@
   .back-link:hover { color: var(--text); }
   .watch-tags a:hover, .text-link:hover { color: var(--accent); }
 }
-@supports not (scrollbar-gutter: stable) { .watch-status { overflow-y: scroll; } }
 .watch-stage #player-wrap:fullscreen { border-radius: 0; width: 100vw; height: 100dvh; max-height: none; min-height: 0; }
 
 @media (max-width: 700px) {

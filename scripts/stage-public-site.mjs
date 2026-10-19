@@ -12,7 +12,7 @@ export const PUBLIC_FILES = Object.freeze([
   "assets/fonts/JetBrainsMono[wght].ttf",
   "css/index.css", "css/player-mobile.css", "css/player.css", "css/site.css", "css/watch.css",
   "js/catalog.js", "js/index.js", "js/loader.js", "js/site-env.js", "js/watch.js",
-  "js/browse-context.js", "js/search.js", "js/tags.js",
+  "js/browse-context.js", "js/search.js", "js/tags.js", "js/ui.js",
   "js/player/capabilities.js", "js/player/chrome.js", "js/player/desktop-input.js",
   "js/player/engine.js", "js/player/frame-step.js", "js/player/icon-morph.js",
   "js/player/index.js", "js/player/input.js", "js/player/mobile-input.js",

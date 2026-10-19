@@ -41,10 +41,13 @@
 .results-summary { margin-top: -7px; margin-bottom: 20px; color: var(--text-dim); font-size: .875rem; min-height: 0; overflow-wrap: anywhere; }
 .results-summary:empty { display: none; }
 .videos-section .status-panel { margin-top: 12px; }
-.search-tools { margin: -8px 0 22px; border-radius: var(--radius); background: var(--surface); }
-.search-tools summary { min-height: 44px; padding: 12px 16px; cursor: pointer; color: var(--text-muted); border-radius: var(--radius); font-size: .875rem; }
-.search-tools summary:focus-visible { background: var(--surface2); color: var(--text); }
-.search-tools-body { padding: 0 16px 16px; min-width: 0; }
+.search-tools { margin: -8px 0 22px; border-radius: var(--radius); }
+.search-tools-toggle { display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; min-height: 44px; padding: 12px 16px; border: 0; text-align: left; cursor: pointer; background: var(--surface); color: var(--text-muted); border-radius: var(--radius); font-size: .875rem; }
+.search-tools-toggle svg { flex-shrink: 0; transition: transform 180ms var(--ease); }
+.search-tools-toggle[aria-expanded="true"] svg { transform: rotate(180deg); }
+.search-tools-toggle:focus-visible { background: var(--surface2); color: var(--text); }
+.search-tools-body { padding: 12px 16px 16px; min-width: 0; background: var(--surface); border-radius: 0 0 var(--radius) var(--radius); }
+.search-tools-body[data-phase="closing"] { pointer-events: none; }
 .search-tools-body > p { color: var(--text-muted); line-height: 1.65; font-size: .875rem; margin-bottom: 16px; overflow-wrap: anywhere; }
 .search-tools-body label { display: block; font-size: .875rem; margin-bottom: 8px; }
 #tag-search { display: block; width: 100%; min-width: 0; min-height: 44px; border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; background: var(--bg); color: var(--text); font: inherit; }
@@ -60,7 +63,7 @@
 .search-filters { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 20px; }
 .search-filter { max-width: 100%; color: var(--accent); }
 @media (hover: hover) and (pointer: fine) {
-  .search-tools summary:hover, .tag-suggestion button:hover, .search-filter:hover { background: #32363b; color: var(--text); }
+  .search-tools-toggle:hover, .tag-suggestion button:hover, .search-filter:hover { background: #32363b; color: var(--text); }
 }
 @media (max-width: 900px) {
   .featured, .featured-skeleton { grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); gap: 28px; }
@@ -95,4 +98,5 @@
 }
 @media (prefers-reduced-motion: reduce) {
   #search-input, .search-clear { transition-duration: 100ms; }
+  .search-tools-toggle svg { transition: none; }
 }

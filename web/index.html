@@ -7,9 +7,10 @@
     <meta name="theme-color" content="#101112" />
     <title>Aida — Videos</title>
     <link rel="icon" href="assets/favicons/flushed.svg" type="image/svg+xml" />
-    <link rel="stylesheet" href="css/site.css?v=header-v30" />
-    <link rel="stylesheet" href="css/index.css?v=master-tags-v1" />
+    <link rel="stylesheet" href="css/site.css?v=ux-audit-v1" />
+    <link rel="stylesheet" href="css/index.css?v=ux-audit-v1" />
     <script defer src="js/site-env.js?v=ux-stability-v14"></script>
+    <script defer src="js/ui.js?v=ux-audit-v1"></script>
     <script type="module" src="js/index.js?v=master-tags-v1"></script>
   </head>
   <body>
@@ -54,16 +55,16 @@
         <div class="videos-toolbar">
           <div class="videos-heading"><h2 id="videos-title">Videos <span id="videos-count" class="videos-count"></span></h2></div>
         </div>
-        <details class="search-tools" id="search-tools">
-          <summary>Tags &amp; search tips</summary>
-          <div class="search-tools-body">
+        <section class="search-tools" id="search-tools">
+          <button class="search-tools-toggle" type="button" data-disclosure aria-expanded="false" aria-controls="search-tools-body">Tags &amp; search tips<svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="m6 9 6 6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+          <div id="search-tools-body" class="search-tools-body" hidden>
             <p>Combine words, use <code>"a phrase"</code>, or exclude a word with <code>-word</code>. Use <code>tag:CS2</code> or <code>-tag:CS2</code> to include or exclude a tag. Names and aliases both work.</p>
             <label for="tag-search">Find a tag</label>
             <input id="tag-search" type="search" placeholder="Name or alias" autocomplete="off" spellcheck="false" />
             <div id="tag-suggestions" class="tag-suggestions" aria-label="Tags in this collection"></div>
             <p id="tag-suggestions-status" class="search-tools-note" role="status"></p>
           </div>
-        </details>
+        </section>
         <div id="search-filters" class="search-filters" aria-label="Active tag filters" hidden></div>
         <p id="results-summary" class="results-summary" role="status" aria-live="polite">Loading videos…</p>
         <div id="videos-grid" class="video-grid" aria-label="Videos">

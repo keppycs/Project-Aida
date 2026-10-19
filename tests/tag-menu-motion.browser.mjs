@@ -185,6 +185,7 @@ for (const profile of profiles) for (const live of [false, true]) {
     await page.goto(`${fixture.origin}/edit?v=${FIRST_VIDEO}`);
     await page.waitForFunction(() => !document.querySelector("#tag-create").disabled);
     await page.locator("#tag-create").click();
+    await page.waitForFunction(() => document.querySelector("#tag-manager").dataset.phase === "open");
     await page.locator("#tag-manage-button").click();
     await page.locator('#tag-manage-options [data-value="cs2"]').click();
     await settle(page, "tag-manage", false);

@@ -253,6 +253,24 @@ async function runProfile(browser, profile) {
   await painted(page);
   assert.equal(await page.evaluate(() => document.activeElement.matches(".brand")), true, "Initial loading completion must preserve focus moved to the home link");
   result.states.populated = await state(page, anchors);
+  assert.equal(await page.evaluate(() => document.documentElement.clientWidth), profile.width, "Page chrome must reserve no scrollbar gutter");
+  assert.equal(await page.evaluate(() => getComputedStyle(document.documentElement).scrollbarGutter), "auto");
+  const pageThumb = page.locator(".site-page-thumb");
+  await pageThumb.waitFor({ state: "visible" });
+  const scrollGeometry = await pageThumb.evaluate(thumb => ({ width: thumb.getBoundingClientRect().width,
+    height: thumb.getBoundingClientRect().height, max: document.documentElement.scrollHeight - innerHeight }));
+  assert.equal(scrollGeometry.width, 10, "Only the thumb may occupy overlay space");
+  assert.ok(scrollGeometry.height >= 44);
+  await pageThumb.focus(); await pageThumb.press("End"); await painted(page);
+  assert.ok(Math.abs(await page.evaluate(() => scrollY) - scrollGeometry.max) < 2, "Overlay keyboard access must scroll the actual document");
+  await pageThumb.press("Home"); await painted(page);
+  const thumbBox = await pageThumb.boundingBox(), dragY = Math.min(70, profile.height - thumbBox.height - 2);
+  await page.mouse.move(thumbBox.x + thumbBox.width / 2, thumbBox.y + 10);
+  await page.mouse.down(); await page.mouse.move(thumbBox.x + thumbBox.width / 2, thumbBox.y + 10 + dragY, { steps: 5 }); await page.mouse.up();
+  await painted(page);
+  assert.ok(await page.evaluate(() => scrollY) > 10, "Dragging the overlay thumb must scroll the actual document");
+  assert.ok(page.url().includes("/index.html"), "Thumb drag must never activate an adjacent video");
+  await page.evaluate(() => scrollTo(0, 0)); await painted(page);
   assert.equal(await page.locator(".search-label, label[for='search-input']").count(), 0, "Header search must not render a label");
   assert.equal(await page.getByRole("searchbox", { name: "Search", exact: true }).count(), 1, "Search must keep its accessible name");
   assert.equal(await page.locator("#search-input").getAttribute("placeholder"), "Search");
@@ -531,6 +549,12 @@ async function runProfile(browser, profile) {
       overflow: getComputedStyle(status).overflowY, gutter: getComputedStyle(status).scrollbarGutter }));
     assert.ok(result.errorOverlay.scrollHeight > result.errorOverlay.height + 10, "Short landscape error fixture must actually overflow");
     assert.ok(["auto", "scroll"].includes(result.errorOverlay.overflow), "Error actions need a native scroll surface");
+    assert.equal(result.errorOverlay.gutter, "auto", "The error overlay must reserve no gutter");
+    const messageThumb = page.locator(".watch-stage > .site-scroll-thumb");
+    await messageThumb.waitFor({ state: "visible" });
+    await messageThumb.focus(); await messageThumb.press("End"); await painted(page);
+    assert.ok(await page.locator("#watch-status").evaluate(status => status.scrollTop > 0), "Message scrollbar keys must use native scrolling");
+    await page.locator("#watch-status").evaluate(status => { status.scrollTop = 0; }); await painted(page);
     await nativeScroll(page, cdp, true, "#watch-status");
     await page.locator("#watch-retry").focus();
     assert.equal(await page.evaluate(() => document.activeElement.id), "watch-retry");

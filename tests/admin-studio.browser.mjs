@@ -866,11 +866,11 @@ async function workflow(page, fixture) {
   await page.locator(`.video-row[data-id="${SECOND_VIDEO}"]`).click();
   await page.waitForFunction(() => document.querySelector("#edit-title").value === "Motion study 2");
   selectedURL(page, SECOND_VIDEO);
-  assert.equal(await page.locator("#editor-card-visibility").textContent(), "Private · 120 fps required", "Lower-frame-rate metadata must never be relabeled as 120 fps");
+  assert.equal(await page.locator("#editor-card-visibility").textContent(), "Private · 60 fps", "Show the actual source frame rate");
   await page.locator('.video-row[data-id="studio-002"]').click();
   await page.waitForFunction(() => document.querySelector("#edit-title").value === "Motion study 3");
   selectedURL(page, "studio-002");
-  assert.equal(await page.locator("#editor-card-visibility").textContent(), "Private · 120 fps required", "Missing frame-rate metadata must not claim 120 fps");
+  assert.equal(await page.locator("#editor-card-visibility").textContent(), "Private · Frame rate unavailable", "Missing frame-rate metadata must not claim 120 fps");
   await page.locator(`.video-row[data-id="${FIRST_VIDEO}"]`).click();
   await page.waitForFunction(() => document.querySelector("#edit-title").value === "120 fps motion study");
   selectedURL(page, FIRST_VIDEO);
@@ -1008,6 +1008,10 @@ async function workflow(page, fixture) {
   await page.locator("#edit-title").fill("Keep this draft through encoding");
   await page.locator("#tab-encode").click();
   assert.equal(await page.locator("#visibility").inputValue(), "private");
+  assert.equal(await page.locator("select").count(), 0, "Studio must use the custom visibility choices");
+  await page.locator('input[name="upload-visibility"][value="unlisted"]').check();
+  assert.equal(await page.locator("#visibility").inputValue(), "unlisted");
+  await page.locator('input[name="upload-visibility"][value="private"]').check();
   await page.locator("#browse-source").click();
   await waitText(page, "#source-info", "120.0 fps");
   await page.locator("#title").fill("A new private upload");

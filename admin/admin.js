@@ -12,6 +12,7 @@ const state = {
 
 const TAB_KEY = "aida-admin-tab";
 const SOURCE_PATH_KEY = "aida-admin-source-path";
+const confirmDialog = window.AidaUI.createDialog($("#confirm-dialog"));
 
 const encodeBars = {};
 $$("#encode-progress .progress-row").forEach((row) => {
@@ -85,6 +86,7 @@ function setEncodeBusy(busy) {
   $("#description").disabled = busy;
   $("#tags").disabled = busy;
   $("#visibility").disabled = busy;
+  $$('#upload-visibility input[type="radio"]').forEach(input => { input.disabled = busy; });
   $("#opt-thumbnails").disabled = busy;
   $("#opt-upload").disabled = busy;
   $("#opt-delete").disabled = busy;
@@ -173,14 +175,16 @@ async function loadDefaults() {
   $("#opt-fast").checked = defaults.fast_transcode;
   syncThumbFrameField();
 
-  const select = $("#visibility");
-  select.replaceChildren();
+  const choices = $("#upload-visibility-options");
+  choices.replaceChildren();
   defaults.visibilities.forEach((value) => {
-    const opt = document.createElement("option");
-    opt.value = value;
-    opt.textContent = value;
-    opt.selected = value === "private";
-    select.appendChild(opt);
+    const label = document.createElement("label"), input = document.createElement("input"), text = document.createElement("span");
+    input.type = "radio"; input.name = "upload-visibility"; input.value = value;
+    input.checked = value === "private";
+    input.disabled = state.encodeRunning;
+    text.textContent = value.charAt(0).toUpperCase() + value.slice(1);
+    input.addEventListener("change", () => { if (input.checked) $("#visibility").value = value; });
+    label.append(input, text); choices.append(label);
   });
 }
 
@@ -461,7 +465,7 @@ function openConfirmDialog() {
     `This will permanently delete ${result.versions_to_delete} old version(s) ` +
     `across ${result.keys_with_duplicates} key(s), reclaiming about ` +
     `${reclaimedMib.toFixed(1)} MiB. The newest version of each file is kept.`;
-  $("#confirm-dialog").showModal();
+  confirmDialog.open();
 }
 
 async function applyDedupe() {

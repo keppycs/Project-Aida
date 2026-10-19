@@ -24,14 +24,12 @@
   --page-gutter: 32px;
   color-scheme: dark;
 }
-/* Reserve native classic scrollbar space before content/search changes its need.
-   Mirrored gutters keep centered content on the viewport's actual centerline. */
-html { background: var(--bg); color: var(--text); font-family: var(--font); overflow-y: scroll; scrollbar-color: #747a83 var(--bg); }
-@supports (scrollbar-gutter: stable both-edges) {
-  html { overflow-y: auto; scrollbar-gutter: stable both-edges; }
-}
-/* Only real native scroll fields reserve space; clipped media/card wrappers must not. */
-:where(textarea, select[multiple]) { scrollbar-gutter: stable; scrollbar-color: #747a83 var(--surface); }
+html { background: var(--bg); color: var(--text); font-family: var(--font); overflow-y: auto; scrollbar-width: none; }
+html::-webkit-scrollbar, .watch-status::-webkit-scrollbar { display: none; width: 0; height: 0; }
+.site-scroll-thumb { position: absolute; top: 0; right: 0; width: 10px; min-height: 44px; border-radius: 10px; background: #8d939b99; z-index: 31; touch-action: none; user-select: none; cursor: grab; }
+.site-page-thumb { position: fixed; z-index: 40; }
+.site-scroll-thumb.is-dragging { cursor: grabbing; background: var(--text-muted); }
+.site-scroll-thumb:focus-visible { background: var(--text); }
 body { min-width: 0; min-height: 100vh; min-height: 100dvh; display: flex; flex-direction: column; background: var(--bg); line-height: 1.5; }
 button, input, select, textarea { font: inherit; }
 a { color: inherit; }

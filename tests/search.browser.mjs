@@ -67,7 +67,8 @@ try {
     assert.equal(await page.locator("#hero").isVisible(), true);
     assert.equal(await page.locator("#videos-grid .video-card").count(), 4);
 
-    await page.locator("#search-tools summary").click();
+    await page.locator(".search-tools-toggle").click();
+    await page.waitForFunction(() => document.querySelector("#search-tools-body").dataset.phase === "open");
     await page.locator("#tag-search").fill("cs2");
     assert.equal(await page.locator(".tag-suggestion-name").textContent(), cs2.name);
     await page.locator("#search-input").fill("tag:cs2");
@@ -80,7 +81,7 @@ try {
     assert.equal(await page.locator("#videos-grid .video-card").count(), 2);
     await page.screenshot({ path: `${artifacts}/${profile.name}-tags.png`, fullPage: true });
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
-    const small = await page.locator("#search-tools button, .search-filter, #tag-search, #search-tools summary").evaluateAll(elements => elements.filter(element => {
+    const small = await page.locator("#search-tools button, .search-filter, #tag-search").evaluateAll(elements => elements.filter(element => {
       if (!element.getClientRects().length) return false;
       const box = element.getBoundingClientRect();
       const style = getComputedStyle(element);

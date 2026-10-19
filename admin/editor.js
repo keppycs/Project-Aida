@@ -19,6 +19,8 @@
     { prefix: "tag-merge", field: "#tag-merge-target", empty: "Choose destination tag", active: -1, open: false, motion: null, generation: 0 },
   ];
   const tagReducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
+  const tagManager = window.AidaUI.createDisclosure({ trigger: find("#tag-create"), panel: find("#tag-manager"), flowRoot: find("#editor-form"), bind: false });
+  const frameDisclosure = window.AidaUI.createDisclosure({ trigger: find("#thumbnail-frame-toggle"), panel: find("#thumbnail-frame-fields"), flowRoot: find("#editor-form"), bind: false, onSettled: open => { if (!open) clearFramePaint(); } });
   let tagTools = null, tagHelperAttempts = 0;
   let normalizeTag = value => String(value || "").normalize("NFKC").toLowerCase().trim();
   const tagByName = value => tagLibrary.tags.find(tag => [tag.name, ...tag.aliases].some(name => normalizeTag(name) === normalizeTag(value)));
@@ -134,7 +136,9 @@
     if (!choice.open || panel.hidden) return;
     panel.style.removeProperty("--tag-options-max-height");
     const rect = button.getBoundingClientRect(), viewport = window.visualViewport;
-    const top = viewport?.offsetTop || 0, bottom = top + (viewport?.height || innerHeight);
+    const viewportTop = viewport?.offsetTop || 0, bottom = viewportTop + (viewport?.height || innerHeight);
+    // An upward selector must leave the parent disclosure's close control usable.
+    const top = Math.max(viewportTop, find("#tag-create").getBoundingClientRect().bottom + 8);
     const below = bottom - rect.bottom - 12, above = rect.top - top - 12;
     const height = panel.offsetHeight, listHeight = find(`#${choice.prefix}-options`).offsetHeight;
     const minimum = height - listHeight + 44;
@@ -314,8 +318,7 @@
     renderTagManager();
     tagLibrary.managerDirty = Boolean(draft);
     tagLibrary.action = null;
-    find("#tag-manager").hidden = false;
-    find("#tag-create").setAttribute("aria-expanded", "true");
+    tagManager.set(true);
     status("#tag-manager-status", id && !tagLibrary.serverIDs.has(id) ? "Save this tag to the shared library before merging it." : "");
     refreshTagButtons();
   }
@@ -490,7 +493,7 @@
     const draft = fields();
     find("#editor-card-title").textContent = draft.title || "Untitled video";
     const frameRate = studio.detail?.frameRate;
-    const frameRateLabel = typeof frameRate === "number" && Number.isFinite(frameRate) && frameRate === 120 ? `${frameRate} fps` : "120 fps required";
+    const frameRateLabel = typeof frameRate === "number" && Number.isFinite(frameRate) && frameRate > 0 ? `${frameRate} fps` : "Frame rate unavailable";
     find("#editor-card-visibility").textContent = `${visibilityLabel(draft)} · ${frameRateLabel}`;
     find("#visibility-help").textContent = draft.visibility === "unknown" ? "Visibility needs review. Choose Private, Unlisted or Public before saving." : draft.visibility === "private" ? "Only you can preview a private video here." : draft.visibility === "unlisted" ? "Anyone with the link can watch. It won't appear in the video list." : "Everyone can watch. It appears in the video list after publishing.";
     find("#editor-publish").textContent = liveEditor || studio.detail?.has_remote ? "Save to website" : draft.visibility === "public" ? "Publish video" : "Upload video";
@@ -940,7 +943,14 @@
     picker.candidate = null;
   }
 
-  function closeFramePicker({ restoreFocus = false } = {}) {
+  function clearFramePaint() {
+    const canvas = find("#edit-frame-canvas");
+    canvas.hidden = true;
+    canvas.getContext("2d", { colorSpace: "srgb" })?.clearRect(0, 0, canvas.width, canvas.height);
+    delete canvas.dataset.frameTime;
+    delete canvas.dataset.frameExact;
+  }
+  function closeFramePicker({ restoreFocus = false, animate = false } = {}) {
     cancelFrameWork();
     ++picker.epoch;
     picker.controller?.abort();
@@ -953,13 +963,7 @@
     picker.document = null;
     picker.source = "";
     picker.presented = null;
-    const canvas = find("#edit-frame-canvas");
-    canvas.hidden = true;
-    canvas.getContext("2d", { colorSpace: "srgb" })?.clearRect(0, 0, canvas.width, canvas.height);
-    delete canvas.dataset.frameTime;
-    delete canvas.dataset.frameExact;
-    find("#thumbnail-frame-fields").classList.add("hidden");
-    find("#thumbnail-frame-toggle").setAttribute("aria-expanded", "false");
+    frameDisclosure.set(false, !animate);
     refreshFrameControls();
     if (restoreFocus) find("#thumbnail-frame-toggle").focus({ preventScroll: true });
   }
@@ -1147,19 +1151,18 @@
   }
 
   function openFramePicker() {
-    closeFramePicker();
+    closeFramePicker({ animate: true });
     if (!studio.detail || authenticationExpired) return;
     picker.open = true;
     picker.id = studio.selected;
     picker.scrubbing = false;
-    find("#thumbnail-frame-fields").classList.remove("hidden");
-    find("#thumbnail-frame-toggle").setAttribute("aria-expanded", "true");
     find("#edit-frame-placeholder").textContent = "Loading video…";
     find("#edit-frame-placeholder").hidden = false;
     find("#edit-frame-time").textContent = "0:00.000";
     find("#edit-frame-number").value = "";
     status("#edit-frame-status", "Loading this video's frames…");
-    if (!studio.detail.can_preview) { frameUnavailable("Refresh online to load this video's preview, then choose a frame."); return; }
+    if (!studio.detail.can_preview) { frameUnavailable("Refresh online to load this video's preview, then choose a frame."); frameDisclosure.set(true); return; }
+    frameDisclosure.set(true);
     const epoch = picker.epoch;
     picker.timeout = setTimeout(() => {
       if (picker.open && picker.epoch === epoch && picker.id === studio.selected && !picker.ready) frameUnavailable("The video preview hasn't loaded. Refresh online and try again.");
@@ -1293,7 +1296,12 @@
     find("#tag-search").addEventListener("input", renderTags);
     find("#tag-search").addEventListener("keydown", event => { if (event.key === "Enter") { event.preventDefault(); find("#tag-suggestions button")?.click(); } else if (event.key === "ArrowDown") { event.preventDefault(); find("#tag-suggestions button")?.focus(); } });
     find("#tag-suggestions").addEventListener("keydown", event => { const buttons = [...find("#tag-suggestions").querySelectorAll("button")], index = buttons.indexOf(document.activeElement); if (event.key === "ArrowDown" || event.key === "ArrowUp") { event.preventDefault(); buttons[(index + (event.key === "ArrowDown" ? 1 : buttons.length - 1)) % buttons.length]?.focus(); } else if (event.key === "Escape") find("#tag-search").focus(); });
-    find("#tag-create").addEventListener("click", () => { closeTagChoices(false, true); if (find("#tag-manager").hidden) { if (tagLibrary.managerDirty) { find("#tag-manager").hidden = false; find("#tag-create").setAttribute("aria-expanded", "true"); } else editTag("", find("#tag-search").value.trim()); find("#tag-name").focus(); } else { find("#tag-manager").hidden = true; find("#tag-create").setAttribute("aria-expanded", "false"); } });
+    find("#tag-create").addEventListener("click", () => {
+      closeTagChoices();
+      if (tagManager.open) tagManager.set(false);
+      else if (!find("#tag-manager").hidden || tagLibrary.managerDirty) tagManager.set(true);
+      else editTag("", find("#tag-search").value.trim());
+    });
     find("#tag-manage-select").addEventListener("change", event => editTag(event.target.value));
     for (const selector of ["#tag-name", "#tag-aliases", "#tag-merge-target"]) find(selector).addEventListener("input", () => { tagLibrary.managerDirty = true; });
     find("#tag-save").addEventListener("click", () => saveTag());
@@ -1318,8 +1326,8 @@
     find("#conflict-reload").addEventListener("click", reloadLatest);
     find("#edit-thumbnail-file").addEventListener("change", chooseThumbnail);
     find("#editor-thumb-preview").addEventListener("error", () => { find("#editor-thumb-preview").hidden = true; find("#editor-thumb-placeholder").hidden = false; });
-    find("#thumbnail-frame-toggle").addEventListener("click", () => { if (picker.open) closeFramePicker({ restoreFocus: true }); else openFramePicker(); });
-    find("#edit-frame-close").addEventListener("click", () => closeFramePicker({ restoreFocus: true }));
+    find("#thumbnail-frame-toggle").addEventListener("click", () => { if (picker.open) closeFramePicker({ restoreFocus: true, animate: true }); else openFramePicker(); });
+    find("#edit-frame-close").addEventListener("click", () => closeFramePicker({ restoreFocus: true, animate: true }));
     find("#edit-frame-seek").addEventListener("input", (event) => seekFrame(Number(event.target.value)));
     find("#edit-frame-seek").addEventListener("pointerdown", () => { picker.scrubbing = true; });
     for (const event of ["pointerup", "pointercancel"]) find("#edit-frame-seek").addEventListener(event, () => { picker.scrubbing = false; if (picker.ready) find("#edit-frame-seek").value = String(picker.presented); });
@@ -1329,14 +1337,14 @@
     find("#edit-frame-next").addEventListener("click", () => stepFrame(1));
     find("#edit-frame-apply").addEventListener("click", useFrame);
     find("#edit-frame-refresh").addEventListener("click", refreshFrameVideo);
-    find("#thumbnail-frame-fields").addEventListener("keydown", (event) => { if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); closeFramePicker({ restoreFocus: true }); } });
+    find("#thumbnail-frame-fields").addEventListener("keydown", (event) => { if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); closeFramePicker({ restoreFocus: true, animate: true }); } });
     find("#editor-player").addEventListener("load", () => {
       if (liveEditor && find("#editor-player").getAttribute("src") && !hasAccessiblePreview()) void checkSession();
       if (!picker.open) return;
       if (picker.document) closeFramePicker();
       else attachFrameVideo();
     });
-    window.addEventListener("aida:tab-change", (event) => { if (event.detail.name !== "videos") { closeFramePicker(); closeTagChoices(false, true); } });
+    window.addEventListener("aida:tab-change", (event) => { if (event.detail.name !== "videos") { closeFramePicker(); closeTagChoices(false, true); tagManager.settle(); } });
     document.addEventListener("visibilitychange", () => { if (document.hidden) { closeFramePicker(); closeTagChoices(false, true); } });
     window.addEventListener("beforeunload", (event) => { if (!studio.dirty && !studio.busy && !tagLibrary.managerDirty && !tagLibrary.busy) return; event.preventDefault(); event.returnValue = ""; });
     window.addEventListener("aida:encode-done", (event) => { if (event.detail.ok) openVideos(event.detail.video_id || null); });
