@@ -122,7 +122,13 @@ export async function startAdminPreview({ live = false, noPreview = false } = {}
     return { started, release, finished };
   };
   const eventStreams = new Set();
-  const emit = event => { for (const response of eventStreams) { if (!response.destroyed) response.write(`data: ${JSON.stringify(event)}\n\n`); } };
+  let jobHistory = [];
+  const emit = event => {
+    const channel = value => value.channel || (value.type.startsWith("encode_") ? "encode" : "maint");
+    if (event.type.endsWith("_start")) jobHistory = jobHistory.filter(saved => channel(saved) !== channel(event));
+    jobHistory.push(structuredClone(event));
+    for (const response of eventStreams) { if (!response.destroyed && !response.writableEnded) response.write(`data: ${JSON.stringify(event)}\n\n`); }
+  };
   const copy = value => structuredClone(value);
   const view = id => copy(records.get(id));
   const bump = record => {
@@ -188,7 +194,7 @@ export async function startAdminPreview({ live = false, noPreview = false } = {}
         if (state.nextTagMutation === "after-commit") { state.nextTagMutation = null; return send(response, 503, { detail: "Synthetic tag save failed. Try again.", operation_id: body.operation_id }); }
         return send(response, 200, state.registry);
       }
-      if (url.pathname === "/api/events") { response.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-store" }); response.write(": fixture connected\n\n"); eventStreams.add(response); response.once("close", () => eventStreams.delete(response)); return; }
+      if (url.pathname === "/api/events") { response.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-store" }); response.write(`retry: 100\ndata: ${JSON.stringify({ type: "job_snapshot", events: jobHistory })}\n\n`); eventStreams.add(response); response.once("close", () => eventStreams.delete(response)); return; }
       if (url.pathname === "/api/defaults") return send(response, 200, { gen_thumbnails: true, upload_to_b2: false, delete_after_upload: false, fast_transcode: true, visibility: "private", visibilities: ["public", "unlisted", "private"] });
       if (url.pathname === "/api/credentials" && request.method === "GET") return send(response, 200, { key_id: "fixture-key", app_key: "", bucket: "fixture-bucket", endpoint: "fixture.invalid", configured: true });
       if (["/api/dedupe/last", "/api/sync/last"].includes(url.pathname)) return send(response, 200, null);
@@ -286,5 +292,5 @@ export async function startAdminPreview({ live = false, noPreview = false } = {}
     } catch (error) { send(response, 500, { detail: error.message }); }
   });
   await new Promise((resolveReady, reject) => { server.once("error", reject); server.listen(0, "127.0.0.1", resolveReady); });
-  return { origin: `http://127.0.0.1:${server.address().port}`, state, view, holdDetail, setFrameClip: bytes => { state.frameClip = bytes; }, setNextMutation: value => { state.nextMutation = value; }, failNextList: () => { state.nextListError = true; }, releaseHeld: () => state.held?.release(), close: () => new Promise(resolveClosed => { state.held?.release(); for (const held of detailHolds.values()) held.release(); server.closeAllConnections(); server.close(resolveClosed); }) };
+  return { origin: `http://127.0.0.1:${server.address().port}`, state, view, holdDetail, emit, disconnectEvents: () => { for (const response of eventStreams) response.end(); eventStreams.clear(); }, setFrameClip: bytes => { state.frameClip = bytes; }, setNextMutation: value => { state.nextMutation = value; }, failNextList: () => { state.nextListError = true; }, releaseHeld: () => state.held?.release(), close: () => new Promise(resolveClosed => { state.held?.release(); for (const held of detailHolds.values()) held.release(); server.closeAllConnections(); server.close(resolveClosed); }) };
 }

@@ -109,7 +109,7 @@ On **any other host** (localhost, LAN, preview), add **`&local=1`** to the watch
 
 Player interaction checks live in `tests/player-*.browser.mjs`. Settings motion has a traced layout budget and native touch interruption checks in `tests/player-settings-performance.browser.mjs`; Smooth Pause has unit and browser checks. Use the local preview and review the UI before publishing.
 
-The videos page and watch page share neutral surfaces, system fonts and native scrolling. Search filters the collection without removing the featured content above the search field, and the query stays in the URL. Local previews load the optional mobile debug console only with `&debug=1`.
+The videos page and watch page share neutral surfaces, system fonts and native scrolling. Searching hides the featured video, and the query stays in the URL. **Back to videos** restores that query and the collection position within the same tab, yielding to newer input or scrolling. Local previews load the optional mobile debug console only with `&debug=1`.
 
 Run `node tests/site-ux.browser.mjs` for shared UI changes. It checks real classic/overlay scrollbar modes, loading/search/empty/error states, short and long pages, player Settings overflow, enlarged text, touch targets and native scrolling. `AIDA_PLAYWRIGHT_MODULE`, `AIDA_BROWSER_EXECUTABLE` and `AIDA_REVIEW_DIR` can select the test runtime, browser and artifact directory. Keep `tests/player-focus.browser.mjs` and the player motion tests alongside this check.
 
@@ -119,6 +119,14 @@ Install `requirements.txt`, run `launch.bat`, and open `http://127.0.0.1:8765`.
 Video editor links use `http://127.0.0.1:8765/edit?v=ID`.
 Studio uses Aida's yellow/dark design. **New upload** selects a source, creates
 120 fps renditions and thumbnails, and can upload privately.
+
+Returning to Studio or reconnecting restores the running job's real progress.
+Each tab receives its own event feed. The local server retains current job state
+and the latest 200 log messages per job in memory until a new job or server
+restart; this is not persistent job history. New log output follows the bottom
+only while you are already there, preserving manual reading and text selection.
+During a disconnected status feed, job starts wait for reconnection while
+unrelated browsing remains available.
 
 **Videos** edits existing titles, descriptions, tags, visibility and thumbnails.
 Choose an image or open the visual frame picker to scrub the existing video,

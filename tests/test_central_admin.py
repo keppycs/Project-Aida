@@ -1,6 +1,7 @@
 """Loopback admin mode isolation; synthetic configuration, no keyring or B2."""
 
 import os
+import asyncio
 from pathlib import Path
 import sys
 import tempfile
@@ -55,6 +56,7 @@ class CentralAdminHTTPTests(unittest.TestCase):
         for target in ("config._load_b2_config", "config.get_b2_config", "config.save_b2_credentials"):
             self.start_patch(target, side_effect=denied)
         self.start_job = self.start_patch("admin_app._start_thread")
+        self.patch_object(admin_app, "_event_feed", admin_app.JobEvents())
         self.start_patch("admin_app.run_dedupe", side_effect=AssertionError("HTTP tests must not run bucket jobs"))
 
         for name, value in (("_encode_running", False), ("_maint_running", False), ("_last_dedupe_scan", None)):
@@ -217,6 +219,59 @@ class CentralAdminHTTPTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200, response.text)
         self.start_job.assert_called_once_with(admin_app._run_dedupe_job, apply=False, prefix="fixture/", plans=None)
         self.assertTrue(admin_app._maint_running)
+        self.assertEqual(admin_app._event_feed.subscribe().get_nowait()["events"],
+                         [{"type": "maint_start", "job": "dedupe", "apply": False}])
+
+    def test_job_streams_restore_and_broadcast_without_consuming_other_tabs(self):
+        class Request:
+            async def is_disconnected(self):
+                return False
+
+        async def exercise():
+            first = (await admin_app.events(Request())).body_iterator
+            second = (await admin_app.events(Request())).body_iterator
+            try:
+                admin_app.emit({"type": "encode_start"})
+                progress = {"type": "progress", "channel": "encode", "stage": "AV1", "current": 37, "total": 100}
+                admin_app.emit(progress)
+                for stream in (first, second):
+                    snapshot = await anext(stream)
+                    self.assertIn('"current": 37', snapshot)
+                progress["current"] = 61
+                admin_app.emit(progress)
+                self.assertEqual(await anext(first), await anext(second))
+                self.assertTrue(admin_app._encode_running)
+                admin_app.emit({"type": "encode_done", "ok": False})
+                self.assertFalse(admin_app._encode_running)
+            finally:
+                await first.aclose()
+                await second.aclose()
+            self.assertFalse(admin_app._event_feed._clients)
+
+        asyncio.run(exercise())
+
+    def test_early_worker_failure_releases_busy_state_and_remains_recoverable(self):
+        admin_app.emit({"type": "encode_start"})
+        admin_app._run_encode_job(admin_app.PipelineIn(path=str(self.root / "missing.mp4")))
+        self.assertFalse(admin_app._encode_running)
+        events = admin_app._event_feed.subscribe().get_nowait()["events"]
+        self.assertEqual(events[-1]["type"], "encode_done")
+        self.assertFalse(events[-1]["ok"])
+
+    def test_finishing_worker_cannot_clear_a_newer_jobs_busy_state(self):
+        source = self.root / "fixture.mp4"
+        source.write_bytes(b"synthetic")
+        publish = admin_app.emit
+
+        def complete_then_start(event):
+            publish(event)
+            if event["type"] == "encode_done":
+                publish({"type": "encode_start"})
+
+        with patch.object(admin_app, "emit", side_effect=complete_then_start), patch.object(admin_app, "run_pipeline"):
+            publish({"type": "encode_start"})
+            admin_app._run_encode_job(admin_app.PipelineIn(path=str(source)))
+        self.assertTrue(admin_app._encode_running)
 
     def test_legacy_dedupe_apply_forwards_only_the_matching_cached_plan(self):
         self.legacy()

@@ -61,6 +61,7 @@ function verify(record, open, reduced) {
   for (let index = 1; index < frames.length; ++index) assert.ok(open ? frames[index].opacity >= frames[index - 1].opacity - .01 : frames[index].opacity <= frames[index - 1].opacity + .01);
   if (reduced) assert.ok(frames.every(sample => Math.abs(sample.y) < .01 && ["none", "inset(0px)"].includes(sample.clip)));
   else {
+    assert.ok(intermediate.some(sample => [...sample.clip.matchAll(/([\d.]+)%/g)].some(match => Number(match[1]) > 0 && Number(match[1]) < 100)), "Normal motion must paint a partially clipped frame in both directions");
     assert.ok(intermediate.some(sample => sample.clip !== "none" && Math.abs(sample.y) > .05));
     assert.ok(Math.abs(frames.at(-1).peer.y - frames[0].peer.y) > 30, "Following content must move through intermediate positions");
   }

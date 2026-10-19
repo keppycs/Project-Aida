@@ -9,7 +9,7 @@ import {
   attachThumbnailFallbacks,
 } from "./catalog.js?v=master-tags-v1";
 import { createSearchIndex, parseSearch, removeSearchToken, searchVideos, suggestTags, tagQuery } from "./search.js?v=master-tags-v1";
-import { withBrowseQuery } from "./browse-context.js?v=master-tags-v1";
+import { withBrowseQuery, rememberBrowsePosition, takeBrowseReturn } from "./browse-context.js?v=ux-baseline-v2";
 import { normalizeTag } from "./tags.js?v=master-tags-v1";
 
 const searchInput = document.getElementById("search-input");
@@ -30,6 +30,28 @@ const filterList = document.getElementById("search-filters");
 searchInput.value = new URLSearchParams(location.search).get("q") || "";
 // Avoid an unrelated hero skeleton flashing on a direct search link.
 hero.hidden = Boolean(searchInput.value.trim());
+const returningPosition = takeBrowseReturn(searchInput.value, performance.getEntriesByType("navigation")[0]?.type === "back_forward");
+let returnInterrupted = false;
+const interruptReturn = () => { returnInterrupted = true; };
+const returnEvents = ["pointerdown", "touchstart", "wheel", "keydown", "input", "focusin"];
+if (returningPosition) for (const type of returnEvents) document.addEventListener(type, interruptReturn, { capture: true, passive: true });
+function restoreBrowsePosition() {
+  if (!returningPosition) return;
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    if (!returnInterrupted && returningPosition.query === searchInput.value) {
+      const anchor = returningPosition.hero ? heroContent : [...videosGrid.querySelectorAll(".video-card")]
+        .find(link => new URL(link.href).searchParams.get("v") === returningPosition.id);
+      const y = anchor?.getClientRects().length ? anchor.getBoundingClientRect().top + scrollY - returningPosition.offset : returningPosition.y;
+      scrollTo(scrollX, Math.max(0, Math.min(y, document.documentElement.scrollHeight - innerHeight)));
+    }
+    for (const type of returnEvents) document.removeEventListener(type, interruptReturn, true);
+    returnInterrupted = true;
+  }));
+}
+for (const type of ["click", "auxclick"]) document.addEventListener(type, event => {
+  const link = event.target.closest("#videos-grid .video-card, #hero-watch, #hero-image-link");
+  if (link && !event.defaultPrevented && event.button <= 1) rememberBrowsePosition(searchInput.value, link);
+});
 
 let allVideos = [];
 let hdrCapable = false;
@@ -209,6 +231,7 @@ async function load() {
     searchInput.disabled = false;
     if (allVideos.length) renderHero(allVideos[0]);
     renderResults();
+    restoreBrowsePosition();
     if (canRestoreFocus()) searchInput.focus({ preventScroll: true });
   } catch (error) {
     loadState = "error";
@@ -229,6 +252,7 @@ async function load() {
 document.getElementById("search-form").addEventListener("submit", (event) => event.preventDefault());
 searchInput.addEventListener("input", renderResults);
 searchInput.addEventListener("keydown", (event) => {
+  if (event.isComposing || event.keyCode === 229) return;
   if (event.key === "Escape" && searchInput.value) {
     event.preventDefault();
     clearSearch();

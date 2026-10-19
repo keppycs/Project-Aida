@@ -172,6 +172,7 @@
       clipPath: reduced ? "none" : `inset(${upward ? "100% 0 0" : "0 0 100%"} 0)` };
     const visible = { opacity: 1, transform: "none", clipPath: "inset(0 0 0 0)" };
     const start = from || closed;
+    if (!reduced && start.clipPath === "none") start.clipPath = visible.clipPath;
     if (reduced) { start.transform = "none"; start.clipPath = "none"; visible.clipPath = "none"; }
     const finish = () => {
       panel.hidden = !open;
@@ -272,11 +273,13 @@
       const button = find(`#${choice.prefix}-button`), search = find(`#${choice.prefix}-search`);
       button.addEventListener("click", () => choice.open ? closeTagChoices() : openTagChoice(choice));
       button.addEventListener("keydown", event => {
+        if (event.isComposing || event.keyCode === 229) return;
         if (event.key === "ArrowDown" || event.key === "ArrowUp") { event.preventDefault(); openTagChoice(choice); }
         else if (event.key === "Escape") { event.preventDefault(); closeTagChoices(); }
       });
       search.addEventListener("input", () => { renderTagChoice(choice); activateTagChoice(choice, find(`#${choice.prefix}-options`).children.length > 1 ? 1 : 0, true); });
       search.addEventListener("keydown", event => {
+        if (event.isComposing || event.keyCode === 229) return;
         const options = find(`#${choice.prefix}-options`).children;
         const positions = { ArrowDown: choice.active + 1, ArrowUp: choice.active - 1, PageDown: choice.active + 5, PageUp: choice.active - 5 };
         if (!search.value) { positions.Home = 0; positions.End = options.length - 1; }
@@ -285,6 +288,7 @@
         else if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); closeTagChoices(true); }
       });
       find(`#${choice.prefix}-panel`).addEventListener("keydown", event => {
+        if (event.isComposing || event.keyCode === 229) return;
         if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); closeTagChoices(true); }
       });
     }
@@ -359,7 +363,7 @@
         if (merge) editTag(target);
         else { const saved = tagLibrary.editing && tagByID(tagLibrary.editing) || tagByName(name); if (saved) editTag(saved.id); }
       }
-      status("#tag-manager-status", merge ? "Tags merged across the catalogue." : "Shared tag saved. Choose it above to add it to this video.");
+      status("#tag-manager-status", !sameInput ? "Submitted version saved. Your newer edits are unsaved." : merge ? "Tags merged across the catalogue." : "Shared tag saved. Choose it above to add it to this video.");
     } catch (error) {
       status("#tag-manager-status", error.status === 409 ? "The tag library changed. Reload tags, review your input, then save again. Your input is kept." : error.message, true);
     } finally { tagLibrary.busy = false; refreshButtons(); }
@@ -1294,7 +1298,7 @@
   function bind() {
     bindTagChoices();
     find("#tag-search").addEventListener("input", renderTags);
-    find("#tag-search").addEventListener("keydown", event => { if (event.key === "Enter") { event.preventDefault(); find("#tag-suggestions button")?.click(); } else if (event.key === "ArrowDown") { event.preventDefault(); find("#tag-suggestions button")?.focus(); } });
+    find("#tag-search").addEventListener("keydown", event => { if (event.isComposing || event.keyCode === 229) return; if (event.key === "Enter") { event.preventDefault(); find("#tag-suggestions button")?.click(); } else if (event.key === "ArrowDown") { event.preventDefault(); find("#tag-suggestions button")?.focus(); } });
     find("#tag-suggestions").addEventListener("keydown", event => { const buttons = [...find("#tag-suggestions").querySelectorAll("button")], index = buttons.indexOf(document.activeElement); if (event.key === "ArrowDown" || event.key === "ArrowUp") { event.preventDefault(); buttons[(index + (event.key === "ArrowDown" ? 1 : buttons.length - 1)) % buttons.length]?.focus(); } else if (event.key === "Escape") find("#tag-search").focus(); });
     find("#tag-create").addEventListener("click", () => {
       closeTagChoices();
@@ -1307,7 +1311,7 @@
     find("#tag-save").addEventListener("click", () => saveTag());
     find("#tag-merge").addEventListener("click", () => saveTag(true));
     find("#tag-reload").addEventListener("click", loadTags);
-    find("#tag-manager").addEventListener("keydown", event => { if (event.key === "Enter" && event.target.matches("input")) event.preventDefault(); });
+    find("#tag-manager").addEventListener("keydown", event => { if (!event.isComposing && event.keyCode !== 229 && event.key === "Enter" && event.target.matches("input")) event.preventDefault(); });
     // Kept as a compatibility field for existing draft integrations.
     find("#edit-tags").addEventListener("input", () => { tagLibrary.selected = find("#edit-tags").value.split(",").map(name => name.trim()).filter(Boolean).map(name => tagByName(name) || { name }); renderTags(); });
     find("#library-search").addEventListener("input", renderLibrary);
@@ -1332,12 +1336,12 @@
     find("#edit-frame-seek").addEventListener("pointerdown", () => { picker.scrubbing = true; });
     for (const event of ["pointerup", "pointercancel"]) find("#edit-frame-seek").addEventListener(event, () => { picker.scrubbing = false; if (picker.ready) find("#edit-frame-seek").value = String(picker.presented); });
     find("#edit-frame-number").addEventListener("change", seekFrameNumber);
-    find("#edit-frame-number").addEventListener("keydown", (event) => { if (event.key === "Enter") { event.preventDefault(); seekFrameNumber(); } });
+    find("#edit-frame-number").addEventListener("keydown", (event) => { if (!event.isComposing && event.keyCode !== 229 && event.key === "Enter") { event.preventDefault(); seekFrameNumber(); } });
     find("#edit-frame-prev").addEventListener("click", () => stepFrame(-1));
     find("#edit-frame-next").addEventListener("click", () => stepFrame(1));
     find("#edit-frame-apply").addEventListener("click", useFrame);
     find("#edit-frame-refresh").addEventListener("click", refreshFrameVideo);
-    find("#thumbnail-frame-fields").addEventListener("keydown", (event) => { if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); closeFramePicker({ restoreFocus: true, animate: true }); } });
+    find("#thumbnail-frame-fields").addEventListener("keydown", (event) => { if (!event.isComposing && event.keyCode !== 229 && event.key === "Escape") { event.preventDefault(); event.stopPropagation(); closeFramePicker({ restoreFocus: true, animate: true }); } });
     find("#editor-player").addEventListener("load", () => {
       if (liveEditor && find("#editor-player").getAttribute("src") && !hasAccessiblePreview()) void checkSession();
       if (!picker.open) return;
@@ -1347,7 +1351,7 @@
     window.addEventListener("aida:tab-change", (event) => { if (event.detail.name !== "videos") { closeFramePicker(); closeTagChoices(false, true); tagManager.settle(); } });
     document.addEventListener("visibilitychange", () => { if (document.hidden) { closeFramePicker(); closeTagChoices(false, true); } });
     window.addEventListener("beforeunload", (event) => { if (!studio.dirty && !studio.busy && !tagLibrary.managerDirty && !tagLibrary.busy) return; event.preventDefault(); event.returnValue = ""; });
-    window.addEventListener("aida:encode-done", (event) => { if (event.detail.ok) openVideos(event.detail.video_id || null); });
+    window.addEventListener("aida:encode-done", (event) => { if (event.detail.ok && find("#panel-encode")?.classList.contains("active")) openVideos(event.detail.video_id || null); });
     window.addEventListener("aida:open-videos", () => openVideos());
     all("textarea, .log, .overlay-scroll").forEach((scrollport) => installScrollbar(scrollport));
     installScrollbar(document.documentElement, true);

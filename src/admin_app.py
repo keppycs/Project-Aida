@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections import deque
 from contextlib import asynccontextmanager
 from dataclasses import asdict
 from pathlib import Path
@@ -37,6 +36,7 @@ from sync_catalog import SyncResult, format_sync_summary, run_sync
 from admin_editor import editor_html, install_editor, install_local_boundary, safe_file
 from video_library import VIDEO_ID
 from admin_client import AdminClientError, central_client
+from admin_events import JobEvents
 
 ROOT = Path(__file__).parent.parent
 ADMIN_DIR = ROOT / "admin"
@@ -52,8 +52,8 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Project Aida Admin", lifespan=lifespan)
-_event_queue: queue.Queue[dict[str, Any]] = queue.Queue()
-_job_lock = threading.Lock()
+_event_feed = JobEvents()
+_job_lock = threading.RLock()
 _encode_running = False
 _maint_running = False
 _last_dedupe_scan: DedupeResult | None = None
@@ -155,7 +155,17 @@ class DefaultsOut(BaseModel):
 
 
 def emit(event: dict[str, Any]) -> None:
-    _event_queue.put(event)
+    global _encode_running, _maint_running
+    with _job_lock:
+        if event["type"] == "encode_start":
+            _encode_running = True
+        elif event["type"] == "encode_done":
+            _encode_running = False
+        elif event["type"] == "maint_start":
+            _maint_running = True
+        elif event["type"] == "maint_done":
+            _maint_running = False
+        _event_feed.publish(event)
 
 
 class _LogBridge(logging.Handler):
@@ -239,7 +249,6 @@ def _run_encode_job(body: PipelineIn) -> None:
         })
         return
 
-    emit({"type": "encode_start"})
     for stage in STAGES:
         emit({"type": "progress", "channel": "encode", "stage": stage, "current": 0, "total": 1})
 
@@ -278,15 +287,11 @@ def _run_encode_job(body: PipelineIn) -> None:
               "video_id": body.video_id, "editor_url": f"/edit?v={body.video_id}"})
     except Exception as exc:
         emit({"type": "encode_done", "ok": False, "message": f"Pipeline failed: {exc}"})
-    finally:
-        with _job_lock:
-            _encode_running = False
 
 
 def _run_dedupe_job(*, apply: bool, prefix: str, plans: list[dict] | None) -> None:
     global _maint_running, _last_dedupe_scan
 
-    emit({"type": "maint_start", "job": "dedupe", "apply": apply})
 
     log = _attach_logger("dedupe_bucket", "maint")
 
@@ -317,15 +322,11 @@ def _run_dedupe_job(*, apply: bool, prefix: str, plans: list[dict] | None) -> No
         })
     except Exception as exc:
         emit({"type": "maint_done", "ok": False, "message": str(exc)})
-    finally:
-        with _job_lock:
-            _maint_running = False
 
 
 def _run_sync_job(*, apply: bool, upload: bool) -> None:
     global _maint_running, _last_sync_result
 
-    emit({"type": "maint_start", "job": "sync", "apply": apply, "upload": upload})
 
     log = _attach_logger("sync_catalog", "maint")
 
@@ -341,9 +342,6 @@ def _run_sync_job(*, apply: bool, upload: bool) -> None:
         })
     except Exception as exc:
         emit({"type": "maint_done", "ok": False, "message": str(exc)})
-    finally:
-        with _job_lock:
-            _maint_running = False
 
 
 def _start_thread(target, *args, **kwargs) -> None:
@@ -487,6 +485,7 @@ def post_pipeline(body: PipelineIn) -> dict[str, str]:
         if _encode_running or _maint_running or app.state.editor_saving:
             raise HTTPException(status_code=409, detail="Wait for the current job to finish.")
         _encode_running = True
+        emit({"type": "encode_start"})
 
     _start_thread(_run_encode_job, body)
     return {"message": "Pipeline started.", "video_id": video_id}
@@ -504,6 +503,7 @@ def post_dedupe_scan(body: DedupeScanIn) -> dict[str, str]:
         if _maint_running or _encode_running or app.state.editor_saving:
             raise HTTPException(status_code=409, detail="Maintenance job is already running.")
         _maint_running = True
+        emit({"type": "maint_start", "job": "dedupe", "apply": False})
 
     _start_thread(_run_dedupe_job, apply=False, prefix=body.prefix, plans=None)
     return {"message": "Bucket scan started."}
@@ -525,6 +525,7 @@ def post_dedupe_apply(body: DedupeApplyIn) -> dict[str, str]:
         if _maint_running or _encode_running or app.state.editor_saving:
             raise HTTPException(status_code=409, detail="Maintenance job is already running.")
         _maint_running = True
+        emit({"type": "maint_start", "job": "dedupe", "apply": True})
 
     _start_thread(
         _run_dedupe_job,
@@ -551,6 +552,7 @@ def post_sync_preview() -> dict[str, str]:
         if _maint_running or _encode_running or app.state.editor_saving:
             raise HTTPException(status_code=409, detail="Maintenance job is already running.")
         _maint_running = True
+        emit({"type": "maint_start", "job": "sync", "apply": False, "upload": False})
 
     _start_thread(_run_sync_job, apply=False, upload=False)
     return {"message": "Catalog preview started."}
@@ -564,6 +566,7 @@ def post_sync_apply() -> dict[str, str]:
         if _maint_running or _encode_running or app.state.editor_saving:
             raise HTTPException(status_code=409, detail="Maintenance job is already running.")
         _maint_running = True
+        emit({"type": "maint_start", "job": "sync", "apply": True, "upload": False})
 
     _start_thread(_run_sync_job, apply=True, upload=False)
     return {"message": "Catalog sync started."}
@@ -584,24 +587,23 @@ def get_last_sync() -> dict[str, Any] | None:
 @app.get("/api/events")
 async def events(request: Request) -> StreamingResponse:
     async def stream():
-        pending: deque[dict[str, Any]] = deque()
-        while not _shutdown.is_set():
-            if await request.is_disconnected():
-                return
-
-            try:
-                while True:
-                    pending.append(_event_queue.get_nowait())
-            except queue.Empty:
-                pass
-
-            while pending:
-                yield f"data: {json.dumps(pending.popleft())}\n\n"
-
-            try:
-                await asyncio.wait_for(_shutdown.wait(), timeout=0.1)
-            except asyncio.TimeoutError:
-                pass
+        with _job_lock:
+            client = _event_feed.subscribe()
+        try:
+            while not _shutdown.is_set():
+                if await request.is_disconnected():
+                    return
+                try:
+                    while True:
+                        yield f"data: {json.dumps(client.get_nowait())}\n\n"
+                except queue.Empty:
+                    pass
+                try:
+                    await asyncio.wait_for(_shutdown.wait(), timeout=0.1)
+                except asyncio.TimeoutError:
+                    pass
+        finally:
+            _event_feed.unsubscribe(client)
 
     return StreamingResponse(
         stream(),

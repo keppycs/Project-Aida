@@ -39,8 +39,11 @@ exclude an exact master tag through its name or alias. Multiword tag values can
 be quoted, such as `-tag:"Lethal Company"`. Case and common punctuation are
 normalized; numbers, `+` and `#` remain meaningful. Date, frame-rate and HDR
 operators are not implemented. A search hides the latest-video hero, and video
-links preserve its query for **Back to videos**. Direct video links without a
-query return to the full collection.
+links preserve its query for **Back to videos**. Using that link or browser Back within the same tab
+also restores the collection position after results load, unless you have
+already interacted with the page. This uses one temporary tab-local handoff;
+it does not collect search history. Direct video links without a query return
+to the full collection.
 
 Check the shared rules and synthetic UI flows with:
 

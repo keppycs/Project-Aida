@@ -71,7 +71,10 @@ function verifyTransition(record, open, reduced) {
     assert.ok(open ? frames[index].opacity >= frames[index - 1].opacity - .01 : frames[index].opacity <= frames[index - 1].opacity + .01, `${phase}: opacity must progress smoothly`);
   }
   if (reduced) assert.ok(frames.every(sample => Math.abs(sample.y) < .01 && ["none", "inset(0px)"].includes(sample.clip)), "Reduced motion uses a short fade without travel or clipping");
-  else assert.ok(intermediate.some(sample => Math.abs(sample.y) > .05 && sample.clip !== "none"), "Normal motion must reveal and translate the menu");
+  else {
+    assert.ok(intermediate.some(sample => Math.abs(sample.y) > .05 && sample.clip !== "none"), "Normal motion must reveal and translate the menu");
+    assert.ok(intermediate.some(sample => [...sample.clip.matchAll(/([\d.]+)%/g)].some(match => Number(match[1]) > 0 && Number(match[1]) < 100)), "Normal motion must paint a partially clipped frame in both directions");
+  }
 }
 
 async function filmstrip(page, prefix, open, name) {
@@ -88,18 +91,22 @@ async function filmstrip(page, prefix, open, name) {
   const clip = await page.evaluate(prefix => {
     const panel = document.getElementById(`${prefix}-panel`).getBoundingClientRect();
     const button = document.getElementById(`${prefix}-button`).getBoundingClientRect();
-    const x = Math.max(0, Math.min(panel.x, button.x) - 10), y = Math.max(-scrollY, Math.min(panel.y, button.y) - 12);
-    return { left: Math.floor(x), top: Math.floor(y + scrollY), width: Math.ceil(Math.max(panel.right, button.right) - x + 10),
-      height: Math.ceil(Math.max(panel.bottom, button.bottom) - y + 12) };
+    const x = Math.max(0, Math.floor(Math.min(panel.x, button.x) - 10)), y = Math.max(0, Math.floor(Math.min(panel.y, button.y) - 12));
+    return { left: x, top: y, width: Math.min(innerWidth - x, Math.ceil(Math.max(panel.right, button.right) - x + 10)),
+      height: Math.min(innerHeight - y, Math.ceil(Math.max(panel.bottom, button.bottom) - y + 12)) };
   }, prefix);
-  const frames = [];
+  const frames = [], paints = [];
   for (const fraction of [0, .25, .5, .75, 1]) {
-    await page.evaluate(fraction => {
+    await page.evaluate(async fraction => {
       const time = window.menuFilm.effect.getTiming().duration * fraction;
       window.menuFilm.currentTime = time;
       if (window.menuArrow) window.menuArrow.currentTime = Math.min(time, window.menuArrow.effect.getTiming().duration);
+      await new Promise(requestAnimationFrame);
     }, fraction);
-    const screenshot = await page.screenshot({ fullPage: true, animations: "allow" });
+    paints.push(await page.locator(`#${prefix}-panel`).evaluate(panel => ({ phase: panel.dataset.phase, opacity: Number(getComputedStyle(panel).opacity), clip: getComputedStyle(panel).clipPath, box: panel.getBoundingClientRect().toJSON() })));
+    // Full-page capture can resize Chromium and reposition a viewport-fitted
+    // menu. Capture only the live viewport so the filmstrip proves its paint.
+    const screenshot = await page.screenshot({ animations: "allow" });
     const size = await sharp(screenshot).metadata();
     frames.push(await sharp(screenshot).extract({ ...clip, width: Math.min(clip.width, size.width - clip.left), height: Math.min(clip.height, size.height - clip.top) }).png().toBuffer());
   }
@@ -107,7 +114,10 @@ async function filmstrip(page, prefix, open, name) {
   await sharp({ create: { width: width * 2, height: height * 3, channels: 4, background: "#101112" } })
     .composite(frames.map((input, index) => ({ input, left: index % 2 * width, top: Math.floor(index / 2) * height })))
     .png().toFile(resolve(artifacts, `${name}-${prefix}-${open ? "opening" : "closing"}.png`));
-  await page.evaluate(() => { window.menuFilm.finish(); window.menuArrow?.finish(); });
+  await writeFile(resolve(artifacts, `${name}-${prefix}-${open ? "opening" : "closing"}.json`), JSON.stringify(paints));
+  assert.ok(paints.slice(1, 4).every(paint => paint.opacity > 0 && paint.opacity < 1), "Filmstrip must retain intermediate live paints");
+  assert.ok(paints.slice(1, 4).some(paint => [...paint.clip.matchAll(/([\d.]+)%/g)].some(match => Number(match[1]) > 0 && Number(match[1]) < 100)), "Filmstrip must show partially clipped menu content");
+  await page.evaluate(() => { if (window.menuFilm.playState !== "idle") window.menuFilm.finish(); if (window.menuArrow && window.menuArrow.playState !== "idle") window.menuArrow.finish(); });
   await settle(page, prefix, open);
 }
 

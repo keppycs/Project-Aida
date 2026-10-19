@@ -45,6 +45,9 @@
       const visible = { opacity: 1, transform: "none", clipPath: reduced ? "none" : "inset(0 0 0 0)" };
       const closed = { opacity: 0, transform: reduced ? "none" : "translateY(-6px)", clipPath: reduced ? "none" : "inset(0 0 100% 0)" };
       const start = from || closed;
+      // `none` and inset() interpolate discretely. Use matching shapes so an
+      // exit reveals intermediate clipping instead of hiding on its first frame.
+      if (!reduced && start.clipPath === "none") start.clipPath = visible.clipPath;
       if (reduced) { start.transform = "none"; start.clipPath = "none"; }
       const options = { duration: reduced ? 90 : open ? 260 : 200, easing: "cubic-bezier(.2,.8,.2,1)", fill: "both" };
       phase(open ? "opening" : "closing");
@@ -68,8 +71,8 @@
       held.delete(event.pointerId);
       if (!held.size) motions.forEach(motion => motion.play());
     };
-    window.addEventListener("pointerup", release);
-    window.addEventListener("pointercancel", release);
+    window.addEventListener("pointerup", release, true);
+    window.addEventListener("pointercancel", release, true);
     window.addEventListener("blur", () => { held.clear(); motions.forEach(motion => motion.play()); });
     reducedMotion.addEventListener("change", () => { if (motions.length) set(open, true); });
     document.addEventListener("visibilitychange", () => { if (document.hidden && motions.length) set(open, true); });
@@ -86,6 +89,8 @@
       const from = style ? { opacity: style.opacity, transform: style.transform } : { opacity: 0, transform: reducedMotion.matches ? "none" : "translateY(8px)" };
       const backdropFrom = wasOpen ? getComputedStyle(dialog, "::backdrop").opacity : 0;
       motions.forEach(motion => motion.cancel());
+      // Native showModal must see a focusable dialog on every opening.
+      if (open) dialog.inert = false;
       if (open && !wasOpen) dialog.showModal();
       if (!dialog.open) return;
       dialog.dataset.phase = open ? "opening" : "closing";
@@ -106,7 +111,7 @@
       event.preventDefault(); transition(false, event.submitter?.value || "");
     });
     dialog.addEventListener("pointerdown", () => motions.forEach(motion => motion.pause()), true);
-    for (const type of ["pointerup", "pointercancel"]) window.addEventListener(type, () => motions.forEach(motion => motion.play()));
+    for (const type of ["pointerup", "pointercancel", "blur"]) window.addEventListener(type, () => motions.forEach(motion => motion.play()), true);
     reducedMotion.addEventListener("change", () => motions.forEach(motion => motion.finish()));
     return { open: () => transition(true) };
   }
@@ -192,6 +197,9 @@
 
   window.AidaUI = { createDisclosure, createDialog };
   function init() {
+    document.addEventListener("keydown", event => {
+      if ((event.isComposing || event.keyCode === 229) && event.key === "Escape" && event.target.matches('input[type="search"]')) event.preventDefault();
+    }, true);
     document.querySelectorAll("[data-disclosure]").forEach(trigger => createDisclosure({
       trigger, panel: document.getElementById(trigger.getAttribute("aria-controls")), flowRoot: trigger.closest(".videos-section"),
     }));

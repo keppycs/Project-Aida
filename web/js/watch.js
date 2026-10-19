@@ -2,7 +2,7 @@ import {
   fetchCatalog, mediaBase, formatDate,
   renderVideoCard, detectDisplayHdr, attachThumbnailFallbacks,
 } from "./catalog.js?v=master-tags-v1";
-import { browseQuery, videosUrl, withBrowseQuery } from "./browse-context.js?v=master-tags-v1";
+import { browseQuery, videosUrl, withBrowseQuery, requestBrowseReturn } from "./browse-context.js?v=ux-baseline-v2";
 import { registryFromVideos, resolveVideoTags } from "./tags.js?v=master-tags-v1";
 import { tagQuery } from "./search.js?v=master-tags-v1";
 import { loadMetadata, VideoLoadError } from "./loader.js?v=cdn-security-v1";
@@ -10,7 +10,10 @@ import { mountPlayer } from "./player/shell.js?v=overlay-scrollbar-v36";
 
 const id = new URLSearchParams(location.search).get("v") || "0";
 const originatingQuery = browseQuery(location.search);
-for (const link of document.querySelectorAll(".back-link, #watch-status-videos")) link.href = videosUrl(originatingQuery);
+for (const link of document.querySelectorAll(".back-link, #watch-status-videos")) {
+  link.href = videosUrl(originatingQuery);
+  for (const type of ["click", "auxclick"]) link.addEventListener(type, () => requestBrowseReturn(originatingQuery));
+}
 const local = typeof window.shouldUseLocalCmaf === "function" && window.shouldUseLocalCmaf();
 const base = mediaBase(id, { local });
 const stage = document.getElementById("watch-stage");

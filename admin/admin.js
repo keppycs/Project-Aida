@@ -7,7 +7,9 @@ const state = {
   lastDedupe: null,
   lastSync: null,
   probeTimer: null,
+  probeRequest: null,
   cloudMode: "unknown",
+  eventsReady: false,
 };
 
 const TAB_KEY = "aida-admin-tab";
@@ -78,7 +80,7 @@ function syncThumbFrameField() {
 
 function setEncodeBusy(busy) {
   state.encodeRunning = busy;
-  $("#start-pipeline").disabled = busy;
+  $("#start-pipeline").disabled = busy || !state.eventsReady;
   $("#source-path").disabled = busy;
   $("#browse-source").disabled = busy;
   $("#title").disabled = busy;
@@ -96,12 +98,11 @@ function setEncodeBusy(busy) {
 
 function setMaintBusy(busy) {
   state.maintRunning = busy;
-  $("#scan-bucket").disabled = busy;
-  $("#apply-dedupe").disabled = busy || !canApplyDedupe();
+  $("#scan-bucket").disabled = busy || !state.eventsReady;
+  $("#apply-dedupe").disabled = busy || !state.eventsReady || !canApplyDedupe();
   $("#dedupe-prefix").disabled = busy;
-  $("#sync-preview").disabled = busy;
-  $("#sync-apply").disabled = busy;
-  $("#sync-upload").disabled = busy;
+  $("#sync-preview").disabled = busy || !state.eventsReady;
+  $("#sync-apply").disabled = busy || !state.eventsReady;
 }
 
 function canApplyDedupe() {
@@ -112,8 +113,23 @@ function canApplyDedupe() {
 
 function appendLog(target, message) {
   const el = $(target);
-  el.textContent += `${message}\n`;
-  el.scrollTop = el.scrollHeight;
+  const following = el.scrollHeight - el.clientHeight - el.scrollTop <= 2;
+  const selection = getSelection();
+  const reading = selection && !selection.isCollapsed && el.contains(selection.anchorNode);
+  el.append(document.createTextNode(`${message}\n`));
+  if (following && !reading) el.scrollTop = el.scrollHeight;
+}
+
+function restoreLog(target, text) {
+  const el = $(target), existing = el.textContent;
+  if (existing === text) return;
+  const following = el.scrollHeight - el.clientHeight - el.scrollTop <= 2, top = el.scrollTop;
+  const selection = getSelection();
+  const reading = selection && !selection.isCollapsed && el.contains(selection.anchorNode);
+  if (text.startsWith(existing)) el.append(document.createTextNode(text.slice(existing.length)));
+  else el.textContent = text;
+  if (following && !reading) el.scrollTop = el.scrollHeight;
+  else el.scrollTop = top;
 }
 
 function resetEncodeProgress() {
@@ -222,6 +238,9 @@ async function loadCredentials() {
 }
 
 async function probeSource() {
+  state.probeRequest?.abort();
+  const request = new AbortController();
+  state.probeRequest = request;
   const path = normalizePath($("#source-path").value);
   if (!path) {
     $("#source-info").textContent = "";
@@ -232,11 +251,14 @@ async function probeSource() {
     const info = await api("/api/probe", {
       method: "POST",
       body: JSON.stringify({ path }),
+      signal: request.signal,
     });
+    if (request.signal.aborted || path !== normalizePath($("#source-path").value)) return;
     $("#source-info").textContent = formatProbe(info);
     maybeFillTitle(path);
     saveSourcePath();
   } catch (err) {
+    if (request.signal.aborted || path !== normalizePath($("#source-path").value)) return;
     $("#source-info").textContent = `Probe error: ${err.message}`;
   }
 }
@@ -328,13 +350,8 @@ function handleSyncResult(result) {
   $("#maint-bar").value = 1;
 }
 
-function connectEvents() {
-  const source = new EventSource("/api/events");
-
-  source.onmessage = (msg) => {
-    const event = JSON.parse(msg.data);
-
-    if (event.type === "log") {
+function applyJobEvent(event, replay = false) {
+    if (event.type === "log" && !replay) {
       if (event.channel === "encode") appendLog("#encode-log-body", event.message);
       if (event.channel === "maint") appendLog("#maint-log-body", event.message);
     }
@@ -343,7 +360,7 @@ function connectEvents() {
 
     if (event.type === "encode_start") {
       resetEncodeProgress();
-      $("#encode-log-body").textContent = "";
+      if (!replay) $("#encode-log-body").textContent = "";
       showEncodePanels();
       setEncodeBusy(true);
       setStatus("#encode-status", "Running pipeline…");
@@ -352,17 +369,16 @@ function connectEvents() {
     if (event.type === "encode_done") {
       setEncodeBusy(false);
       setStatus("#encode-status", event.message, event.ok);
-      window.dispatchEvent(new CustomEvent("aida:encode-done", { detail: event }));
+      if (!replay) window.dispatchEvent(new CustomEvent("aida:encode-done", { detail: event }));
     }
 
     if (event.type === "maint_start") {
       showMaintPanels();
-      if (event.apply) {
+      if (event.apply && !replay) {
         $("#maint-log-body").textContent = "";
       }
       setMaintBusy(true);
       $("#maint-bar").removeAttribute("value");
-      $("#maint-bar").value = 0;
       if (event.job === "sync") {
         if (event.upload) {
           $("#maint-status").textContent = "Syncing catalog and uploading to B2…";
@@ -384,11 +400,36 @@ function connectEvents() {
       if (event.message) $("#dedupe-summary").textContent = event.message;
       if (event.ok === false) $("#maint-status").textContent = event.message;
     }
-  };
+}
 
+function waitingForJobStatus(message) {
+  state.eventsReady = false;
+  $("#start-pipeline").disabled = true;
+  for (const selector of ["#scan-bucket", "#apply-dedupe", "#sync-preview", "#sync-apply"]) $(selector).disabled = true;
+  setStatus("#encode-status", message);
+  $("#maint-status").textContent = message;
+}
+
+function connectEvents() {
+  const source = new EventSource("/api/events");
+  source.onmessage = msg => {
+    let event;
+    try { event = JSON.parse(msg.data); }
+    catch { waitingForJobStatus("Studio sent unreadable status. Reconnecting…"); source.close(); setTimeout(connectEvents, 2000); return; }
+    if (event.type === "job_snapshot" && Array.isArray(event.events)) {
+      state.eventsReady = true;
+      setEncodeBusy(false); setMaintBusy(false);
+      setStatus("#encode-status", ""); $("#maint-status").textContent = "";
+      for (const saved of event.events) applyJobEvent(saved, true);
+      for (const channel of ["encode", "maint"]) {
+        if (event.events.some(saved => saved.type === `${channel}_start`)) {
+          restoreLog(`#${channel}-log-body`, event.events.filter(saved => saved.type === "log" && saved.channel === channel).map(saved => `${saved.message}\n`).join(""));
+        }
+      }
+    } else applyJobEvent(event);
+  };
   source.onerror = () => {
-    source.close();
-    setTimeout(connectEvents, 2000);
+    waitingForJobStatus("Connection interrupted. Reconnecting… Last known progress is kept.");
   };
 }
 
@@ -528,6 +569,8 @@ function bindUi() {
   $("#opt-thumbnails").addEventListener("change", syncThumbFrameField);
 
   $("#source-path").addEventListener("input", () => {
+    state.probeRequest?.abort();
+    $("#source-info").textContent = $("#source-path").value.trim() ? "Reading source…" : "";
     clearTimeout(state.probeTimer);
     state.probeTimer = setTimeout(probeSource, 400);
   });
@@ -535,7 +578,7 @@ function bindUi() {
   $("#browse-source").addEventListener("click", browseSource);
 
   $("#dedupe-prefix").addEventListener("input", () => {
-    $("#apply-dedupe").disabled = state.maintRunning || !canApplyDedupe();
+    $("#apply-dedupe").disabled = state.maintRunning || !state.eventsReady || !canApplyDedupe();
   });
 
   $("#start-pipeline").addEventListener("click", startPipeline);
@@ -559,6 +602,7 @@ function bindUi() {
 }
 
 async function init() {
+  waitingForJobStatus("Connecting to Studio…");
   bindUi();
   restoreSourcePath();
   await Promise.all([loadDefaults(), loadCredentials()]);

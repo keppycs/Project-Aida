@@ -70,7 +70,9 @@ async function tagSystem(page, fixture, live) {
   await page.locator("#tag-manage-panel").waitFor({ state: "hidden" });
   assert.equal(await page.locator("#tag-manage-select").inputValue(), "cs2", "Escape leaves the selected tag unchanged");
   await page.locator("#tag-manage-button").click();
-  await page.locator("#tag-name").click();
+  // On phones the open popover covers the name field. Use real exposed
+  // section padding to test outside dismissal rather than clicking through it.
+  await page.locator("#tag-manager").click({ position: { x: 4, y: 4 } });
   await page.locator("#tag-manage-panel").waitFor({ state: "hidden" });
   assert.equal(countPOST(fixture), beforeChoices, "Opening and searching a picker never saves");
   const privateID = await page.locator("#tag-manage-options [role=option]").filter({ hasText: "Private-only legacy" }).getAttribute("data-value");
