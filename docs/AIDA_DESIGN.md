@@ -39,6 +39,12 @@ These rules apply to Aida's website, standalone video player and Studio. The vid
 - A fresh Settings gesture must reopen a swipe-dismissed sheet during its exit without waiting for the animation; the dismissal gesture must never activate the underlying video or seek bar.
 - Respect reduced motion within each component while preserving correct visibility, state, focus and interruption behavior. A global near-zero animation override is not an acceptable reduced-motion implementation.
 
+## Studio tag menus
+
+- Both shared-tag selectors animate opening and closing with clipped translation and opacity, without scaling text or animating layout sizes. Their triggers and surrounding fields stay stationary.
+- Reversing a transition continues from its current painted pose. A closing menu stops accepting input immediately, remains painted through its exit and never takes focus back after the user moves elsewhere.
+- Reduced motion uses a short fade without travel or clipping. Keep native scrolling, keyboard selection, visible focus and viewport fitting intact.
+
 ## Smooth Pause
 
 - Smooth Pause is an optional, saved player setting, off by default. When enabled, play/pause eases playback speed and audio over 140 ms while retaining the selected speed, volume and mute settings.
@@ -57,6 +63,7 @@ Run the relevant checks from the repository root with `node tests/<name>.browser
 | Mobile Settings sheet | `tests/player-sheet.browser.mjs`: verify native scrolling, drag dismissal, cancellation, interrupted motion and focus return. |
 | Fullscreen gestures | `tests/player-fullscreen-gesture.browser.mjs`: verify the downward swipe in real fullscreen and preserve the excluded controls and cancellation paths. |
 | Shared layout, scroll containers or videos page interactions | `tests/site-ux.browser.mjs`: verify zero-space thumb overlays in classic-scrollbar and overlay-scrollbar browser modes, native wheel/touch/keyboard scrolling, thumb dragging, overflow transitions, desktop/mobile widths, enlarged text and interactive recovery states. Keep the separate player focus and Settings performance checks. |
+| Studio tag menus | `tests/tag-menu-motion.browser.mjs`: sample intermediate opening/closing frames, reversals, held mouse/touch targets, focus, reduced motion and bounded layout work. Inspect its opening/closing filmstrips. Run `tests/admin-studio.browser.mjs --tag-system-only` for tag editing, native scrolling and enlarged-text regressions. |
 | Smooth Pause | `node --test tests/smooth-pause.test.mjs` and `tests/player-smooth-pause.browser.mjs`: verify saved preferences, immediate scrubbing and stepping, cancellation and stale-work prevention. |
 
 Before presenting player changes for review, run the player focus check and inspect desktop and mobile states. Show a screenshot or local demo and obtain the user's approval of player UI changes before committing or publishing them.

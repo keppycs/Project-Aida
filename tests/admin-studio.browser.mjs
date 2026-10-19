@@ -34,7 +34,7 @@ const countPOST = fixture => fixture.state.requests.filter(request => request.me
 async function chooseTag(page, prefix, value) {
   await page.locator(`#${prefix}-button`).click();
   await page.locator(`#${prefix}-options [role="option"][data-value="${value}"]`).click();
-  assert.equal(await page.locator(`#${prefix}-panel`).isVisible(), false);
+  await page.locator(`#${prefix}-panel`).waitFor({ state: "hidden" });
 }
 
 async function tagSystem(page, fixture, live) {
@@ -67,11 +67,11 @@ async function tagSystem(page, fixture, live) {
   await page.locator("#tag-manage-search").fill("no matching tag");
   assert.equal(await page.locator("#tag-manage-empty").isVisible(), true);
   await page.keyboard.press("Escape");
-  assert.equal(await page.locator("#tag-manage-panel").isVisible(), false);
+  await page.locator("#tag-manage-panel").waitFor({ state: "hidden" });
   assert.equal(await page.locator("#tag-manage-select").inputValue(), "cs2", "Escape leaves the selected tag unchanged");
   await page.locator("#tag-manage-button").click();
   await page.locator("#tag-name").click();
-  assert.equal(await page.locator("#tag-manage-panel").isVisible(), false, "Outside interaction dismisses the custom picker");
+  await page.locator("#tag-manage-panel").waitFor({ state: "hidden" });
   assert.equal(countPOST(fixture), beforeChoices, "Opening and searching a picker never saves");
   const privateID = await page.locator("#tag-manage-options [role=option]").filter({ hasText: "Private-only legacy" }).getAttribute("data-value");
   await chooseTag(page, "tag-manage", privateID);
@@ -244,13 +244,15 @@ async function tagChoicePresentation(page, profile, live) {
     for (const key of ["x", "width", "height"]) assert.ok(Math.abs(before[key] - after[key]) < .5, `Open picker changed trigger ${key}`);
     assert.deepEqual(await list.evaluate(element => ({ width: element.getBoundingClientRect().width, client: element.clientWidth })), widths);
     assert.equal(await page.locator(prefix === "tag-manage" ? "#tag-manage-select" : "#tag-merge-target").inputValue(), selected, "Scrolling and thumb dragging must not select an option");
-    await page.locator(`#${prefix}-choice`).screenshot({ path: resolve(artifacts, `${profile.name}-${live ? "live" : "local"}-${prefix}-open.png`) });
+    await page.locator(`#${prefix}-panel`).screenshot({ path: resolve(artifacts, `${profile.name}-${live ? "live" : "local"}-${prefix}-open.png`) });
     await page.evaluate(() => { document.documentElement.style.fontSize = "200%"; });
+    await painted(page);
     await noOverflow(page, "Open picker with enlarged text");
     await controlPresentation(page);
-    await page.locator(`#${prefix}-choice`).screenshot({ path: resolve(artifacts, `${profile.name}-${live ? "live" : "local"}-${prefix}-large.png`) });
+    await page.locator(`#${prefix}-panel`).screenshot({ path: resolve(artifacts, `${profile.name}-${live ? "live" : "local"}-${prefix}-large.png`) });
     await page.evaluate(() => { document.documentElement.style.fontSize = ""; });
     await search.press("Escape");
+    await page.locator(`#${prefix}-panel`).waitFor({ state: "hidden" });
     assert.equal(await button.evaluate(element => document.activeElement === element), true);
   }
 }

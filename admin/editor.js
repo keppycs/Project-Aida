@@ -15,9 +15,10 @@
   const picker = { open: false, epoch: 0, operation: 0, id: null, video: null, document: null, source: "", controller: null, observer: null, callback: null, timeout: null, seekRequest: null, paints: [], ready: false, waiting: false, presented: null, exact: false, target: 0, candidate: null };
   const tagLibrary = { tags: [], redirects: {}, serverIDs: new Set(), revision: null, ready: false, offline: false, busy: false, selected: [], action: null, editing: null, managerDirty: false, drafts: new Map() };
   const tagChoices = [
-    { prefix: "tag-manage", field: "#tag-manage-select", empty: "Create a new tag", active: -1 },
-    { prefix: "tag-merge", field: "#tag-merge-target", empty: "Choose destination tag", active: -1 },
+    { prefix: "tag-manage", field: "#tag-manage-select", empty: "Create a new tag", active: -1, open: false, motion: null, generation: 0 },
+    { prefix: "tag-merge", field: "#tag-merge-target", empty: "Choose destination tag", active: -1, open: false, motion: null, generation: 0 },
   ];
+  const tagReducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
   let tagTools = null, tagHelperAttempts = 0;
   let normalizeTag = value => String(value || "").normalize("NFKC").toLowerCase().trim();
   const tagByName = value => tagLibrary.tags.find(tag => [tag.name, ...tag.aliases].some(name => normalizeTag(name) === normalizeTag(value)));
@@ -128,17 +129,70 @@
     tagLibrary.tags = registry.tags;
     tagLibrary.redirects = registry.redirects;
   }
-  function closeTagChoices(restoreFocus = false) {
+  function positionTagChoice(choice) {
+    const panel = find(`#${choice.prefix}-panel`), button = find(`#${choice.prefix}-button`);
+    if (!choice.open || panel.hidden) return;
+    panel.style.removeProperty("--tag-options-max-height");
+    const rect = button.getBoundingClientRect(), viewport = window.visualViewport;
+    const top = viewport?.offsetTop || 0, bottom = top + (viewport?.height || innerHeight);
+    const below = bottom - rect.bottom - 12, above = rect.top - top - 12;
+    const height = panel.offsetHeight, listHeight = find(`#${choice.prefix}-options`).offsetHeight;
+    const minimum = height - listHeight + 44;
+    const preferred = panel.dataset.direction ? panel.dataset.direction === "up" : below < height && above > below;
+    const upward = preferred ? !(above < minimum && below > above) : below < minimum && above > below;
+    panel.dataset.direction = upward ? "up" : "down";
+    panel.style.top = upward ? "auto" : `${button.offsetTop + button.offsetHeight + 7}px`;
+    panel.style.bottom = upward ? `${button.offsetHeight + 7}px` : "auto";
+    panel.style.setProperty("--tag-options-max-height", `${Math.max(44, (upward ? above : below) - (height - listHeight))}px`);
+  }
+  function animateTagChoice(choice, open, immediate = false) {
+    const panel = find(`#${choice.prefix}-panel`), button = find(`#${choice.prefix}-button`);
+    const search = find(`#${choice.prefix}-search`);
+    if (!immediate && choice.open === open && (choice.motion || panel.hidden === !open)) return;
+    const wasHidden = panel.hidden;
+    const style = wasHidden ? null : getComputedStyle(panel);
+    const from = style && { opacity: style.opacity, transform: style.transform, clipPath: style.clipPath };
+    const token = ++choice.generation;
+    choice.motion?.cancel(); choice.motion = null;
+    choice.open = open;
+    button.setAttribute("aria-expanded", String(open));
+    search.setAttribute("aria-expanded", String(open));
+    panel.inert = !open;
+    if (!open) search.removeAttribute("aria-activedescendant");
+    panel.hidden = false;
+    if (open && wasHidden) delete panel.dataset.direction;
+    if (open) positionTagChoice(choice);
+    const upward = panel.dataset.direction === "up";
+    const reduced = tagReducedMotion.matches;
+    const closed = { opacity: 0, transform: reduced ? "none" : `translateY(${upward ? 8 : -8}px)`,
+      clipPath: reduced ? "none" : `inset(${upward ? "100% 0 0" : "0 0 100%"} 0)` };
+    const visible = { opacity: 1, transform: "none", clipPath: "inset(0 0 0 0)" };
+    const start = from || closed;
+    if (reduced) { start.transform = "none"; start.clipPath = "none"; visible.clipPath = "none"; }
+    const finish = () => {
+      panel.hidden = !open;
+      panel.dataset.phase = open ? "open" : "closed";
+      panel.style.opacity = panel.style.transform = panel.style.clipPath = "";
+      choice.motion?.cancel(); choice.motion = null;
+    };
+    if (immediate || !open && wasHidden) { finish(); return; }
+    panel.dataset.phase = open ? "opening" : "closing";
+    Object.assign(panel.style, start);
+    const motion = panel.animate([start, open ? visible : closed], {
+      duration: reduced ? 90 : open ? 220 : 160, easing: open ? "cubic-bezier(.2,.8,.2,1)" : "cubic-bezier(.4,0,1,1)", fill: "both",
+    });
+    choice.motion = motion;
+    motion.finished.then(() => {
+      if (choice.generation === token && choice.motion === motion) finish();
+    }, () => {});
+  }
+  function closeTagChoices(restoreFocus = false, immediate = false, except = null) {
     for (const choice of tagChoices) {
+      if (choice === except || find(`#${choice.prefix}-panel`).hidden) continue;
+      const returnFocus = restoreFocus && choice.open;
+      animateTagChoice(choice, false, immediate);
       const button = find(`#${choice.prefix}-button`);
-      const panel = find(`#${choice.prefix}-panel`);
-      if (panel.hidden) continue;
-      panel.hidden = true;
-      button.setAttribute("aria-expanded", "false");
-      const search = find(`#${choice.prefix}-search`);
-      search.setAttribute("aria-expanded", "false");
-      search.removeAttribute("aria-activedescendant");
-      if (restoreFocus && !button.disabled) button.focus({ preventScroll: true });
+      if (returnFocus && !button.disabled) button.focus({ preventScroll: true });
     }
   }
   function activateTagChoice(choice, index, scroll = false) {
@@ -146,7 +200,7 @@
     choice.active = options.length ? Math.max(0, Math.min(index, options.length - 1)) : -1;
     options.forEach((option, at) => option.classList.toggle("is-active", at === choice.active));
     const active = options[choice.active], search = find(`#${choice.prefix}-search`);
-    if (active && !find(`#${choice.prefix}-panel`).hidden) search.setAttribute("aria-activedescendant", active.id);
+    if (active && choice.open) search.setAttribute("aria-activedescendant", active.id);
     else search.removeAttribute("aria-activedescendant");
     if (scroll && active) {
       const list = active.parentElement;
@@ -188,6 +242,7 @@
     find(`#${choice.prefix}-empty`).hidden = !term || tags.length > 0;
     const selected = entries.findIndex(tag => tag.id === field.value);
     activateTagChoice(choice, selected < 0 ? 0 : selected);
+    positionTagChoice(choice);
   }
   function renderTagManager() {
     for (const choice of tagChoices) {
@@ -200,19 +255,18 @@
   function openTagChoice(choice) {
     const button = find(`#${choice.prefix}-button`);
     if (button.disabled) return;
-    closeTagChoices();
+    closeTagChoices(false, false, choice);
     const search = find(`#${choice.prefix}-search`);
-    search.value = "";
-    find(`#${choice.prefix}-panel`).hidden = false;
-    button.setAttribute("aria-expanded", "true"); search.setAttribute("aria-expanded", "true");
-    renderTagChoice(choice);
-    search.focus();
-    activateTagChoice(choice, choice.active, true);
+    const wasHidden = find(`#${choice.prefix}-panel`).hidden;
+    if (wasHidden) { search.value = ""; renderTagChoice(choice); }
+    animateTagChoice(choice, true);
+    search.focus({ preventScroll: true });
+    activateTagChoice(choice, choice.active, wasHidden);
   }
   function bindTagChoices() {
     for (const choice of tagChoices) {
       const button = find(`#${choice.prefix}-button`), search = find(`#${choice.prefix}-search`);
-      button.addEventListener("click", () => find(`#${choice.prefix}-panel`).hidden ? openTagChoice(choice) : closeTagChoices());
+      button.addEventListener("click", () => choice.open ? closeTagChoices() : openTagChoice(choice));
       button.addEventListener("keydown", event => {
         if (event.key === "ArrowDown" || event.key === "ArrowUp") { event.preventDefault(); openTagChoice(choice); }
         else if (event.key === "Escape") { event.preventDefault(); closeTagChoices(); }
@@ -232,6 +286,18 @@
     }
     for (const name of ["pointerdown", "focusin"]) document.addEventListener(name, event => {
       if (!event.target.closest(".tag-choice")) closeTagChoices();
+    });
+    const positionOpen = () => tagChoices.forEach(positionTagChoice);
+    const resize = new ResizeObserver(positionOpen);
+    for (const choice of tagChoices) {
+      resize.observe(find(`#${choice.prefix}-button`));
+      resize.observe(find(`#${choice.prefix}-search`));
+    }
+    window.addEventListener("resize", positionOpen);
+    window.visualViewport?.addEventListener("resize", positionOpen);
+    window.visualViewport?.addEventListener("scroll", positionOpen);
+    tagReducedMotion.addEventListener("change", () => {
+      for (const choice of tagChoices) if (choice.motion) animateTagChoice(choice, choice.open, true);
     });
   }
   function editTag(id = "", seed = "") {
@@ -256,7 +322,7 @@
   function refreshTagButtons() {
     const blocked = tagLibrary.busy || studio.busy || authenticationExpired || !tagLibrary.ready;
     for (const selector of ["#tag-save", "#tag-merge", "#tag-manage-button", "#tag-merge-button"]) find(selector).disabled = blocked;
-    if (blocked) closeTagChoices();
+    if (blocked) closeTagChoices(false, true);
     find("#tag-create").disabled = blocked;
     find("#tag-save").disabled ||= tagLibrary.offline;
     find("#tag-merge").disabled ||= tagLibrary.offline;
@@ -1227,7 +1293,7 @@
     find("#tag-search").addEventListener("input", renderTags);
     find("#tag-search").addEventListener("keydown", event => { if (event.key === "Enter") { event.preventDefault(); find("#tag-suggestions button")?.click(); } else if (event.key === "ArrowDown") { event.preventDefault(); find("#tag-suggestions button")?.focus(); } });
     find("#tag-suggestions").addEventListener("keydown", event => { const buttons = [...find("#tag-suggestions").querySelectorAll("button")], index = buttons.indexOf(document.activeElement); if (event.key === "ArrowDown" || event.key === "ArrowUp") { event.preventDefault(); buttons[(index + (event.key === "ArrowDown" ? 1 : buttons.length - 1)) % buttons.length]?.focus(); } else if (event.key === "Escape") find("#tag-search").focus(); });
-    find("#tag-create").addEventListener("click", () => { closeTagChoices(); if (find("#tag-manager").hidden) { if (tagLibrary.managerDirty) { find("#tag-manager").hidden = false; find("#tag-create").setAttribute("aria-expanded", "true"); } else editTag("", find("#tag-search").value.trim()); find("#tag-name").focus(); } else { find("#tag-manager").hidden = true; find("#tag-create").setAttribute("aria-expanded", "false"); } });
+    find("#tag-create").addEventListener("click", () => { closeTagChoices(false, true); if (find("#tag-manager").hidden) { if (tagLibrary.managerDirty) { find("#tag-manager").hidden = false; find("#tag-create").setAttribute("aria-expanded", "true"); } else editTag("", find("#tag-search").value.trim()); find("#tag-name").focus(); } else { find("#tag-manager").hidden = true; find("#tag-create").setAttribute("aria-expanded", "false"); } });
     find("#tag-manage-select").addEventListener("change", event => editTag(event.target.value));
     for (const selector of ["#tag-name", "#tag-aliases", "#tag-merge-target"]) find(selector).addEventListener("input", () => { tagLibrary.managerDirty = true; });
     find("#tag-save").addEventListener("click", () => saveTag());
@@ -1270,8 +1336,8 @@
       if (picker.document) closeFramePicker();
       else attachFrameVideo();
     });
-    window.addEventListener("aida:tab-change", (event) => { if (event.detail.name !== "videos") closeFramePicker(); });
-    document.addEventListener("visibilitychange", () => { if (document.hidden) closeFramePicker(); });
+    window.addEventListener("aida:tab-change", (event) => { if (event.detail.name !== "videos") { closeFramePicker(); closeTagChoices(false, true); } });
+    document.addEventListener("visibilitychange", () => { if (document.hidden) { closeFramePicker(); closeTagChoices(false, true); } });
     window.addEventListener("beforeunload", (event) => { if (!studio.dirty && !studio.busy && !tagLibrary.managerDirty && !tagLibrary.busy) return; event.preventDefault(); event.returnValue = ""; });
     window.addEventListener("aida:encode-done", (event) => { if (event.detail.ok) openVideos(event.detail.video_id || null); });
     window.addEventListener("aida:open-videos", () => openVideos());
