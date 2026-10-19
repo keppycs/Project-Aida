@@ -117,6 +117,7 @@ class VideoEditIn(BaseModel):
     title: str = Field(max_length=500)
     description: str = Field(default="", max_length=30000)
     tags: list[str] | str = Field(default_factory=list)
+    tagIds: list[str] | None = None
     visibility: str
     revision: str = Field(min_length=1, max_length=128)
     publish: bool = False
@@ -125,6 +126,12 @@ class VideoEditIn(BaseModel):
 class RevisionIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
     revision: str = Field(min_length=1, max_length=128)
+
+
+class TagEditIn(RevisionIn):
+    tag: dict | None = None
+    merge: dict | None = None
+    operation_id: str | None = Field(default=None, max_length=128)
 
 
 class ThumbnailIn(RevisionIn):
@@ -257,6 +264,18 @@ def install_editor(app, root: Path, library: VideoLibrary | None = None) -> None
                 set_local_preview_fallback(item["id"], False, token, bulk=True)
         return {"videos": [view(item) for item in items], "remote": use_remote}
 
+    @router.get("/api/tags")
+    def tags(remote: bool = False):
+        if remote:
+            idle()
+        return app.state.video_library.get_tags(remote=remote)
+
+    @router.post("/api/tags")
+    @serial
+    def save_tags(body: TagEditIn):
+        idle()
+        return app.state.video_library.save_tags(body.revision, tag=body.tag, merge=body.merge, operation_id=body.operation_id)
+
     @router.get("/api/videos/{video_id}")
     def video(video_id: str, remote: bool = False, check_online: bool = False):
         service = app.state.video_library
@@ -298,7 +317,7 @@ def install_editor(app, root: Path, library: VideoLibrary | None = None) -> None
         idle()
         service = app.state.video_library
         revision = body.revision
-        fields = body.model_dump(include={"title", "description", "tags", "visibility"})
+        fields = body.model_dump(include={"title", "description", "tags", "tagIds", "visibility"}, exclude_none=True)
         if isinstance(fields["tags"], str):
             fields["tags"] = [tag.strip() for tag in fields["tags"].split(",") if tag.strip()]
         if body.publish:

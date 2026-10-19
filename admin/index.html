@@ -41,7 +41,25 @@
             <form id="editor-form" class="editor-form" novalidate>
               <label class="field"><span>Title</span><input id="edit-title" type="text" maxlength="300" required></label>
               <label class="field"><span>Description</span><textarea id="edit-description" rows="5" maxlength="20000"></textarea></label>
-              <div class="field-pair"><label class="field"><span>Tags</span><input id="edit-tags" type="text" placeholder="Separate with commas"></label><fieldset class="visibility-field"><legend>Visibility</legend><div class="visibility-options"><label><input type="radio" name="edit-visibility" value="private"><span>Private</span></label><label><input type="radio" name="edit-visibility" value="unlisted"><span>Unlisted</span></label><label><input type="radio" name="edit-visibility" value="public"><span>Public</span></label></div></fieldset></div>
+              <section class="tag-editor" aria-labelledby="tags-heading">
+                <div class="tag-heading"><h3 id="tags-heading">Tags</h3><button id="tag-create" type="button" class="text-btn" aria-expanded="false" aria-controls="tag-manager">Manage tags</button></div>
+                <input id="edit-tags" type="hidden">
+                <div id="selected-tags" class="tag-chips" aria-label="Selected tags"></div>
+                <label class="field"><span class="sr-only">Find a tag</span><input id="tag-search" type="search" placeholder="Find a tag or alias" maxlength="100" autocomplete="off" aria-describedby="tag-suggestions-label"></label>
+                <p id="tag-suggestions-label" class="hint">Common in your catalogue</p>
+                <div id="tag-suggestions" class="tag-suggestions" aria-label="Tag suggestions"></div>
+                <div class="tag-library-status"><p id="tag-status" class="status" role="status" aria-live="polite"></p><button id="tag-reload" type="button" class="text-btn">Reload tags</button></div>
+                <section id="tag-manager" class="tag-manager" aria-label="Shared tag library" hidden>
+                  <p class="hint">Names and aliases are shared across videos. Saving here updates the tag library separately from this video's draft.</p>
+                  <label class="field"><span>Tag to edit</span><select id="tag-manage-select"><option value="">Create a new tag</option></select></label>
+                  <label class="field"><span>Master name</span><input id="tag-name" maxlength="100" autocomplete="off"></label>
+                  <label class="field"><span>Aliases, separated by commas</span><input id="tag-aliases" maxlength="10000" placeholder="For example: CS2, Counterstrike 2" autocomplete="off"></label>
+                  <button id="tag-save" type="button" class="btn">Save shared tag</button>
+                  <div id="tag-merge-fields" hidden><label class="field"><span>Merge this tag into</span><select id="tag-merge-target"><option value="">Choose destination tag</option></select></label><p class="hint">Videos use the destination tag. This tag's names become aliases of it.</p><button id="tag-merge" type="button" class="btn">Merge shared tags</button></div>
+                  <p id="tag-manager-status" class="status" role="status" aria-live="polite"></p>
+                </section>
+              </section>
+              <fieldset class="visibility-field"><legend>Visibility</legend><div class="visibility-options"><label><input type="radio" name="edit-visibility" value="private"><span>Private</span></label><label><input type="radio" name="edit-visibility" value="unlisted"><span>Unlisted</span></label><label><input type="radio" name="edit-visibility" value="public"><span>Public</span></label></div></fieldset>
               <p id="visibility-help" class="hint">Only you can preview a private video here.</p>
               <section class="thumbnail-editor">
                 <h3>Thumbnail</h3>

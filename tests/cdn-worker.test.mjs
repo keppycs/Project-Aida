@@ -11,11 +11,44 @@ const env = { B2_KEY_ID: "test-key", B2_SECRET_KEY: "test-secret" };
 const meta = { id, title: "Current title", description: "Current description", visibility: "public", frameRate: 120, duration: 3, codecs: ["AV1", "HEVC"] };
 const assets = ["metadata.json", "thumbnail_hdr.avif", "thumbnail_hdr_720p.avif", "thumbnail_sdr.webp", "thumbnail_sdr_720p.webp", "thumbnail_share.jpg", "AV1/manifest.mpd", "AV1/master.m3u8", "AV1/media_0.m3u8", "AV1/init_0.mp4", "AV1/chunk_0_1.fmp4", "HEVC/manifest.mpd", "HEVC/master.m3u8", "HEVC/media_8.m3u8", "HEVC/init_8.mp4", "HEVC/chunk_8_1.fmp4"];
 
+test('catalogue and authorized metadata expose only their assigned canonical tags and aliases', async () => {
+  const registry = { version: 1, tags: [{ id: 'cs2', name: 'Counter-Strike 2', aliases: ['CS2'] }, { id: 'hidden', name: 'PRIVATE_TAG', aliases: ['PRIVATE_ALIAS'] }], redirects: { old: 'cs2' } };
+  const f = fixture({ metadata: { ...meta, tags: ['old label'], tagIds: ['old'] }, registry });
+  for (const path of ['index.json', `${id}/metadata.json`]) {
+    const response = await f.handle(request(path), env); assert.equal(response.status, 200);
+    const raw = await response.text(); assert.equal(raw.includes('PRIVATE_TAG'), false); assert.equal(raw.includes('PRIVATE_ALIAS'), false);
+    const parsed = JSON.parse(raw), video = Array.isArray(parsed) ? parsed[0] : parsed;
+    assert.deepEqual(video.tags, ['Counter-Strike 2']); assert.deepEqual(video.tagIds, ['cs2']); assert.deepEqual(video.tagDefinitions, [registry.tags[0]]);
+  }
+  const before = f.calls.length;
+  assert.equal((await f.handle(request('tags.json'), env)).status, 404); assert.equal(f.calls.length, before);
+});
+
+test('unavailable or invalid tag registries fail JSON closed while existing media streams without registry access', async () => {
+  for (const response of [() => new Response(null, { status: 500 }), () => Response.json({ version: 5, tags: [] })]) {
+    const f = fixture({ metadata: { ...meta, tags: ['CS2'] }, onFetch: call => call.url.endsWith('/tags.json') ? response() : null });
+    assert.equal((await f.handle(request('index.json'), env)).status, 503);
+    assert.equal((await f.handle(request(`${id}/metadata.json`), env)).status, 503);
+    const before = f.calls.filter(call => call.url.endsWith('/tags.json')).length;
+    assert.equal((await f.handle(request(`${id}/AV1/chunk_0_1.fmp4`), env)).status, 200);
+    assert.equal(f.calls.filter(call => call.url.endsWith('/tags.json')).length, before);
+  }
+});
+
+test('current explicit string tags and removals override stale indexed canonical assignments', async () => {
+  const registry = { version: 1, tags: [{ id: 'old', name: 'Old', aliases: [] }, { id: 'new', name: 'New', aliases: [] }], redirects: {} };
+  for (const tags of [[], ['New']]) {
+    const f = fixture({ metadata: { ...meta, tags }, index: [{ id, tags: ['Old'], tagIds: ['old'] }], registry });
+    const response = await f.handle(request('index.json'), env); assert.equal(response.status, 200);
+    const [video] = await response.json(); assert.deepEqual(video.tags, tags); assert.equal(video.tagIds.includes('old'), false);
+  }
+});
+
 function request(path = `${id}/metadata.json`, options) {
   return new Request(`${cdn}${prefix}${path}`, options);
 }
 
-function fixture({ metadata = meta, rawMetadata, metadataStatus = 200, index = [{ id, title: "STALE_TITLE", description: "STALE_DESCRIPTION" }], authorization, authStatus = 200, authThrows = false, assetStatus = 200, assetBody = () => "media bytes", assetHeaders = {}, onFetch, timeoutMs, cache, now } = {}) {
+function fixture({ metadata = meta, rawMetadata, metadataStatus = 200, index = [{ id, title: "STALE_TITLE", description: "STALE_DESCRIPTION" }], registry = null, authorization, authStatus = 200, authThrows = false, assetStatus = 200, assetBody = () => "media bytes", assetHeaders = {}, onFetch, timeoutMs, cache, now } = {}) {
   const calls = [];
   const fetcher = async (input, init = {}) => {
     const url = String(input);
@@ -29,6 +62,7 @@ function fixture({ metadata = meta, rawMetadata, metadataStatus = 200, index = [
     }
     assert.ok(url.startsWith(`${origin}${prefix}`), `Only fixed B2 bucket: ${url}`);
     if (url.endsWith("/index.json")) return Response.json(index);
+    if (url.endsWith("/tags.json")) return registry ? Response.json(registry) : new Response(null, { status: 404 });
     if (url.endsWith("/metadata.json")) {
       const value = typeof metadata === "function" ? metadata(url) : metadata;
       return new Response(rawMetadata ?? JSON.stringify(value), { status: metadataStatus });
@@ -314,7 +348,7 @@ test("catalogue pagination covers more than 40 videos with bounded fresh checks 
     const entries = await response.json();
     assert.equal(entries.length, page < 2 ? 40 : 11);
     assert.equal(calls.slice(start).filter(call => call.url.endsWith("/metadata.json")).length, entries.length);
-    assert.ok(calls.length - start <= 42, "page fits free Worker's subrequest budget");
+    assert.ok(calls.length - start <= 43, "page plus tag definitions fits free Worker's subrequest budget");
     listed.push(...entries.map(entry => entry.id));
     const link = response.headers.get("Link");
     if (page < 2) assert.equal(link, `<${cdn}${prefix}index.json?page=${page + 1}>; rel="next"`);

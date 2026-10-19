@@ -129,6 +129,30 @@ class AdminClient:
             raise AdminClientError("The central video details are incomplete.")
         return result
 
+    def get_tags(self) -> dict:
+        result = self._request("/tags")
+        if not isinstance(result, dict) or not isinstance(result.get("revision"), str) or not result["revision"]:
+            raise AdminClientError("The central master tag list is incomplete.")
+        from tags import normalize_registry
+        try:
+            normalize_registry(result)
+        except ValueError:
+            raise AdminClientError("The central master tag list is invalid.") from None
+        return result
+
+    def save_tags(self, revision: str, *, tag=None, merge=None, operation_id=None) -> dict:
+        payload = {"revision": revision, "operation_id": operation_id or str(uuid4())}
+        payload["tag" if tag is not None else "merge"] = tag if tag is not None else merge
+        result = self._request("/tags", payload)
+        if not isinstance(result, dict) or not isinstance(result.get("revision"), str) or not result["revision"]:
+            raise AdminClientError("The central master tag save was not confirmed.")
+        from tags import normalize_registry
+        try:
+            normalize_registry(result)
+        except ValueError:
+            raise AdminClientError("The central master tag save is invalid.") from None
+        return result
+
     def open_asset(self, video_id: str, relative: str, range_header: str | None = None) -> dict:
         """Authenticated, streaming private preview. Caller owns Body.close()."""
         self._id(video_id)
@@ -199,6 +223,10 @@ class AdminClient:
         return result["lease"]
 
     def finalize(self, video_id: str, lease: str, metadata: dict, entry: dict, *, images=None, operation_id: str):
+        # Definitions are a presentation projection. The central registry owns
+        # canonical names and aliases; uploads carry only their assignments.
+        metadata = {key: value for key, value in metadata.items() if key != "tagDefinitions"}
+        entry = {key: value for key, value in entry.items() if key != "tagDefinitions"}
         payload = {"lease": lease, "metadata": metadata, "entry": entry, "operation_id": operation_id, "media_complete": True}
         if images:
             payload["variants"] = encode_variants(images)
@@ -289,7 +317,7 @@ class AdminClient:
                 response.close()
 
     def publish(self, video_id: str, fields: dict, revision: str, *, images=None, operation_id: str | None = None):
-        payload = {**{key: fields[key] for key in ("title", "description", "tags", "visibility") if key in fields},
+        payload = {**{key: fields[key] for key in ("title", "description", "tags", "tagIds", "visibility") if key in fields},
                    "revision": revision, "publish": True, "operation_id": operation_id or str(uuid4())}
         if images:
             payload["variants"] = encode_variants(images)

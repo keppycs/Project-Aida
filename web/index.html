@@ -8,9 +8,9 @@
     <title>Aida — Videos</title>
     <link rel="icon" href="assets/favicons/flushed.svg" type="image/svg+xml" />
     <link rel="stylesheet" href="css/site.css?v=header-v30" />
-    <link rel="stylesheet" href="css/index.css?v=videos-names-v34" />
+    <link rel="stylesheet" href="css/index.css?v=master-tags-v1" />
     <script defer src="js/site-env.js?v=ux-stability-v14"></script>
-    <script type="module" src="js/index.js?v=cdn-security-v2"></script>
+    <script type="module" src="js/index.js?v=master-tags-v1"></script>
   </head>
   <body>
     <a class="skip-link" href="#main-content">Skip to content</a>
@@ -54,6 +54,17 @@
         <div class="videos-toolbar">
           <div class="videos-heading"><h2 id="videos-title">Videos <span id="videos-count" class="videos-count"></span></h2></div>
         </div>
+        <details class="search-tools" id="search-tools">
+          <summary>Tags &amp; search tips</summary>
+          <div class="search-tools-body">
+            <p>Combine words, use <code>"a phrase"</code>, or exclude a word with <code>-word</code>. Use <code>tag:CS2</code> or <code>-tag:CS2</code> to include or exclude a tag. Names and aliases both work.</p>
+            <label for="tag-search">Find a tag</label>
+            <input id="tag-search" type="search" placeholder="Name or alias" autocomplete="off" spellcheck="false" />
+            <div id="tag-suggestions" class="tag-suggestions" aria-label="Tags in this collection"></div>
+            <p id="tag-suggestions-status" class="search-tools-note" role="status"></p>
+          </div>
+        </details>
+        <div id="search-filters" class="search-filters" aria-label="Active tag filters" hidden></div>
         <p id="results-summary" class="results-summary" role="status" aria-live="polite">Loading videos…</p>
         <div id="videos-grid" class="video-grid" aria-label="Videos">
           <div class="skeleton-card" aria-hidden="true"><div class="skeleton-block skeleton-card-thumb"></div><div class="skeleton-card-content"><div class="skeleton-block skeleton-line"></div><div class="skeleton-block skeleton-line short"></div></div></div>

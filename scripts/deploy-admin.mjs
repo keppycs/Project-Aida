@@ -6,7 +6,9 @@ import { fileURLToPath } from "node:url";
 
 export const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 export const WORKER = "aida-owner-editor";
-export const MODULES = Object.freeze(["admin-worker.mjs", "admin-auth.mjs", "admin-b2.mjs", "admin-package.mjs", "admin-upload.mjs", "admin-library.mjs", "admin-assets.mjs", "generated/admin-assets.mjs"]);
+// Preserve repository-relative module paths so shared code resolves exactly as
+// it does in local Node tests and Wrangler's module graph.
+export const MODULES = Object.freeze(["edge/admin-worker.mjs", "edge/admin-auth.mjs", "edge/admin-b2.mjs", "edge/admin-package.mjs", "edge/admin-upload.mjs", "edge/admin-library.mjs", "edge/admin-assets.mjs", "edge/generated/admin-assets.mjs", "web/js/tags.js"]);
 const PLAIN = ["SITE_ORIGIN", "ACCESS_TEAM_DOMAIN", "ACCESS_AUD", "OWNER_EMAIL", "ACCESS_SERVICE_CLIENT_ID", "B2_BUCKET_ID"];
 const SECRET = ["B2_KEY_ID", "B2_SECRET_KEY"];
 const KEYS = ["CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_API_TOKEN", ...PLAIN, ...SECRET, "LEGACY_VISIBILITY"];
@@ -70,14 +72,14 @@ export async function prepareDeployment({ config, root = ROOT, initial = false }
   config = validateConfig(config);
   const modules = [];
   for (const name of MODULES) {
-    const bytes = await safeFile(root, `edge/${name}`, 12_000_000);
-    if (name === "generated/admin-assets.mjs" && !bytes.toString("utf8").startsWith(ASSET_MARKER)) throw new DeployError("Build the approved generated assets before deployment.");
+    const bytes = await safeFile(root, name, 12_000_000);
+    if (name === "edge/generated/admin-assets.mjs" && !bytes.toString("utf8").startsWith(ASSET_MARKER)) throw new DeployError("Build the approved generated assets before deployment.");
     modules.push({ name, bytes });
   }
   const bindings = [...PLAIN, "LEGACY_VISIBILITY"].map(name => ({ name, type: "plain_text", text: config[name] }));
   bindings.push(...SECRET.map(name => ({ name, type: "secret_text", text: config[name] })));
   bindings.push({ name: "LIBRARY", type: "durable_object_namespace", class_name: "AidaLibrary" });
-  const metadata = { main_module: "admin-worker.mjs", compatibility_date: "2026-10-18", bindings,
+  const metadata = { main_module: "edge/admin-worker.mjs", compatibility_date: "2026-10-18", bindings,
     ...(initial ? { migrations: { new_tag: "owner-library-v1", steps: [{ new_sqlite_classes: ["AidaLibrary"] }] } } : {}) };
   const body = new FormData();
   body.set("metadata", new Blob([JSON.stringify(metadata)], { type: "application/json" }), "metadata.json");

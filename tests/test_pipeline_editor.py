@@ -68,6 +68,22 @@ class PipelineEditorTests(unittest.TestCase):
         self.ffmpeg.assert_not_called()
         self.assertFalse((self.local / "new120").exists())
 
+    def test_selected_master_ids_and_aliases_survive_encode_and_upload_handoff(self):
+        registry = {"version": 1, "tags": [{"id": "game-one", "name": "Fixture Game", "aliases": ["FG"]}], "redirects": {}}
+        (self.local / "tags.json").write_text(json.dumps(registry), encoding="utf-8")
+        with patch.object(main, "make_b2_client", return_value=(Mock(), "fixture")), \
+             patch.object(main, "is_already_uploaded", return_value=False), \
+             patch.object(main, "upload_folder", return_value=True) as upload, \
+             patch.object(main, "upload_index"), patch.object(main.VideoLibrary, "mark_uploaded"):
+            self.run_pipeline(upload_to_b2=True, tag_ids=["game-one"])
+        metadata = json.loads((self.local / "new120" / "metadata.json").read_text(encoding="utf-8"))
+        self.assertEqual(metadata["tagIds"], ["game-one"])
+        self.assertEqual(metadata["tags"], ["Fixture Game"])
+        self.assertEqual(metadata["tagDefinitions"][0]["aliases"], ["FG"])
+        entry = upload.call_args.kwargs["entry"]
+        self.assertEqual(entry["tagIds"], metadata["tagIds"])
+        self.assertEqual(entry["tagDefinitions"], metadata["tagDefinitions"])
+
     def test_existing_local_or_remote_id_is_never_overwritten(self):
         folder = self.local / "new120"
         folder.mkdir()

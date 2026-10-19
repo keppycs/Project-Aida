@@ -13,6 +13,183 @@
   const visibilityLabel = (detail) => detail.visibility_review_required !== true && Object.hasOwn(visibilityText, detail.visibility) ? visibilityText[detail.visibility] : "Visibility needs review";
   const editable = ["#edit-title", "#edit-description", "#edit-tags", 'input[name="edit-visibility"]'];
   const picker = { open: false, epoch: 0, operation: 0, id: null, video: null, document: null, source: "", controller: null, observer: null, callback: null, timeout: null, seekRequest: null, paints: [], ready: false, waiting: false, presented: null, exact: false, target: 0, candidate: null };
+  const tagLibrary = { tags: [], redirects: {}, serverIDs: new Set(), revision: null, ready: false, offline: false, busy: false, selected: [], action: null, editing: null, managerDirty: false, drafts: new Map() };
+  let tagTools = null, tagHelperAttempts = 0;
+  let normalizeTag = value => String(value || "").normalize("NFKC").toLowerCase().trim();
+  const tagByName = value => tagLibrary.tags.find(tag => [tag.name, ...tag.aliases].some(name => normalizeTag(name) === normalizeTag(value)));
+  function tagByID(id) {
+    const seen = new Set();
+    while (Object.hasOwn(tagLibrary.redirects, id) && !seen.has(id)) { seen.add(id); id = tagLibrary.redirects[id]; }
+    return tagLibrary.tags.find(tag => tag.id === id);
+  }
+  function tagByLegacyName(name) {
+    return (tagTools && tagByID(tagTools.legacyTagId(name))) || tagByName(name);
+  }
+  function resolvedTags(detail) {
+    const names = Array.isArray(detail.tags) ? detail.tags.map(String) : String(detail.tags || "").split(",").map(value => value.trim()).filter(Boolean);
+    const tags = Array.isArray(detail.tagIds) ? detail.tagIds.map((id, index) => tagByID(id) || detail.tagDefinitions?.find(tag => tag.id === id) || { id, name: names[index] || id }) : names.map(name => tagByLegacyName(name) || { name });
+    // Until the registry is available, retain legacy display names and IDs.
+    if (Array.isArray(detail.tagIds) && !tagLibrary.ready) return names.map((name, index) => ({ name, id: detail.tagIds[index] }));
+    return tags.filter((tag, index) => tags.findIndex(other => (other.id || normalizeTag(other.name)) === (tag.id || normalizeTag(tag.name))) === index);
+  }
+  function tagFields(tags) {
+    const values = tags.map(tag => tag.id && tagByID(tag.id) || tagByLegacyName(tag.name) || tag);
+    return { tags: values.map(tag => tag.name), ...(values.every(tag => tag.id) ? { tagIds: values.map(tag => tag.id) } : {}) };
+  }
+  function setVideoTags(detail) {
+    tagLibrary.selected = resolvedTags(detail);
+    syncTagInput();
+    renderTags();
+  }
+  function syncTagInput() { find("#edit-tags").value = tagLibrary.selected.map(tag => tag.name).join(", "); }
+  function changeTags(tags) {
+    if (!studio.detail || studio.busy || authenticationExpired || !tagTools) return;
+    stopDetailRead();
+    tagLibrary.selected = tags;
+    syncTagInput();
+    renderTags();
+    updateState();
+  }
+  function renderTags() {
+    const selected = find("#selected-tags");
+    selected.replaceChildren();
+    for (const tag of tagLibrary.selected) {
+      const button = document.createElement("button");
+      button.type = "button"; button.className = "tag-chip";
+      button.textContent = `${tag.id && tagByID(tag.id)?.name || tag.name} ×`;
+      button.setAttribute("aria-label", `Remove ${tag.name} tag`);
+      button.disabled = studio.busy || authenticationExpired || !tagTools;
+      button.addEventListener("click", () => {
+        const index = tagLibrary.selected.indexOf(tag);
+        changeTags(tagLibrary.selected.filter(value => value !== tag));
+        (find("#selected-tags").children[index] || find("#selected-tags").lastElementChild || find("#tag-search")).focus({ preventScroll: true });
+      });
+      selected.append(button);
+    }
+    const term = normalizeTag(find("#tag-search").value);
+    const usage = new Map();
+    for (const video of studio.videos) for (const tag of resolvedTags(video)) if (tag.id) usage.set(tag.id, (usage.get(tag.id) || 0) + 1);
+    const matching = tagLibrary.tags.filter(tag => !tagLibrary.selected.some(value => (value.id && tagByID(value.id)?.id || tagByName(value.name)?.id) === tag.id) && (!term || [tag.name, ...tag.aliases].some(value => normalizeTag(value).includes(term))));
+    matching.sort((a, b) => (usage.get(b.id) || 0) - (usage.get(a.id) || 0) || a.name.localeCompare(b.name));
+    const suggestions = find("#tag-suggestions");
+    suggestions.replaceChildren();
+    for (const tag of matching.slice(0, 8)) {
+      const button = document.createElement("button");
+      button.type = "button"; button.className = "tag-suggestion"; button.dataset.tagId = tag.id;
+      const label = document.createElement("span"); label.textContent = tag.name;
+      const note = document.createElement("small");
+      note.textContent = term && !normalizeTag(tag.name).includes(term) ? `Alias: ${tag.aliases.find(value => normalizeTag(value).includes(term))}` : `${usage.get(tag.id) || 0} videos`;
+      button.append(label, note);
+      button.disabled = studio.busy || authenticationExpired || !tagTools;
+      button.addEventListener("click", () => { changeTags([...tagLibrary.selected, tag]); find("#tag-search").value = ""; renderTags(); find("#tag-search").focus({ preventScroll: true }); });
+      suggestions.append(button);
+    }
+    find("#tag-suggestions-label").textContent = term ? matching.length ? "Matching tags" : "No matching tags. Create one below." : "Common in your catalogue";
+    find("#tag-create").disabled = !tagLibrary.ready || tagLibrary.busy || authenticationExpired;
+  }
+  function applyTagRegistry(data) {
+    if (!data || !Array.isArray(data.tags) || typeof data.revision !== "string") throw new Error("Couldn't read the tag library.");
+    const baseline = studio.baseline && JSON.parse(studio.baseline);
+    const baselineTags = baseline && resolvedTags(baseline);
+    tagLibrary.tags = data.tags.filter(tag => tag && typeof tag.id === "string" && typeof tag.name === "string").map(tag => ({ id: tag.id, name: tag.name, aliases: Array.isArray(tag.aliases) ? tag.aliases.filter(value => typeof value === "string") : [] }));
+    tagLibrary.serverIDs = new Set(tagLibrary.tags.map(tag => tag.id));
+    tagLibrary.redirects = data.redirects || {};
+    augmentVideoTags();
+    tagLibrary.revision = data.revision; tagLibrary.ready = true; tagLibrary.offline = data.offline === true;
+    // Refresh only tag identity; unrelated unsaved video fields stay in place.
+    tagLibrary.selected = tagLibrary.selected.map(tag => tag.id && tagByID(tag.id) || tagByLegacyName(tag.name) || tag).filter((tag, index, tags) => tags.findIndex(other => (other.id || normalizeTag(other.name)) === (tag.id || normalizeTag(tag.name))) === index);
+    if (baseline) studio.baseline = JSON.stringify({ title: baseline.title, description: baseline.description, ...tagFields(baselineTags), visibility: baseline.visibility });
+    syncTagInput(); renderTags(); renderTagManager();
+    if (studio.detail) updateState();
+  }
+  async function loadTags() {
+    if (tagLibrary.busy || authenticationExpired) return;
+    tagLibrary.busy = true; refreshTagButtons();
+    status("#tag-status", "Loading tag library…");
+    try {
+      if (!tagTools) {
+        const path = liveEditor ? "/edit/preview/js/tags.js" : "/preview/js/tags.js";
+        tagTools = await import(`${path}${tagHelperAttempts++ ? `?retry=${tagHelperAttempts}` : ""}`);
+        normalizeTag = tagTools.normalizeTag;
+      }
+      applyTagRegistry(await request("/api/tags"));
+      status("#tag-status", tagLibrary.offline ? "Using cached tags. Shared changes need your connection." : "");
+    }
+    catch (error) { status("#tag-status", `${error.message} Existing video tags are kept.`, true); }
+    finally { tagLibrary.busy = false; refreshTagButtons(); }
+  }
+  function augmentVideoTags() {
+    if (!tagTools) return;
+    const registry = tagTools.registryFromVideos(studio.videos, { version: 1, tags: tagLibrary.tags, redirects: tagLibrary.redirects });
+    tagLibrary.tags = registry.tags;
+    tagLibrary.redirects = registry.redirects;
+  }
+  function renderTagManager() {
+    for (const selector of ["#tag-manage-select", "#tag-merge-target"]) {
+      const select = find(selector), previous = select.value;
+      select.replaceChildren(new Option(selector === "#tag-manage-select" ? "Create a new tag" : "Choose destination tag", ""));
+      for (const tag of [...tagLibrary.tags].sort((a, b) => a.name.localeCompare(b.name))) select.add(new Option(tag.name, tag.id));
+      if (tagLibrary.tags.some(tag => tag.id === previous)) select.value = previous;
+    }
+  }
+  function editTag(id = "", seed = "") {
+    if (tagLibrary.managerDirty) tagLibrary.drafts.set(tagLibrary.editing || "", { name: find("#tag-name").value, aliases: find("#tag-aliases").value });
+    tagLibrary.editing = id || null;
+    const tag = tagByID(id);
+    const draft = tagLibrary.drafts.get(id);
+    find("#tag-manage-select").value = id;
+    find("#tag-name").value = draft?.name ?? tag?.name ?? seed;
+    find("#tag-aliases").value = draft?.aliases ?? tag?.aliases.join(", ") ?? "";
+    find("#tag-merge-fields").hidden = !id || !tagLibrary.serverIDs.has(id);
+    find("#tag-merge-target").value = "";
+    tagLibrary.managerDirty = Boolean(draft);
+    tagLibrary.action = null;
+    find("#tag-manager").hidden = false;
+    find("#tag-create").setAttribute("aria-expanded", "true");
+    status("#tag-manager-status", id && !tagLibrary.serverIDs.has(id) ? "Save this tag to the shared library before merging it." : "");
+    refreshTagButtons();
+  }
+  function refreshTagButtons() {
+    const blocked = tagLibrary.busy || studio.busy || authenticationExpired || !tagLibrary.ready;
+    for (const selector of ["#tag-save", "#tag-merge", "#tag-manage-select"]) find(selector).disabled = blocked;
+    find("#tag-create").disabled = blocked;
+    find("#tag-save").disabled ||= tagLibrary.offline;
+    find("#tag-merge").disabled ||= tagLibrary.offline;
+    find("#tag-reload").disabled = tagLibrary.busy || authenticationExpired;
+    find("#tag-manager").setAttribute("aria-busy", String(tagLibrary.busy));
+  }
+  async function saveTag(merge = false) {
+    if (tagLibrary.busy || studio.busy || authenticationExpired || !tagLibrary.ready || tagLibrary.offline) return;
+    const name = find("#tag-name").value.trim();
+    const aliases = [...new Set(find("#tag-aliases").value.split(",").map(value => value.trim()).filter(Boolean))];
+    const previousName = tagByID(tagLibrary.editing)?.name;
+    if (previousName && normalizeTag(previousName) !== normalizeTag(name) && !aliases.some(alias => normalizeTag(alias) === normalizeTag(previousName))) aliases.push(previousName);
+    const target = find("#tag-merge-target").value;
+    if (!merge && !name) { status("#tag-manager-status", "Give this tag a name first.", true); return; }
+    if (merge && (!tagLibrary.editing || !target || target === tagLibrary.editing)) { status("#tag-manager-status", "Choose a different destination tag.", true); return; }
+    const collision = !merge && tagLibrary.tags.find(tag => tag.id !== tagLibrary.editing && [tag.name, ...tag.aliases].some(value => [name, ...aliases].some(candidate => normalizeTag(candidate) === normalizeTag(value))));
+    if (collision) { status("#tag-manager-status", `That name or alias belongs to ${collision.name}. Select it or merge the tags.`, true); return; }
+    const payload = { revision: tagLibrary.revision, ...(merge ? { merge: { source: tagLibrary.editing, target } } : { tag: { ...(tagLibrary.editing ? { id: tagLibrary.editing } : {}), name, aliases } }) };
+    const signature = JSON.stringify(payload);
+    const inputSnapshot = JSON.stringify([find("#tag-name").value, find("#tag-aliases").value, tagLibrary.editing, target]);
+    if (!tagLibrary.action || tagLibrary.action.signature !== signature) tagLibrary.action = { signature, id: crypto.randomUUID() };
+    tagLibrary.busy = true; refreshButtons();
+    status("#tag-manager-status", merge ? "Merging tags…" : "Saving shared tag…");
+    try {
+      const data = await request("/api/tags", { method: "POST", body: JSON.stringify({ ...payload, operation_id: tagLibrary.action.id }) });
+      applyTagRegistry(data);
+      const sameInput = JSON.stringify([find("#tag-name").value, find("#tag-aliases").value, tagLibrary.editing, find("#tag-merge-target").value]) === inputSnapshot;
+      tagLibrary.action = null;
+      if (sameInput) {
+        tagLibrary.drafts.delete(tagLibrary.editing || ""); tagLibrary.managerDirty = false;
+        if (merge) editTag(target);
+        else { const saved = tagLibrary.editing && tagByID(tagLibrary.editing) || tagByName(name); if (saved) editTag(saved.id); }
+      }
+      status("#tag-manager-status", merge ? "Tags merged across the catalogue." : "Shared tag saved. Choose it above to add it to this video.");
+    } catch (error) {
+      status("#tag-manager-status", error.status === 409 ? "The tag library changed. Reload tags, review your input, then save again. Your input is kept." : error.message, true);
+    } finally { tagLibrary.busy = false; refreshButtons(); }
+  }
 
   function status(selector, message, error = false) {
     const target = find(selector);
@@ -71,6 +248,7 @@
       refreshButtons();
       if (recovery) {
         // Refresh reads only. A failed save must always be retried by its button.
+        await loadTags();
         await loadLibrary(false);
         if (authenticationExpired) return false;
         if (studio.detail) {
@@ -104,11 +282,11 @@
   function completeLiveOperation(id, kind) { liveActions.delete(`${id}:${kind}`); }
 
   function fields() {
-    return { title: find("#edit-title").value, description: find("#edit-description").value, tags: find("#edit-tags").value.split(",").map((tag) => tag.trim()).filter(Boolean), visibility: find('input[name="edit-visibility"]:checked')?.value || "unknown" };
+    return { title: find("#edit-title").value, description: find("#edit-description").value, ...tagFields(tagLibrary.selected), visibility: find('input[name="edit-visibility"]:checked')?.value || "unknown" };
   }
 
   function fromDetail(detail) {
-    return { title: String(detail.title || ""), description: String(detail.description || ""), tags: Array.isArray(detail.tags) ? detail.tags.map(String) : String(detail.tags || "").split(",").map((tag) => tag.trim()).filter(Boolean), visibility: detail.visibility_review_required !== true && Object.hasOwn(visibilityText, detail.visibility) ? detail.visibility : "unknown" };
+    return { title: String(detail.title || ""), description: String(detail.description || ""), ...tagFields(resolvedTags(detail)), visibility: detail.visibility_review_required !== true && Object.hasOwn(visibilityText, detail.visibility) ? detail.visibility : "unknown" };
   }
 
   function thumbnailURL(raw) {
@@ -186,7 +364,7 @@
       const values = fromDetail(detail);
       find("#edit-title").value = values.title;
       find("#edit-description").value = values.description;
-      find("#edit-tags").value = values.tags.join(", ");
+      setVideoTags(detail);
       all('input[name="edit-visibility"]').forEach((radio) => { radio.checked = radio.value === values.visibility; });
       studio.baseline = JSON.stringify(values);
     }
@@ -293,8 +471,11 @@
       const videos = Array.isArray(data) ? data : data.videos;
       if (!Array.isArray(videos)) throw new Error("Couldn't read the video library.");
       studio.videos = videos.filter((video) => video && typeof video.id === "string");
+      augmentVideoTags();
       studio.listAbort = null;
       renderLibrary();
+      renderTags();
+      renderTagManager();
     } catch (error) {
       if (generation !== studio.listRequest || error.name === "AbortError") return;
       status("#library-status", error.message, true);
@@ -420,7 +601,7 @@
   }
 
   async function saveVideo(publish) {
-    if (!studio.detail || studio.busy || authenticationExpired) return;
+    if (!studio.detail || studio.busy || tagLibrary.busy || authenticationExpired) return;
     stopDetailRead();
     stopOnlineCheck();
     const draft = fields();
@@ -446,12 +627,14 @@
 
   function refreshButtons() {
     const needsVisibility = !Object.hasOwn(visibilityText, fields().visibility);
-    find("#editor-save").disabled = !studio.detail || studio.busy || authenticationExpired || !studio.dirty || needsVisibility;
-    find("#editor-publish").disabled = !studio.detail || studio.busy || authenticationExpired || needsVisibility || Boolean(studio.detail.remoteChanged) || studio.conflictMode === "remote";
+    find("#editor-save").disabled = !studio.detail || studio.busy || tagLibrary.busy || authenticationExpired || !studio.dirty || needsVisibility;
+    find("#editor-publish").disabled = !studio.detail || studio.busy || tagLibrary.busy || authenticationExpired || needsVisibility || Boolean(studio.detail.remoteChanged) || studio.conflictMode === "remote";
     find("#edit-thumbnail-file").disabled = studio.busy || authenticationExpired || !studio.detail;
     refreshFrameControls();
     find("#conflict-reload").disabled = studio.busy || authenticationExpired;
     find("#editor-form").setAttribute("aria-busy", String(studio.busy));
+    refreshTagButtons();
+    renderTags();
   }
 
   async function saveThumbnail(payload) {
@@ -935,6 +1118,18 @@
   }
 
   function bind() {
+    find("#tag-search").addEventListener("input", renderTags);
+    find("#tag-search").addEventListener("keydown", event => { if (event.key === "Enter") { event.preventDefault(); find("#tag-suggestions button")?.click(); } else if (event.key === "ArrowDown") { event.preventDefault(); find("#tag-suggestions button")?.focus(); } });
+    find("#tag-suggestions").addEventListener("keydown", event => { const buttons = [...find("#tag-suggestions").querySelectorAll("button")], index = buttons.indexOf(document.activeElement); if (event.key === "ArrowDown" || event.key === "ArrowUp") { event.preventDefault(); buttons[(index + (event.key === "ArrowDown" ? 1 : buttons.length - 1)) % buttons.length]?.focus(); } else if (event.key === "Escape") find("#tag-search").focus(); });
+    find("#tag-create").addEventListener("click", () => { if (find("#tag-manager").hidden) { if (tagLibrary.managerDirty) { find("#tag-manager").hidden = false; find("#tag-create").setAttribute("aria-expanded", "true"); } else editTag("", find("#tag-search").value.trim()); find("#tag-name").focus(); } else { find("#tag-manager").hidden = true; find("#tag-create").setAttribute("aria-expanded", "false"); } });
+    find("#tag-manage-select").addEventListener("change", event => editTag(event.target.value));
+    for (const selector of ["#tag-name", "#tag-aliases", "#tag-merge-target"]) find(selector).addEventListener("input", () => { tagLibrary.managerDirty = true; });
+    find("#tag-save").addEventListener("click", () => saveTag());
+    find("#tag-merge").addEventListener("click", () => saveTag(true));
+    find("#tag-reload").addEventListener("click", loadTags);
+    find("#tag-manager").addEventListener("keydown", event => { if (event.key === "Enter" && event.target.matches("input")) event.preventDefault(); });
+    // Kept as a compatibility field for existing draft integrations.
+    find("#edit-tags").addEventListener("input", () => { tagLibrary.selected = find("#edit-tags").value.split(",").map(name => name.trim()).filter(Boolean).map(name => tagByName(name) || { name }); renderTags(); });
     find("#library-search").addEventListener("input", renderLibrary);
     find("#library-refresh").addEventListener("click", () => loadLibrary(true));
     find("#library-retry").addEventListener("click", () => loadLibrary(studio.lastListRemote));
@@ -947,7 +1142,7 @@
     find("#editor-form").addEventListener("submit", (event) => { event.preventDefault(); saveVideo(false); });
     find("#editor-publish").addEventListener("click", () => saveVideo(true));
     find("#draft-keep").addEventListener("click", () => { studio.pendingAction = null; find("#draft-prompt").classList.add("hidden"); });
-    find("#draft-discard").addEventListener("click", () => { const action = studio.pendingAction; studio.pendingAction = null; find("#draft-prompt").classList.add("hidden"); if (studio.detail) { const values = JSON.parse(studio.baseline); find("#edit-title").value = values.title; find("#edit-description").value = values.description; find("#edit-tags").value = values.tags.join(", "); all('input[name="edit-visibility"]').forEach((radio) => { radio.checked = radio.value === values.visibility; }); updateState(); } action?.(); });
+    find("#draft-discard").addEventListener("click", () => { const action = studio.pendingAction; studio.pendingAction = null; find("#draft-prompt").classList.add("hidden"); if (studio.detail) { const values = JSON.parse(studio.baseline); find("#edit-title").value = values.title; find("#edit-description").value = values.description; setVideoTags(values); all('input[name="edit-visibility"]').forEach((radio) => { radio.checked = radio.value === values.visibility; }); updateState(); } action?.(); });
     find("#conflict-reload").addEventListener("click", reloadLatest);
     find("#edit-thumbnail-file").addEventListener("change", chooseThumbnail);
     find("#editor-thumb-preview").addEventListener("error", () => { find("#editor-thumb-preview").hidden = true; find("#editor-thumb-placeholder").hidden = false; });
@@ -971,7 +1166,7 @@
     });
     window.addEventListener("aida:tab-change", (event) => { if (event.detail.name !== "videos") closeFramePicker(); });
     document.addEventListener("visibilitychange", () => { if (document.hidden) closeFramePicker(); });
-    window.addEventListener("beforeunload", (event) => { if (!studio.dirty && !studio.busy) return; event.preventDefault(); event.returnValue = ""; });
+    window.addEventListener("beforeunload", (event) => { if (!studio.dirty && !studio.busy && !tagLibrary.managerDirty && !tagLibrary.busy) return; event.preventDefault(); event.returnValue = ""; });
     window.addEventListener("aida:encode-done", (event) => { if (event.detail.ok) openVideos(event.detail.video_id || null); });
     window.addEventListener("aida:open-videos", () => openVideos());
     all("textarea, .log, .overlay-scroll").forEach((scrollport) => installScrollbar(scrollport));
@@ -990,6 +1185,7 @@
 
   async function start() {
     if (liveEditor && !await checkSession()) return;
+    await loadTags();
     await loadLibrary(false);
     selectInitialVideo();
   }

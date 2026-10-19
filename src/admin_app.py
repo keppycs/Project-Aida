@@ -107,6 +107,7 @@ class PipelineIn(BaseModel):
     video_id: str = ""
     description: str = ""
     tags: str = ""
+    tagIds: list[str] | None = None
     visibility: str = VISIBILITY
     upload_to_b2: bool = UPLOAD_TO_B2
     gen_thumbnails: bool = GENERATE_THUMBNAILS
@@ -263,6 +264,7 @@ def _run_encode_job(body: PipelineIn) -> None:
             video_id=body.video_id.strip() or None,
             description=body.description.strip(),
             tags=body.tags.strip(),
+            tag_ids=body.tagIds,
             visibility=body.visibility,
             upload_to_b2=body.upload_to_b2,
             gen_thumbnails=body.gen_thumbnails,

@@ -266,6 +266,24 @@ class UploadTests(unittest.TestCase):
         self.assertEqual(b2.versions["index.json"][0], old_index)
         self.assertTrue(all(stream.closed for stream in b2.streams))
 
+    def test_registered_aliases_publish_registry_and_hydrate_existing_public_rows(self):
+        registry = {"version": 1, "tags": [
+            {"id": "game", "name": "Fixture Game", "aliases": ["Old game", "FG"]},
+            {"id": "unused", "name": "Unused owner tag", "aliases": []}], "redirects": {}}
+        (self.work / "tags.json").write_text(json.dumps(registry), encoding="utf-8")
+        metadata = self.entry(tags=["Old game"], tagIds=["game"])
+        other = self.entry("other", tags=["Old game"], tagIds=["game"])
+        b2 = FakeB2({"index.json": [other], "video/metadata.json": metadata})
+        result = self.publish(b2, [metadata])
+        self.assertEqual({entry["id"] for entry in result}, {"video", "other"})
+        for entry in result:
+            self.assertEqual(entry["tags"], ["Fixture Game"])
+            self.assertEqual([tag["id"] for tag in entry["tagDefinitions"]], ["game"])
+            self.assertEqual(entry["tagDefinitions"][0]["aliases"], ["Old game", "FG"])
+        self.assertIn("tags.json", b2.objects)
+        self.assertEqual(len(json.loads(b2.objects["tags.json"])["tags"]), 2)
+        self.assertTrue(all(stream.closed for stream in b2.streams))
+
     def test_new_upload_uses_metadata_and_local_index_only_fields(self):
         b2 = FakeB2({"index.json": [], "new/metadata.json": self.entry("new", title="Fresh upload")})
         result = self.publish(b2, [self.entry("new", title="Stale title", tags=["new tag"], hdr=True,
@@ -289,6 +307,16 @@ class UploadTests(unittest.TestCase):
         self.assertNotIn("title", result[0])
         self.assertNotIn("description", result[0])
         self.assertEqual(result[0]["tags"], [])
+
+    def test_explicit_legacy_tags_do_not_restore_stale_remote_master_assignments(self):
+        stale = self.entry(tags=["Old game"], tagIds=["old"], tagDefinitions=[{"id": "old", "name": "Old game", "aliases": []}])
+        for names in ([], ["Replacement"]):
+            with self.subTest(names=names):
+                b2 = FakeB2({"index.json": [stale], "video/metadata.json": self.entry(tags=names)})
+                result = self.publish(b2, [stale])[0]
+                self.assertEqual(result["tags"], names)
+                self.assertNotIn("tagIds", result)
+                self.assertNotIn("tagDefinitions", result)
 
     def test_local_candidates_without_uploaded_metadata_are_omitted(self):
         b2 = FakeB2({"index.json": [self.entry()]})

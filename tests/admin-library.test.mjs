@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { AdminLibraryService, stableJSON, validateVariants } from '../edge/admin-library.mjs';
 import { AdminProblem, digest } from '../edge/admin-b2.mjs';
 import { createHandler } from '../edge/cdn-worker.mjs';
+import { legacyTagId } from '../web/js/tags.js';
 
 const clone = value => value === undefined ? undefined : structuredClone(value);
 class MemoryStorage {
@@ -62,11 +63,108 @@ function anonymousMetadata(store, legacy) {
   const handler = createHandler({ fetcher: async input => {
     const url = new URL(String(input));
     if (url.href === 'https://api.backblazeb2.com/b2api/v2/b2_authorize_account') return Response.json({ downloadUrl: 'https://f003.backblazeb2.com', authorizationToken: 'fake-read-token', allowed: { bucketName: 'ProjectAida', capabilities: ['readFiles'] } });
+    if (url.href === 'https://f003.backblazeb2.com/file/ProjectAida/tags.json') return store.data.has('tags.json') ? Response.json(store.data.get('tags.json')) : new Response(null, { status: 404 });
     assert.equal(url.href, 'https://f003.backblazeb2.com/file/ProjectAida/video120/metadata.json');
     return Response.json(store.data.get('video120/metadata.json'));
   } });
   return () => handler(new Request('https://cdn.keppy.dev/file/ProjectAida/video120/metadata.json'), { B2_KEY_ID: 'fake', B2_SECRET_KEY: 'fake', LEGACY_VISIBILITY: JSON.stringify(legacy) });
 }
+
+test('tag registry creates aliases, renames stable identities, and replays an operation without another version', async () => {
+  const f = fixture(), before = await (await f.request('tags')).json();
+  assert.equal(before.version, 1); assert.equal(before.tags[0].id, legacyTagId('120'));
+  const body = { revision: before.revision, tag: { name: 'Counter-Strike 2', aliases: ['CS2'] }, operation_id: operation() };
+  const created = await (await f.request('tags', body)).json(), tag = created.tags.find(tag => tag.name === 'Counter-Strike 2');
+  assert.ok(tag.id.startsWith('tag-')); assert.deepEqual(tag.aliases, ['CS2']);
+  assert.deepEqual(await (await f.request('tags', body)).json(), created);
+  assert.equal(f.store.calls.filter(([, key]) => key === 'tags.json').length, 1);
+  assert.equal((await f.request('tags', { ...body, tag: { name: 'Different', aliases: [] } })).status, 409);
+  const published = await (await f.edit({ tagIds: [tag.id], tags: ['CS2'], publish: true })).json();
+  assert.deepEqual(published.tags, ['Counter-Strike 2']); assert.deepEqual(published.tagIds, [tag.id]);
+  const raw = clone(f.store.data.get('video120/metadata.json')), revision = published.revision;
+  const renamed = await (await f.request('tags', { revision: created.revision, tag: { id: tag.id, name: 'CS Two', aliases: ['CS2'] }, operation_id: operation() })).json();
+  assert.deepEqual((await f.read()).tags, ['CS Two']); assert.deepEqual(f.store.data.get('video120/metadata.json'), raw);
+  assert.equal((await f.read()).revision, revision, 'global tag edits do not stale a video form');
+  assert.deepEqual(renamed.tags.find(item => item.id === tag.id).aliases, ['CS2', 'Counter-Strike 2']);
+  assert.equal(f.store.data.get('tags.json').version, 1); assert.ok(f.store.versions.size >= 3);
+});
+
+test('tag list stale edits and alias collisions preserve the registry; merges redirect previous assignments', async () => {
+  const f = fixture(), initial = await (await f.request('tags')).json();
+  const first = await (await f.request('tags', { revision: initial.revision, tag: { name: 'Counter-Strike 2', aliases: ['CS2'] }, operation_id: operation() })).json();
+  const game = first.tags.find(tag => tag.name === 'Counter-Strike 2'), source = first.tags.find(tag => tag.name === '120');
+  assert.equal((await f.request('tags', { revision: initial.revision, tag: { name: 'Other', aliases: [] }, operation_id: operation() })).status, 409);
+  assert.equal((await f.request('tags', { revision: first.revision, tag: { name: 'Different', aliases: ['cs2'] }, operation_id: operation() })).status, 400);
+  assert.equal((await f.request('tags', { revision: first.revision, tag: { name: 'Different', aliases: 'CS2' }, operation_id: operation() })).status, 400);
+  assert.equal(f.store.calls.length, 1);
+  const merged = await (await f.request('tags', { revision: first.revision, merge: { source: source.id, target: game.id }, operation_id: operation() })).json();
+  assert.equal(merged.redirects[source.id], game.id);
+  assert.deepEqual((await f.read()).tagIds, [game.id]); assert.deepEqual((await f.read()).tags, ['Counter-Strike 2']);
+  assert.equal(merged.tags.some(tag => tag.id === source.id), false);
+});
+
+test('tag journal survives storage failure and resumes the same operation after a durable object restart', async () => {
+  const f = fixture(), initial = await (await f.request('tags')).json();
+  const body = { revision: initial.revision, tag: { name: 'Funny', aliases: [] }, operation_id: operation() };
+  f.store.fail = 'tags.json'; assert.equal((await f.request('tags', body)).status, 503);
+  assert.equal(f.store.data.has('tags.json'), false); assert.equal((await f.storage.get('journal')).action, 'tags');
+  const response = await f.request('tags', body, owner, f.create()); assert.equal(response.status, 200);
+  assert.ok((await response.json()).tags.some(tag => tag.name === 'Funny'));
+  assert.equal(await f.storage.get('journal'), undefined);
+});
+
+test('missing tag registry supports legacy edits, while invalid or unavailable registries block saving without losing tags', async () => {
+  const f = fixture();
+  const saved = await (await f.edit({ tags: ['Brand-new tag'], publish: true })).json();
+  assert.deepEqual(saved.tags, ['Brand-new tag']); assert.deepEqual(saved.tagIds, [legacyTagId('Brand-new tag')]);
+  const revision = saved.revision, previous = clone(f.store.data.get('video120/metadata.json'));
+  f.store.data.set('tags.json', { version: 7, tags: [] });
+  assert.equal((await f.request('videos/video120', { revision, title: 'Keep the draft', operation_id: operation() })).status, 502);
+  assert.deepEqual(f.store.data.get('video120/metadata.json'), previous);
+  const read = f.store.readJson.bind(f.store);
+  f.store.readJson = key => key === 'tags.json' ? Promise.reject(new Error('offline')) : read(key);
+  assert.equal((await f.request('videos/video120', { revision, title: 'Keep the draft', operation_id: operation() })).status, 503);
+  assert.deepEqual(f.store.data.get('video120/metadata.json'), previous);
+});
+
+test('unknown tag IDs and unauthorized registry operations fail before writes', async () => {
+  const f = fixture(), tags = await (await f.request('tags')).json();
+  assert.equal((await f.edit({ tagIds: ['unknown'], tags: [] })).status, 400);
+  assert.equal((await f.edit({ tagIds: ['bad\n'], tags: [] })).status, 400);
+  assert.equal((await f.request('tags', { revision: tags.revision, tag: { name: 'Funny', aliases: [] }, operation_id: operation() }, null)).status, 403);
+  assert.equal(f.store.calls.length, 0);
+});
+
+test('metadata string-tag removal is authoritative over stale indexed canonical tag IDs', async () => {
+  const f = fixture(meta({ tags: [] }));
+  f.store.data.set('index.json', [{ ...meta(), tagIds: ['old'] }]);
+  f.store.data.set('tags.json', { version: 1, tags: [{ id: 'old', name: '120', aliases: [] }], redirects: {} });
+  const view = await f.read(); assert.deepEqual(view.tags, []); assert.deepEqual(view.tagIds, []);
+});
+
+test('merge preserves redirects for opaque IDs matching Object prototype property names', async () => {
+  const f = fixture(meta({ tagIds: ['__proto__'], tags: ['First'] }));
+  f.store.data.set('tags.json', { version: 1, tags: [{ id: '__proto__', name: 'First', aliases: [] }, { id: 'constructor', name: 'Second', aliases: [] }], redirects: {} });
+  const current = await (await f.request('tags')).json();
+  const result = await f.request('tags', { revision: current.revision, merge: { source: '__proto__', target: 'constructor' }, operation_id: operation() });
+  assert.equal(result.status, 200); const merged = await result.json();
+  assert.equal(Object.hasOwn(merged.redirects, '__proto__'), true); assert.equal(merged.redirects.__proto__, 'constructor');
+  assert.deepEqual((await f.read()).tagIds, ['constructor']); assert.deepEqual((await f.read()).tags, ['Second']);
+});
+
+test('first shared save can rename an unindexed legacy tag through its original-name alias', async () => {
+  for (const visibility of ['private', 'unlisted']) {
+    const f = fixture(meta({ visibility, tags: ['Original'] }));
+    const identity = legacyTagId('Original'), before = await (await f.request('tags')).json();
+    assert.equal(before.tags.some(tag => tag.id === identity), false);
+    const response = await f.request('tags', { revision: before.revision, tag: { id: identity, name: 'Current name', aliases: ['Original'] }, operation_id: operation() });
+    assert.equal(response.status, 200);
+    assert.deepEqual((await f.read()).tags, ['Current name']); assert.deepEqual((await f.read()).tagIds, [identity]);
+    const latest = await response.json();
+    assert.equal((await f.request('tags', { revision: latest.revision, tag: { id: 'unknown-canonical', name: 'Other', aliases: ['Original'] }, operation_id: operation() })).status, 400);
+    assert.deepEqual(f.store.data.get('video120/metadata.json').tags, ['Original']);
+  }
+});
 
 test('owner reads preserve technical fields and require review for unsafe visibility', async () => {
   const f = fixture(meta({ id: 'historical-id', visibility: 'garbage' }));

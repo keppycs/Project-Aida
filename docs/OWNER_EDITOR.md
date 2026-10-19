@@ -8,6 +8,48 @@ an existing video frame. A draft does not change the public video.
 When applying these changes, deploy both the Worker and static website, then
 validate the live system. Local checks alone do not establish a completed rollout.
 
+## Master tags and search
+
+The tag picker searches existing master names and aliases. Pick a suggestion,
+create a tag, or remove a selected tag. Common suggestions are ranked by the
+number of videos using each tag; Aida does not collect viewer searches for this.
+
+Each master tag has a stable ID, one display name and optional aliases. For
+example, a `Counter-Strike 2` tag can have `CS2` as an alias. Edit the shared tag
+definition once to update how all assigned videos are found. Renaming retains
+the old name as an alias. Merging keeps old IDs pointing to the selected
+destination; it does not combine different games automatically. Names and
+aliases cannot belong to two different master tags. Older string tags remain
+available without rewriting video files just to open the editor.
+
+Shared tag saves are separate from video draft saves. With the central writer,
+saving a master definition updates that shared registry immediately. Without
+the central writer, local definitions reach the website during an explicit
+video publication. Offline reads use the local cache; an unreachable central
+writer never gets replaced by that cached copy. Stale tag edits require review.
+
+The private bucket's `tags.json` is not a public endpoint. The CDN includes only
+the definitions attached to each authorized video or public catalogue entry.
+Deploy the updated owner editor, CDN Worker and website together for the full
+feature. Building or testing these files does not publish them.
+
+Public search combines words across titles, descriptions and tags. Quotes match
+a phrase, `-word` excludes a matching term, and `tag:CS2` / `-tag:CS2` include or
+exclude an exact master tag through its name or alias. Multiword tag values can
+be quoted, such as `-tag:"Lethal Company"`. Case and common punctuation are
+normalized; numbers, `+` and `#` remain meaningful. Date, frame-rate and HDR
+operators are not implemented. A search hides the latest-video hero, and video
+links preserve its query for **Back to videos**. Direct video links without a
+query return to the full collection.
+
+Check the shared rules and synthetic UI flows with:
+
+```text
+node --test tests/tags.test.mjs tests/search.test.mjs
+node tests/search.browser.mjs
+node tests/admin-studio.browser.mjs --tag-system-only
+```
+
 ## Authentication
 
 Protect `/edit` and all its child paths with one Cloudflare Access application.

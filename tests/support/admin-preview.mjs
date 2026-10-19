@@ -2,6 +2,7 @@ import { createServer } from "node:http";
 import { readFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { normalizeRegistry, registryFromVideos } from "../../web/js/tags.js";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 export const STUDIO_TOKEN = "synthetic-studio-session";
@@ -100,12 +101,17 @@ export async function makeFrameFixture(page, origin) {
 
 // All metadata, credentials, source paths and decoded media here are synthetic.
 // The fixture reads only the admin source files and never contacts B2/CDN.
-export async function startAdminPreview() {
+export async function startAdminPreview({ live = false, noPreview = false } = {}) {
   const records = new Map(Array.from({ length: 28 }, (_, index) => {
     const id = `studio-${String(index).padStart(3, "0")}`;
     return [id, { id, title: index === 0 ? "120 fps motion study" : `Motion study ${index + 1}`, description: "First line.\nSecond line.", tags: ["motion", "120 fps"], frameRate: index === 1 ? 60 : index === 2 ? undefined : 120, visibility: index === 0 ? "public" : "private", revision: "r1", local: true, uploaded: true, pending: false, remoteChecked: true, remoteChanged: false, has_local: true, has_remote: true, can_preview: true, preview_url: `/preview/watch.html?v=${id}&local=1&private=1`, thumbnail_url: `/api/video-media/${id}/thumbnail_sdr.webp?revision=r1`, createdAt: 1000 - index }];
   }));
-  const state = { requests: [], nextListError: false, nextMutation: null, held: null, frameClip: null };
+  if (live || noPreview) for (const record of records.values()) { if (live) record.preview_url = record.preview_url.replace("/preview/", "/edit/preview/"); if (noPreview) record.can_preview = false; }
+  const initialTags = registryFromVideos([...records.values()]);
+  initialTags.tags.push({ id: "cs2", name: "Counter-Strike 2", aliases: ["CS2"] }, { id: "csgo", name: "Counter-Strike: Global Offensive", aliases: ["CSGO"] }, { id: "edited", name: "edited", aliases: [] }, { id: "owner", name: "owner", aliases: [] }, { id: "constructor", name: "Constructor arena", aliases: [] });
+  // This private-only legacy tag is absent from the public registry snapshot.
+  records.get(SECOND_VIDEO).tags.push("Private-only legacy");
+  const state = { requests: [], nextListError: false, nextMutation: null, held: null, frameClip: null, registry: { ...initialTags, revision: "t1" }, nextTagMutation: null, authenticated: true, tagOperations: new Map() };
   const detailHolds = new Map();
   const holdDetail = (id, search, override = {}, { updateRecord = false } = {}) => {
     let markStarted, release, markFinished;
@@ -154,7 +160,34 @@ export async function startAdminPreview() {
         body = JSON.parse(Buffer.concat(chunks).toString() || "{}");
       }
       state.requests.push({ method: request.method, path: url.pathname, search: url.search, headers: { session: request.headers["x-aida-session"] || "" }, body });
-      if (request.method === "POST" && request.headers["x-aida-session"] !== STUDIO_TOKEN) return send(response, 403, { detail: "Missing fixture session." });
+      if (url.pathname.startsWith("/edit/api/")) {
+        if (!state.authenticated) return send(response, 401, { detail: "Synthetic sign-in expired." });
+        if (request.method === "POST" && request.headers["x-aida-editor"] !== "1") return send(response, 403, { detail: "Missing editor header." });
+        url.pathname = url.pathname.replace("/edit/api/", "/api/");
+      } else if (request.method === "POST" && request.headers["x-aida-session"] !== STUDIO_TOKEN) return send(response, 403, { detail: "Missing fixture session." });
+      if (url.pathname === "/api/session") return send(response, 200, { authenticated: state.authenticated });
+      if (url.pathname === "/api/tags") {
+        if (request.method === "GET") return send(response, 200, state.registry);
+        if (state.tagOperations.has(body.operation_id)) return send(response, 200, state.tagOperations.get(body.operation_id));
+        if (state.nextTagMutation === "conflict") { state.nextTagMutation = null; state.registry.revision = `t${Number(state.registry.revision.slice(1)) + 1}`; return send(response, 409, { detail: "Tag library changed.", current: state.registry }); }
+        if (body.revision !== state.registry.revision) return send(response, 409, { detail: "Tag library changed.", current: state.registry });
+        const next = copy(state.registry);
+        if (body.merge) {
+          const source = next.tags.find(tag => tag.id === body.merge.source), target = next.tags.find(tag => tag.id === body.merge.target);
+          if (!source || !target || source === target) return send(response, 400, { detail: "Choose different tags." });
+          target.aliases.push(source.name, ...source.aliases);
+          next.tags = next.tags.filter(tag => tag !== source); next.redirects[source.id] = target.id;
+        } else {
+          const tag = { id: body.tag.id || `fixture-${next.tags.length}`, name: body.tag.name, aliases: body.tag.aliases };
+          const index = next.tags.findIndex(value => value.id === tag.id);
+          if (index < 0) next.tags.push(tag); else next.tags[index] = tag;
+        }
+        try { state.registry = { ...normalizeRegistry(next), revision: `t${Number(state.registry.revision.slice(1)) + 1}` }; }
+        catch (error) { return send(response, 400, { detail: error.message }); }
+        state.tagOperations.set(body.operation_id, copy(state.registry));
+        if (state.nextTagMutation === "after-commit") { state.nextTagMutation = null; return send(response, 503, { detail: "Synthetic tag save failed. Try again.", operation_id: body.operation_id }); }
+        return send(response, 200, state.registry);
+      }
       if (url.pathname === "/api/events") { response.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-store" }); response.write(": fixture connected\n\n"); eventStreams.add(response); response.once("close", () => eventStreams.delete(response)); return; }
       if (url.pathname === "/api/defaults") return send(response, 200, { gen_thumbnails: true, upload_to_b2: false, delete_after_upload: false, fast_transcode: true, visibility: "private", visibilities: ["public", "unlisted", "private"] });
       if (url.pathname === "/api/credentials" && request.method === "GET") return send(response, 200, { key_id: "fixture-key", app_key: "", bucket: "fixture-bucket", endpoint: "fixture.invalid", configured: true });
@@ -163,6 +196,7 @@ export async function startAdminPreview() {
       if (url.pathname === "/api/probe") return send(response, 200, { width: 2560, height: 1440, fps: 120, duration: 10, source_codec: "hevc", is_hdr: false });
       if (url.pathname === "/api/pipeline") {
         const record = { ...view(FIRST_VIDEO), id: NEW_VIDEO, title: body.title || "New local upload", description: body.description || "", tags: [], visibility: body.visibility, revision: "r1", has_remote: false, uploaded: false, pending: true, remoteChanged: false, preview_url: `/preview/watch.html?v=${NEW_VIDEO}&local=1&private=1`, thumbnail_url: `/api/video-media/${NEW_VIDEO}/thumbnail_sdr.webp?revision=r1` };
+        delete record.tagIds;
         records.set(NEW_VIDEO, record);
         send(response, 200, { video_id: NEW_VIDEO });
         emit({ type: "encode_start" });
@@ -190,6 +224,7 @@ export async function startAdminPreview() {
         if (body.revision !== record.revision) return send(response, 409, { detail: "This saved version changed. Review it first.", current: view(id) });
         if (match[2] === "/reload") {
           Object.assign(record, { title: "Online version to review", description: "Fresh online description.", tags: ["online"], visibility: "public", pending: false, remoteChanged: false });
+          delete record.tagIds;
           bump(record);
           return send(response, 200, view(id));
         }
@@ -206,6 +241,7 @@ export async function startAdminPreview() {
           return send(response, 409, { detail: "This saved version changed. Review it first.", current: view(id) });
         }
         for (const field of ["title", "description", "tags", "visibility"]) record[field] = copy(body[field]);
+        if (Array.isArray(body.tagIds)) record.tagIds = copy(body.tagIds); else delete record.tagIds;
         record.pending = !body.publish;
         bump(record);
         if (failure === "publish") {
@@ -237,9 +273,9 @@ export async function startAdminPreview() {
         html = html.replace("</body>", `<script>document.querySelector("#video").addEventListener("loadedmetadata",()=>{document.querySelector("#watch-title").textContent="Synthetic120fps video preview";const description=document.querySelector("#watch-description");description.textContent="240 distinct synthetic frames, encoded at120fps for local decoder verification. ".repeat(8);description.hidden=false;});</script></body>`);
         return send(response, 200, html, "text/html; charset=utf-8");
       }
-      const previewAssets = { "/preview/css/site.css": "css/site.css", "/preview/css/player.css": "css/player.css", "/preview/css/player-mobile.css": "css/player-mobile.css", "/preview/css/watch.css": "css/watch.css", "/preview/assets/favicons/flushed.svg": "assets/favicons/flushed.svg" };
-      if (previewAssets[url.pathname]) return send(response, 200, await readFile(resolve(ROOT, "web", previewAssets[url.pathname])), url.pathname.endsWith(".css") ? "text/css; charset=utf-8" : "image/svg+xml");
-      const staticFiles = { "/": "index.html", "/edit": "index.html", "/static/admin.css": "admin.css", "/static/admin.js": "admin.js", "/static/editor.js": "editor.js" };
+      const previewAssets = { "/preview/js/tags.js": "js/tags.js", "/edit/preview/js/tags.js": "js/tags.js", "/preview/css/site.css": "css/site.css", "/preview/css/player.css": "css/player.css", "/preview/css/player-mobile.css": "css/player-mobile.css", "/preview/css/watch.css": "css/watch.css", "/preview/assets/favicons/flushed.svg": "assets/favicons/flushed.svg" };
+      if (previewAssets[url.pathname]) return send(response, 200, await readFile(resolve(ROOT, "web", previewAssets[url.pathname])), url.pathname.endsWith(".js") ? "text/javascript; charset=utf-8" : url.pathname.endsWith(".css") ? "text/css; charset=utf-8" : "image/svg+xml");
+      const staticFiles = { "/": "index.html", "/edit": live ? "live.html" : "index.html", "/edit/assets/admin.css": "admin.css", "/edit/assets/editor.js": "editor.js", "/static/admin.css": "admin.css", "/static/admin.js": "admin.js", "/static/editor.js": "editor.js" };
       const name = staticFiles[url.pathname];
       if (name) {
         let content = await readFile(resolve(ROOT, "admin", name));

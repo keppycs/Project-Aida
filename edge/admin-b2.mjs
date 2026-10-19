@@ -13,7 +13,7 @@ export const CATALOG_LIMIT = 1_000_000;
 const AUTH = "https://api.backblazeb2.com/b2api/v2/b2_authorize_account";
 const encoder = new TextEncoder();
 function storageKey(key, { write = false } = {}) {
-  if (key === "index.json") return key;
+  if (key === "index.json" || key === "tags.json") return key;
   if (typeof key !== "string" || key.length > 512) throw new AdminProblem(400, "Invalid storage path.");
   const parts = key.split("/");
   if (parts.length === 2 && VIDEO_ID.test(parts[0]) && (parts[1] === "metadata.json" || THUMBNAILS.has(parts[1]))) return key;

@@ -49,3 +49,21 @@ test("local and pre-pagination catalogues retain the existing array format", asy
   t.mock.method(globalThis, "fetch", async () => Response.json([{ id: "public", visibility: "public" }, { id: "private", visibility: "private" }]));
   assert.deepEqual((await fetchCatalog({ local: true })).map(video => video.id), ["public"]);
 });
+
+test("local previews read shared aliases without resaving each video", async t => {
+  t.mock.method(globalThis, "fetch", async url => String(url).endsWith("tags.json")
+    ? Response.json({ version: 1, tags: [{ id: "game", name: "Current game name", aliases: ["Old game", "CG"] }], redirects: {} })
+    : Response.json([{ id: "clip", tags: ["Old game"], tagIds: ["game"], visibility: "public" }]));
+  const [video] = await fetchCatalog({ local: true });
+  assert.deepEqual(video.tags, ["Current game name"]);
+  assert.deepEqual(video.tagDefinitions[0].aliases, ["Old game", "CG"]);
+});
+
+test("older local previews allow an absent registry but report failed reads", async t => {
+  const catalog = [{ id: "clip", tags: ["Legacy game"], visibility: "public" }];
+  let status = 404;
+  t.mock.method(globalThis, "fetch", async url => String(url).endsWith("tags.json") ? new Response("", { status }) : Response.json(catalog));
+  assert.deepEqual(await fetchCatalog({ local: true }), catalog);
+  status = 503;
+  await assert.rejects(fetchCatalog({ local: true }), /Local tag list/);
+});

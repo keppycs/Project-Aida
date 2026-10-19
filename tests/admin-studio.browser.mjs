@@ -17,6 +17,7 @@ process.env.TEMP = process.env.TMP = artifacts;
 process.env.PLAYWRIGHT_BROWSERS_PATH = resolve(dirname(executablePath), "../..");
 const requested = process.argv.find(argument => argument.startsWith("--profile="))?.split("=")[1];
 const navigationOnly = process.argv.includes("--frame-navigation-only");
+const tagsOnly = process.argv.includes("--tag-system-only");
 const profiles = [
   { name: "classic-desktop", mode: "classic", width: 1440, height: 900 },
   { name: "overlay-desktop", mode: "overlay", width: 1440, height: 900 },
@@ -30,6 +31,149 @@ let frameClip;
 const painted = page => page.evaluate(() => new Promise(resolvePaint => requestAnimationFrame(() => requestAnimationFrame(resolvePaint))));
 const waitText = (page, selector, text) => page.waitForFunction(({ selector, text }) => document.querySelector(selector)?.textContent.includes(text), { selector, text });
 const countPOST = fixture => fixture.state.requests.filter(request => request.method === "POST").length;
+
+async function tagSystem(page, fixture, live) {
+  const tagPosts = () => fixture.state.requests.filter(request => request.method === "POST" && request.path.endsWith("/api/tags"));
+  const failedHelper = route => route.abort("failed");
+  await page.route("**/preview/js/tags.js*", failedHelper);
+  await page.goto(`${fixture.origin}/edit?v=${FIRST_VIDEO}`);
+  await page.locator("#video-editor").waitFor({ state: "visible" });
+  await waitText(page, "#tag-status", "Existing video tags are kept");
+  assert.equal(await page.locator("#tag-create").isDisabled(), true, "Missing normalization helper must disable shared tag edits");
+  await page.locator("#edit-title").fill("Keep the recovery draft");
+  await page.unroute("**/preview/js/tags.js*", failedHelper);
+  await page.locator("#tag-reload").click();
+  await page.waitForFunction(() => !document.querySelector("#tag-create").disabled);
+  assert.equal(await page.locator("#edit-title").inputValue(), "Keep the recovery draft", "Retrying the tag helper must retain video input");
+  await page.locator("#edit-title").fill("120 fps motion study");
+  assert.equal(await page.locator("#editor-save").isDisabled(), true, "Loading canonical identities must not dirty a video");
+  await page.locator("#tag-search").fill("private-only");
+  assert.equal(await page.locator("#tag-suggestions button").first().textContent(), "Private-only legacy1 videos", "Private and unlisted legacy tags must be suggested without saving a registry first");
+  await page.locator("#tag-create").click();
+  const privateID = await page.locator("#tag-manage-select option").filter({ hasText: "Private-only legacy" }).getAttribute("value");
+  await page.locator("#tag-manage-select").selectOption(privateID);
+  await page.locator("#tag-name").fill("Renamed private game");
+  await page.locator("#tag-aliases").fill("RPG");
+  await page.locator("#tag-save").click();
+  await waitText(page, "#tag-manager-status", "Shared tag saved");
+  const privateSave = tagPosts().at(-1).body;
+  assert.equal(privateSave.tag.id, privateID);
+  assert.ok(privateSave.tag.aliases.includes("Private-only legacy"), "First shared save keeps the original legacy identity when renaming");
+  await page.locator("#tag-aliases").fill("RPG");
+  await page.locator("#tag-save").click();
+  await waitText(page, "#tag-manager-status", "Shared tag saved");
+  await page.locator("#tag-manage-select").selectOption("");
+  await page.locator("#tag-name").fill("Private-only legacy");
+  await page.locator("#tag-aliases").fill("");
+  await page.locator("#tag-save").click();
+  await waitText(page, "#tag-manager-status", "Shared tag saved");
+  await page.locator("#tag-search").fill("Private-only legacy");
+  assert.equal(await page.locator("#tag-suggestions button").first().textContent(), "Private-only legacy0 videos", "A reused legacy name must not inherit usage from the untouched raw-only catalogue list");
+  await page.locator("#tag-search").fill("Renamed private game");
+  assert.equal(await page.locator("#tag-suggestions button").first().textContent(), "Renamed private game1 videos", "The renamed legacy identity retains its original catalogue usage");
+  await page.locator("#tag-create").click();
+  await page.locator("#tag-search").fill("constructor arena");
+  await page.locator("#tag-search").press("Enter");
+  await page.locator('#selected-tags button[aria-label="Remove Constructor arena tag"]').click();
+  assert.equal(await page.locator("#selected-tags button").last().evaluate(button => document.activeElement === button), true, "Removing a chip keeps keyboard focus on a remaining chip");
+  await page.locator("#edit-title").fill("Keep this unsaved title through tag edits");
+  const initialPosts = countPOST(fixture);
+  await page.locator("#tag-search").fill("cs2");
+  assert.equal(await page.locator("#tag-suggestions button").first().textContent(), "Counter-Strike 2Alias: CS2");
+  await page.locator("#tag-search").press("Enter");
+  assert.equal(countPOST(fixture), initialPosts, "Autocomplete and selecting tags must not save");
+  await page.locator('#selected-tags button[aria-label="Remove Counter-Strike 2 tag"]').waitFor();
+  await page.locator("#tag-create").click();
+  await page.locator("#tag-manage-select").selectOption("cs2");
+  await page.locator("#tag-aliases").fill("CS2, motion");
+  const tagSavesBeforeCollision = tagPosts().length;
+  await page.locator("#tag-save").click();
+  await waitText(page, "#tag-manager-status", "belongs to motion");
+  assert.equal(tagPosts().length, tagSavesBeforeCollision, "Alias collisions should be explained before a mutation");
+  await page.locator("#tag-name").fill("Counter Strike 2");
+  await page.locator("#tag-aliases").fill("CS2, Counterstrike 2");
+  fixture.state.nextTagMutation = "after-commit";
+  await page.locator("#tag-save").click();
+  await waitText(page, "#tag-manager-status", "Synthetic tag save failed");
+  assert.equal(await page.locator("#tag-aliases").inputValue(), "CS2, Counterstrike 2");
+  const failed = tagPosts().at(-1);
+  await page.locator("#tag-save").click();
+  await waitText(page, "#tag-manager-status", "Shared tag saved");
+  assert.deepEqual(tagPosts().at(-1).body, failed.body, "A failed response must retry its exact operation and revision");
+  assert.equal(await page.locator("#edit-title").inputValue(), "Keep this unsaved title through tag edits");
+  await page.locator('#selected-tags button[aria-label="Remove Counter Strike 2 tag"]').waitFor();
+
+  await page.locator("#tag-manage-select").selectOption("");
+  await page.locator("#tag-name").fill("Tactical shooters");
+  await page.locator("#tag-aliases").fill("Tactics");
+  await page.locator("#tag-save").click();
+  await waitText(page, "#tag-manager-status", "Shared tag saved");
+  assert.ok(fixture.state.registry.tags.some(tag => tag.name === "Tactical shooters"));
+  assert.equal(await page.locator('#selected-tags button[aria-label="Remove Tactical shooters tag"]').count(), 0, "Saving a shared tag is separate from assigning it to a video");
+  await page.locator("#tag-manage-select").selectOption("cs2");
+  await page.locator("#tag-aliases").fill("CS2, Counterstrike 2, Competitive");
+  fixture.state.nextTagMutation = "conflict";
+  await page.locator("#tag-save").click();
+  await waitText(page, "#tag-manager-status", "library changed");
+  await page.locator("#tag-reload").click();
+  await page.waitForFunction(() => !document.querySelector("#tag-reload").disabled);
+  assert.equal(await page.locator("#tag-aliases").inputValue(), "CS2, Counterstrike 2, Competitive", "Conflict recovery must retain manager input");
+  await page.locator("#tag-save").click();
+  await waitText(page, "#tag-manager-status", "Shared tag saved");
+  await page.locator("#tag-manage-select").selectOption("csgo");
+  await page.locator("#tag-merge-target").selectOption("cs2");
+  await page.locator("#tag-merge").click();
+  await waitText(page, "#tag-manager-status", "merged across");
+  assert.equal(fixture.state.registry.redirects.csgo, "cs2");
+  await page.locator('#selected-tags button[aria-label="Remove Counter Strike 2 tag"]').click();
+  await page.locator("#tag-search").fill("csgo");
+  await page.locator("#tag-search").press("ArrowDown");
+  assert.equal(await page.locator('#tag-suggestions button[data-tag-id="cs2"]').evaluate(button => document.activeElement === button), true);
+  await page.keyboard.press("Enter");
+  await page.locator("#editor-save").click();
+  await waitText(page, "#editor-save-state", "website unchanged");
+  const saved = fixture.state.requests.filter(request => request.method === "POST" && request.path.endsWith(`/videos/${FIRST_VIDEO}`)).at(-1).body;
+  assert.equal(saved.title, "Keep this unsaved title through tag edits");
+  assert.ok(saved.tagIds.includes("cs2"));
+  assert.deepEqual(saved.tags, ["motion", "120 fps", "Counter Strike 2"]);
+
+  if (live) {
+    await page.locator("#tag-aliases").fill("CS2, Counterstrike 2, Competitive, CSGO");
+    fixture.state.authenticated = false;
+    await page.locator("#tag-save").click();
+    await page.locator("#auth-notice").waitFor({ state: "visible" });
+    const beforeRecovery = countPOST(fixture);
+    fixture.state.authenticated = true;
+    await page.locator("#auth-retry").click();
+    await page.locator("#auth-notice").waitFor({ state: "hidden" });
+    await page.waitForFunction(() => !document.querySelector("#tag-save").disabled);
+    assert.equal(countPOST(fixture), beforeRecovery, "Signing in must not retry tag mutations automatically");
+    assert.equal(await page.locator("#tag-aliases").inputValue(), "CS2, Counterstrike 2, Competitive, CSGO");
+    await page.locator("#tag-save").click();
+    await waitText(page, "#tag-manager-status", "Shared tag saved");
+  }
+  await noOverflow(page, `${live ? "live" : "local"} tags`);
+  await controlPresentation(page);
+  for (const selector of ["#tag-search", "#tag-name", "#tag-save"]) await focusPresentation(page, selector);
+}
+
+async function runTagSystems() {
+  for (const profile of profiles) for (const live of [false, true]) {
+    const fixture = await startAdminPreview({ live, noPreview: true });
+    const browser = await chromium.launch({ executablePath, headless: true });
+    try {
+      const context = await browser.newContext({ viewport: { width: profile.width, height: profile.height }, hasTouch: Boolean(profile.touch), isMobile: Boolean(profile.touch) });
+      const page = await context.newPage(), errors = [];
+      page.on("pageerror", error => errors.push(error.message));
+      await context.route("**/*", route => new URL(route.request().url()).origin === fixture.origin ? route.continue() : route.abort());
+      await tagSystem(page, fixture, live);
+      assert.deepEqual(errors, []);
+      await page.screenshot({ path: resolve(artifacts, `${profile.name}-${live ? "live" : "local"}-tags.png`), fullPage: true });
+      await page.locator(".tag-editor").screenshot({ path: resolve(artifacts, `${profile.name}-${live ? "live" : "local"}-tag-editor.png`) });
+      console.log(`PASS ${profile.name} ${live ? "live" : "local"} tag system`);
+    } finally { await browser.close(); await fixture.close(); }
+  }
+}
 
 async function noOverflow(page, label) {
   const geometry = await page.evaluate(() => ({ viewport: innerWidth, client: document.documentElement.clientWidth, scroll: document.documentElement.scrollWidth }));
@@ -644,7 +788,8 @@ async function workflow(page, fixture) {
 
   await page.locator("#edit-title").fill("Edited locally at 120 fps");
   await page.locator("#edit-description").fill("Line one.\nLine two, preserved.");
-  await page.locator("#edit-tags").fill("motion, 120 fps, edited");
+  await page.locator("#tag-search").fill("edited");
+  await page.locator('#tag-suggestions button[data-tag-id="edited"]').click();
   await page.locator('input[name="edit-visibility"][value="unlisted"]').check();
   const draftURL = page.url();
   await page.locator(`.video-row[data-id="${SECOND_VIDEO}"]`).click();
@@ -840,7 +985,8 @@ async function scrolling(page, profile) {
 }
 
 console.log(`Studio browser artifacts: ${artifacts}`);
-try {
+if (tagsOnly) await runTagSystems();
+else try {
   for (const profile of profiles) {
     const fixture = await startAdminPreview();
     let browser;

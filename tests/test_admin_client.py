@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 from email.message import Message
 from hashlib import md5, sha256
 import json
+import re
 from pathlib import Path
 import sys
 import tempfile
@@ -179,6 +180,29 @@ class AdminClientTests(unittest.TestCase):
         payload = json.loads(opener.requests[0][0].data)
         self.assertNotIn("variants", payload)
         self.assertIs(payload["media_complete"], True)
+
+    def test_finalize_sends_assignments_within_the_real_cloud_metadata_allowlist(self):
+        definition = {"id": "game-one", "name": "Fixture Game", "aliases": ["FG"]}
+        metadata = {"id": "video", "title": "Fixture", "frameRate": 120, "visibility": "private",
+                    "tags": ["Fixture Game"], "tagIds": ["game-one"], "tagDefinitions": [definition]}
+        entry = dict(metadata)
+        opener = Opener(Response({"revision": "r2"}))
+        client = AdminClient("https://keppy.dev/edit/api", "fake", "fake", opener=opener)
+        client.finalize("video", "lease", metadata, entry, operation_id="fixed-operation")
+        payload = json.loads(opener.requests[0][0].data)
+        # Check the serialized transport against the actual worker declarations,
+        # rather than a fake writer that accepts arbitrary metadata keys.
+        source = (ROOT / "edge" / "admin-library.mjs").read_text(encoding="utf-8")
+        declarations = [re.search(rf"^const {name} = (.+);$", source, re.MULTILINE).group(1)
+                        for name in ("EDITABLE", "CATALOG_FIELDS", "NEW_METADATA")]
+        allowed = {field for declaration in declarations for field in re.findall(r'"([^"]+)"', declaration)}
+        self.assertFalse(set(payload["metadata"]) - allowed)
+        self.assertFalse(set(payload["entry"]) - allowed)
+        self.assertNotIn("tagDefinitions", payload["metadata"])
+        self.assertNotIn("tagDefinitions", payload["entry"])
+        self.assertEqual(payload["metadata"]["tagIds"], ["game-one"])
+        self.assertEqual(payload["metadata"]["tags"], ["Fixture Game"])
+        self.assertEqual(metadata["tagDefinitions"], [definition])
 
     def test_upload_grants_bind_exact_files_and_put_streams_without_access_credentials(self):
         data = b"synthetic-120fps-media" * 70_000

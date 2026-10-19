@@ -1,4 +1,6 @@
 /** Shared public catalogue, safe links, and thumbnail rendering for both pages. */
+import { hydrateVideoTags, normalizeRegistry } from "./tags.js?v=master-tags-v1";
+
 export const CDN_BASE = "https://cdn.keppy.dev/file/ProjectAida";
 
 function defaultLocal() {
@@ -58,8 +60,23 @@ export async function fetchCatalog({ local = defaultLocal() } = {}) {
       clearTimeout(timeout);
     }
   }
-  return [...videos.values()].filter(isPublicVideo)
+  let entries = [...videos.values()].filter(isPublicVideo)
     .sort((a, b) => (Number(b.createdAt) || 0) - (Number(a.createdAt) || 0));
+  // A static local preview also sees shared alias changes before individual
+  // video files are saved again. The live CDN already scopes definitions.
+  if (local && entries.some(video => video.tags?.length || video.tagIds?.length)) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 15000);
+    try {
+      const response = await fetch("./local/tags.json", { signal: controller.signal, cache: "no-store" });
+      if (response.status !== 404) {
+        if (!response.ok) throw new Error("Local tag list could not be loaded");
+        const registry = normalizeRegistry(await response.json());
+        entries = entries.map(video => hydrateVideoTags(video, registry));
+      }
+    } finally { clearTimeout(timeout); }
+  }
+  return entries;
 }
 
 export function formatDate(timestamp) {

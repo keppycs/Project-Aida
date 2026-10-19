@@ -23,14 +23,16 @@ from typing import Any, Callable
 from uuid import uuid4
 
 from admin_client import AdminClientError, VARIANTS as CENTRAL_THUMBNAILS, central_client
+from tags import (TAG_ID, hydrate_video_tags, normalize_registry, registry_from_videos,
+                  update_registry)
 
 
 ROOT = Path(__file__).absolute().parent.parent
 VIDEO_ID = re.compile(r"[A-Za-z0-9_-]{1,128}\Z")
 MEDIA = re.compile(r"(?:AV1|HEVC)/(?:manifest\.mpd|master\.m3u8|media_[0-9]+\.m3u8|init_[0-9]+\.mp4|chunk_[0-9]+_[0-9]+\.fmp4)\Z")
 THUMBNAILS = ("thumbnail_sdr.webp", "thumbnail_sdr_720p.webp", "thumbnail_hdr.avif", "thumbnail_hdr_720p.avif", "thumbnail_share.jpg")
-EDITABLE = frozenset(("title", "description", "tags", "visibility"))
-CATALOG_FIELDS = ("id", "title", "description", "tags", "date", "createdAt", "duration", "width", "height", "frameRate", "hdr", "codecs", "visibility")
+EDITABLE = frozenset(("title", "description", "tags", "tagIds", "visibility"))
+CATALOG_FIELDS = ("id", "title", "description", "tags", "tagIds", "tagDefinitions", "date", "createdAt", "duration", "width", "height", "frameRate", "hdr", "codecs", "visibility")
 JSON_LIMIT = 2 * 1024 * 1024
 METADATA_LIMIT = 128_000
 CATALOG_LIMIT = 1_000_000
@@ -170,6 +172,177 @@ class VideoLibrary:
             raise VideoLibraryError("The local video list is damaged; it was left unchanged.")
         return data
 
+    def _tag_registry(self) -> dict:
+        """Derive legacy choices without changing saved videos or using a network."""
+        videos = self._index()
+        if self.local.exists():
+            for child in self.local.iterdir():
+                if not VIDEO_ID.fullmatch(child.name):
+                    continue
+                self._safe(child)
+                if not child.is_dir():
+                    continue
+                for source in (self._read(self._path(child.name, "metadata.json")),
+                               self._state(child.name).get("remoteMetadata")):
+                    if isinstance(source, dict):
+                        videos.append(source)
+        try:
+            return registry_from_videos(videos, self._read(self.local / "tags.json"))
+        except ValueError as exc:
+            raise VideoLibraryError(str(exc)) from None
+
+    def _tag_state(self) -> dict:
+        state = self._read(self.local / ".tags-state.json", {})
+        if not isinstance(state, dict):
+            raise VideoLibraryError("The saved master tag state is damaged.")
+        return state
+
+    def _save_tag_state(self, **updates) -> None:
+        state = {**self._tag_state(), **updates}
+        receipts = list(state.get("receipts", []))
+        if "receipts" in state:
+            state["receipts"] = receipts[-20:]
+            while len(state["receipts"]) > 1 and len(_json_bytes(state)) > JSON_LIMIT:
+                state["receipts"].pop(0)
+        self._write(self.local / ".tags-state.json", _bounded_json_bytes(state, JSON_LIMIT, "master tag save state"))
+
+    def get_tags(self, remote: bool = False) -> dict:
+        with _LOCK:
+            writer = self._writer()
+            if writer is not None:
+                try:
+                    response = writer.get_tags()
+                except AdminClientError:
+                    registry = self._tag_registry()
+                    return {**registry, "revision": _digest(registry), "offline": True}
+                registry = normalize_registry(response)
+                self._write(self.local / "tags.json", _json_bytes(registry))
+                self._save_tag_state(writerURL=writer.url, revision=response["revision"])
+                return {**registry, "revision": response["revision"]}
+            if remote:
+                client, bucket = self._client()
+                registry = self._direct_tags(client, bucket, refresh=True)
+            else:
+                registry = self._tag_registry()
+            return {**registry, "revision": _digest(registry)}
+
+    def _direct_tags(self, client, bucket: str, *, refresh=False) -> dict:
+        """Compare the saved baseline; never blindly replace online aliases."""
+        try:
+            remote = normalize_registry(self._remote_json(client, bucket, "tags.json", limit=CATALOG_LIMIT))
+            local = self._tag_registry()
+            state = self._tag_state()
+            baseline = normalize_registry(state.get("directBaseline")) if "directBaseline" in state else None
+            combined = dict(remote)
+            by_id = {tag["id"]: tag for tag in remote["tags"]}
+            base_tags = {tag["id"]: tag for tag in (baseline or {"tags": []})["tags"]}
+            for tag in local["tags"]:
+                existing = by_id.get(tag["id"])
+                before = base_tags.get(tag["id"])
+                if tag["id"] in remote["redirects"]:
+                    if before is not None and tag == before:
+                        continue  # An unchanged local assignment follows the remote merge.
+                    raise VideoConflictError("An online tag was merged after a local edit. Your local tags are kept for review.")
+                if existing is not None and existing != tag:
+                    if before is not None and tag == before:
+                        continue  # Only the remote owner changed this tag.
+                    if before != existing:
+                        raise VideoConflictError("The online master tags changed. Review the current tags before publishing; your local tags are kept.")
+                by_id[tag["id"]] = tag
+            # A local merge removes its source; preserve unrelated remote tags.
+            for identity in local["redirects"]:
+                existing, before = by_id.get(identity), base_tags.get(identity)
+                if existing is not None and (baseline is None or existing != before):
+                    raise VideoConflictError("An online tag changed before the local merge. Your local tags are kept for review.")
+                by_id.pop(identity, None)
+            redirects = dict(remote["redirects"])
+            for identity, target in local["redirects"].items():
+                remote_target = remote["redirects"].get(identity)
+                before_target = (baseline or {"redirects": {}})["redirects"].get(identity)
+                if remote_target is not None and remote_target != target and target == before_target:
+                    continue  # A remote chained merge supersedes our unchanged redirect.
+                redirects[identity] = target
+            for identity, target in remote["redirects"].items():
+                local_target = local["redirects"].get(identity)
+                before_target = (baseline or {"redirects": {}})["redirects"].get(identity)
+                if local_target is not None and target != local_target and local_target != before_target and target != before_target:
+                    raise VideoConflictError("An online tag merge changed. Your local tags are kept for review.")
+            combined = normalize_registry({"version": 1, "tags": list(by_id.values()), "redirects": redirects})
+        except VideoConflictError:
+            raise
+        except ValueError as exc:
+            raise VideoLibraryError(str(exc)) from None
+        if refresh:
+            # Record only what was actually fetched. Local changes remain
+            # distinguishable from their remote baseline until publication.
+            self._write(self.local / "tags.json", _json_bytes(combined))
+            self._save_tag_state(directBaseline=remote)
+        return combined
+
+    def save_tags(self, revision: str, *, tag=None, merge=None, operation_id=None) -> dict:
+        with _LOCK:
+            if (tag is None) == (merge is None):
+                raise VideoLibraryError("Choose one tag update or merge.")
+            if operation_id is not None and (not isinstance(operation_id, str) or not TAG_ID.fullmatch(operation_id)):
+                raise VideoLibraryError("Use a valid master tag save operation ID.")
+            writer = self._writer()
+            if writer is not None:
+                # The central compare-and-swap decides whether this form is
+                # current. Never replace an unreachable central registry with
+                # a locally cached snapshot.
+                try:
+                    response = writer.save_tags(revision, tag=tag, merge=merge, operation_id=operation_id)
+                except AdminClientError as exc:
+                    if exc.status_code == 409:
+                        raise VideoConflictError("The master tags changed. Reload the tag list and review your edit.") from None
+                    raise VideoLibraryError(str(exc)) from None
+                registry = normalize_registry(response)
+                self._write(self.local / "tags.json", _json_bytes(registry))
+                self._save_tag_state(writerURL=writer.url, revision=response["revision"])
+                return {**registry, "revision": response["revision"]}
+            registry = self._tag_registry()
+            try:
+                fingerprint = sha256(json.dumps({"revision": revision, "tag": tag, "merge": merge},
+                                                sort_keys=True, ensure_ascii=False, allow_nan=False).encode("utf-8")).hexdigest()
+            except (TypeError, ValueError):
+                raise VideoLibraryError("Invalid master tag edit.") from None
+            receipts = self._tag_state().get("receipts", [])
+            if not isinstance(receipts, list) or any(not isinstance(item, dict) for item in receipts):
+                raise VideoLibraryError("The saved master tag receipts are damaged.")
+            receipt = next((item for item in receipts if item.get("operation_id") == operation_id), None) if operation_id else None
+            if receipt is not None:
+                if receipt.get("fingerprint") != fingerprint:
+                    raise VideoConflictError("That save operation ID was already used for a different master tag edit.")
+                response = receipt["response"]
+                if receipt.get("pending"):
+                    if _digest(registry) not in (receipt["baseline"], response["revision"]):
+                        raise VideoConflictError("An interrupted tag save conflicts with newer tags. Your saved versions are kept for review.")
+                    if _digest(registry) == receipt["baseline"]:
+                        self._write(self.local / "tags.json", _bounded_json_bytes(normalize_registry(response), CATALOG_LIMIT, "master tag list"))
+                    receipt["pending"] = False
+                    self._save_tag_state(receipts=receipts)
+                return response
+            if revision != _digest(registry):
+                raise VideoConflictError("The master tags changed. Reload the tag list and review your edit.")
+            try:
+                updated = update_registry(registry, tag=tag, merge=merge)
+            except ValueError as exc:
+                raise VideoLibraryError(str(exc)) from None
+            body = _bounded_json_bytes(updated, CATALOG_LIMIT, "master tag list")
+            response = {**updated, "revision": _digest(updated)}
+            if operation_id:
+                receipt = {"operation_id": operation_id, "fingerprint": fingerprint, "baseline": revision,
+                           "response": response, "pending": True}
+                receipts = [*receipts, receipt]
+                # A durable pending receipt permits recovery even if a registry
+                # file move or the HTTP response is interrupted.
+                self._save_tag_state(receipts=receipts)
+            self._write(self.local / "tags.json", body)
+            if receipt is not None:
+                receipt["pending"] = False
+                self._save_tag_state(receipts=receipts)
+            return response
+
     def _state(self, video_id: str) -> dict:
         state = self._read(self._path(video_id, ".editor-state.json"), {})
         if not isinstance(state, dict):
@@ -248,7 +421,10 @@ class VideoLibrary:
             raise VideoLibraryError("Invalid video metadata.")
         metadata = dict(metadata)
         # Old pipelines stored tags in the index only. Explicit metadata wins.
-        for field in ("tags", "date", "hdr"):
+        owns_tags = "tags" in metadata
+        for field in ("tags", "tagIds", "tagDefinitions", "date", "hdr"):
+            if owns_tags and field in ("tagIds", "tagDefinitions"):
+                continue
             if field not in metadata and entry and field in entry:
                 metadata[field] = entry[field]
         metadata["id"] = video_id
@@ -259,6 +435,8 @@ class VideoLibrary:
         metadata.pop("unlisted", None)
         metadata.setdefault("description", "")
         metadata.setdefault("tags", [])
+        if "tagIds" in metadata or self._read(self.local / "tags.json") is not None:
+            metadata = hydrate_video_tags(metadata, self._tag_registry())
         return metadata
 
     def _view(self, video_id: str) -> dict:
@@ -411,11 +589,22 @@ class VideoLibrary:
             if not isinstance(tags, list) or len(tags) > 50 or any(not isinstance(tag, str) or len(tag) > 100 for tag in tags):
                 raise VideoLibraryError("Use up to 50 short tags.")
             fields["tags"] = list(dict.fromkeys(tag.strip() for tag in tags if tag.strip()))
+        if "tagIds" in fields:
+            values = fields["tagIds"]
+            if not isinstance(values, list) or len(values) > 50 or any(not isinstance(value, str) or not TAG_ID.fullmatch(value) for value in values):
+                raise VideoLibraryError("Choose up to 50 existing master tags.")
+            registry = self._tag_registry()
+            known = {item["id"] for item in registry["tags"]} | set(registry["redirects"])
+            if any(value not in known for value in values):
+                raise VideoLibraryError("A selected tag no longer exists. Reload the master tag list.")
+            fields = hydrate_video_tags({**fields, "tagIds": list(dict.fromkeys(values))}, registry)
         return fields
 
     def _save_local(self, video_id: str, metadata: dict, state: dict) -> None:
         index = self._index()
         previous = next((item for item in index if item.get("id") == video_id), {})
+        if "tags" in metadata and "tagIds" not in metadata:
+            previous = {key: value for key, value in previous.items() if key not in ("tagIds", "tagDefinitions")}
         entry = {**previous, **{key: metadata[key] for key in CATALOG_FIELDS if key in metadata}}
         index = [entry, *(item for item in index if item.get("id") != video_id)]
         self._write(self._path(video_id, "metadata.json"), _json_bytes(metadata))
@@ -426,7 +615,15 @@ class VideoLibrary:
         with _LOCK:
             video_id = self._id(video_id)
             video = self._check_revision(video_id, revision)
-            metadata = {**video["metadata"], **self._patch(fields)}
+            patch = self._patch(fields)
+            metadata = {**video["metadata"], **patch}
+            if "tags" in patch and "tagIds" not in patch:
+                # Legacy clients still edit raw labels. Explicitly abandon
+                # previous IDs before resolving their replacement selection.
+                metadata.pop("tagIds", None)
+                metadata.pop("tagDefinitions", None)
+            if "tagIds" in metadata or self._read(self.local / "tags.json") is not None:
+                metadata = hydrate_video_tags(metadata, self._tag_registry())
             state = self._state(video_id)
             self._remember_offline_base(state, video["metadata"])
             state["pending"] = True
@@ -452,6 +649,7 @@ class VideoLibrary:
             if self._path(video_id, "metadata.json").exists() or any(item.get("id") == video_id for item in index) or state.get("pending") or state.get("uploaded"):
                 raise VideoConflictError("That video ID already exists. Choose a new ID before encoding.")
             metadata = self._metadata(video_id, metadata, entry)
+            entry = {**entry, **{key: metadata[key] for key in CATALOG_FIELDS if key in metadata}}
             # Validate both serializations before touching either destination.
             metadata_body = _json_bytes(metadata)
             index_body = _json_bytes([entry, *index])
@@ -557,6 +755,8 @@ class VideoLibrary:
     @staticmethod
     def _merge_catalog(catalog: list[dict], video_id: str, metadata: dict) -> list[dict]:
         previous = next((item for item in catalog if item.get("id") == video_id), {})
+        if "tags" in metadata and "tagIds" not in metadata:
+            previous = {key: value for key, value in previous.items() if key not in ("tagIds", "tagDefinitions")}
         merged = [item for item in catalog if item.get("id") != video_id]
         if metadata.get("visibility") == "public":
             merged.insert(0, {**previous, **{key: metadata[key] for key in CATALOG_FIELDS if key in metadata}})
@@ -593,10 +793,24 @@ class VideoLibrary:
             desired = {key: metadata[key] for key in EDITABLE if key in metadata}
             if state.get("pendingThumbnails") and "thumbnailUpdatedAt" in metadata:
                 desired["thumbnailUpdatedAt"] = metadata["thumbnailUpdatedAt"]
-            metadata = {**self._metadata(video_id, current), **desired}
+            remote_metadata = self._metadata(video_id, current)
+            if "tags" in metadata and "tagIds" not in metadata:
+                remote_metadata.pop("tagIds", None)
+                remote_metadata.pop("tagDefinitions", None)
+            metadata = {**remote_metadata, **desired}
+            self._save_local(video_id, metadata, state)
+        registry = None
+        if self._read(self.local / "tags.json") is not None or "tagIds" in metadata:
+            registry = self._direct_tags(client, bucket)
+            metadata = hydrate_video_tags(metadata, registry)
             self._save_local(video_id, metadata, state)
         metadata_body = _bounded_json_bytes(metadata, METADATA_LIMIT, "video metadata")
-        _bounded_json_bytes(self._merge_catalog(remote_index, video_id, metadata), CATALOG_LIMIT, "public video list")
+        preview_catalog = self._merge_catalog(remote_index, video_id, metadata)
+        if registry is not None:
+            registry = registry_from_videos(preview_catalog, registry)
+            preview_catalog = [hydrate_video_tags(item, registry) for item in preview_catalog]
+        _bounded_json_bytes(preview_catalog, CATALOG_LIMIT, "public video list")
+        registry_body = _bounded_json_bytes(registry, CATALOG_LIMIT, "master tag list") if registry is not None else None
         new_upload = current is None
         assets = list(state.get("pendingThumbnails", []))
         if new_upload:
@@ -622,6 +836,10 @@ class VideoLibrary:
             # privacy change rather than mistake it for somebody else's edit.
             state.update(remoteHash=_digest(metadata), remoteMetadata=metadata, uploaded=True, remoteChanged=False)
             self._save_state(video_id, state)
+        if registry is not None:
+            self._put(client, bucket, "tags.json", registry_body, "application/json")
+            self._write(self.local / "tags.json", _json_bytes(registry))
+            self._save_tag_state(directBaseline=registry)
         for asset in dict.fromkeys(assets):
             path = self.local_asset_path(video_id, asset)
             with path.open("rb") as stream:
@@ -639,6 +857,9 @@ class VideoLibrary:
             self._save_state(video_id, state)
             raise VideoConflictError("The live video listing changed during publication. Your draft is kept; reload before publishing.")
         catalog = self._merge_catalog(catalog, video_id, metadata)
+        if registry is not None:
+            registry = registry_from_videos(catalog, registry)
+            catalog = [hydrate_video_tags(item, registry) for item in catalog]
         self._put(client, bucket, "index.json", _bounded_json_bytes(catalog, CATALOG_LIMIT, "public video list"), "application/json")
         published_entry = next((item for item in catalog if item.get("id") == video_id), None)
         state.update(pending=False, pendingThumbnails=[], localAtRefresh=_digest(metadata), remoteEntryHash=_digest(published_entry))
@@ -659,8 +880,12 @@ class VideoLibrary:
                 return
             if state.get("writerURL") != writer.url or not state.get("writerRevision"):
                 raise VideoConflictError("Refresh online before publishing through the central writer.")
+            if "tagIds" in metadata:
+                registry = normalize_registry(writer.get_tags())
+                self._write(self.local / "tags.json", _json_bytes(registry))
+                metadata = hydrate_video_tags(metadata, registry)
             images = {name: self.local_asset_path(video_id, name).read_bytes() for name in CENTRAL_THUMBNAILS} if state.get("pendingThumbnails") else None
-            fields = {key: metadata[key] for key in ("title", "description", "tags", "visibility") if key in metadata}
+            fields = {key: metadata[key] for key in ("title", "description", "tags", "tagIds", "visibility") if key in metadata}
             fingerprint = _digest({"fields": fields, "images": {name: sha256(data).hexdigest() for name, data in (images or {}).items()}, "writer": writer.url})
             operation = state.get("centralPublish")
             if not isinstance(operation, dict) or operation.get("fingerprint") != fingerprint:

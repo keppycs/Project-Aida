@@ -12,6 +12,8 @@
  * immutable media chunks are cached internally, after fresh authorization.
  * Video bodies stream unchanged, including 120 fps and HTTP byte ranges.
  */
+import { hydrateVideoTags, normalizeRegistry } from "../web/js/tags.js";
+
 const BUCKET = "ProjectAida";
 const ROOT = `/file/${BUCKET}/`;
 const AUTHORIZE = "https://api.backblazeb2.com/b2api/v2/b2_authorize_account";
@@ -32,8 +34,8 @@ const CATALOG_CONCURRENCY = 4;
 // publishing new metadata. Normal metadata edits invalidate it immediately.
 const MEDIA_CACHE_SECONDS = 300;
 const MAX_CACHEABLE_MEDIA_BYTES = 32 * 1024 * 1024;
-const CATALOG_FIELDS = ["title", "description", "tags", "date", "createdAt", "duration", "width", "height", "frameRate", "hdr", "codecs", "thumbnailMode"];
-const INDEX_ONLY_FIELDS = new Set(["tags", "date", "hdr"]);
+const CATALOG_FIELDS = ["title", "description", "tags", "tagIds", "date", "createdAt", "duration", "width", "height", "frameRate", "hdr", "codecs", "thumbnailMode"];
+const INDEX_ONLY_FIELDS = new Set(["tags", "tagIds", "date", "hdr"]);
 
 function routeRequest(request) {
   const raw = request.url;
@@ -219,6 +221,15 @@ export function createHandler({ fetcher = globalThis.fetch, now = Date.now, time
     } });
   }
 
+  async function readTags(env) {
+    return originRequest("tags.json", env, { consume: async response => {
+      if (response.status === 404) { await response.body?.cancel(); return normalizeRegistry(); }
+      if (response.status !== 200) { await response.body?.cancel(); throw new Error("Origin tags unavailable"); }
+      return normalizeRegistry(await boundedJson(response, CATALOG_LIMIT));
+    } });
+  }
+  function hasTags(video) { return video?.tags?.length || video?.tagIds?.length; }
+
   async function catalog(env, page) {
     const entries = await originRequest("index.json", env, { consume: async response => {
       if (response.status !== 200) {
@@ -235,6 +246,8 @@ export function createHandler({ fetcher = globalThis.fetch, now = Date.now, time
     const allIds = [...indexed.keys()];
     const ids = allIds.slice(page * CATALOG_PAGE_SIZE, (page + 1) * CATALOG_PAGE_SIZE);
     const results = new Array(ids.length);
+    let registry;
+    const tags = () => registry ||= readTags(env);
     let next = 0;
     await Promise.all(Array.from({ length: Math.min(CATALOG_CONCURRENCY, ids.length) }, async () => {
       for (;;) {
@@ -251,9 +264,10 @@ export function createHandler({ fetcher = globalThis.fetch, now = Date.now, time
           // The current transcoder stores these presentation fields only in
           // index.json. Preserve them after authorization without resurrecting
           // an old title or removed description from the catalogue.
-          else if (INDEX_ONLY_FIELDS.has(field) && Object.hasOwn(indexed.get(id), field)) entry[field] = indexed.get(id)[field];
+          else if (INDEX_ONLY_FIELDS.has(field) && Object.hasOwn(indexed.get(id), field) &&
+              !(field === "tagIds" && Object.hasOwn(checked.meta, "tags"))) entry[field] = indexed.get(id)[field];
         }
-        results[index] = entry;
+        results[index] = hydrateVideoTags(entry, hasTags(entry) ? await tags() : null);
       }
     }));
     return { entries: results.filter(Boolean), hasNext: (page + 1) * CATALOG_PAGE_SIZE < allIds.length };
@@ -292,7 +306,7 @@ export function createHandler({ fetcher = globalThis.fetch, now = Date.now, time
 
       const checked = await readMetadata(route.id, env);
       if (!checked || !["public", "unlisted"].includes(checked.visibility)) return reply(404, "Not found", request);
-      if (route.metadata) return jsonReply({ ...checked.meta, visibility: checked.visibility }, request);
+      if (route.metadata) return jsonReply(hydrateVideoTags({ ...checked.meta, visibility: checked.visibility }, hasTags(checked.meta) ? await readTags(env) : null), request);
 
       const range = request.headers.get("Range");
       if (range && (range.length > 100 || !/^bytes=(?:[0-9]+-[0-9]*|-[0-9]+)$/.test(range))) return reply(416, "Invalid range", request);

@@ -207,6 +207,32 @@ class CentralPublishingTests(unittest.TestCase):
         self.assertTrue(acknowledged["uploaded"])
         self.assertFalse(acknowledged["pending"])
 
+    def test_master_assignments_confirm_against_current_central_names_and_aliases(self):
+        from tags import hydrate_video_tags
+        before = {"version": 1, "tags": [{"id": "game-one", "name": "Old name", "aliases": []}], "redirects": {}}
+        current = {"version": 1, "tags": [{"id": "game-one", "name": "Current name", "aliases": ["Old name", "FG"]}], "redirects": {}}
+        self.metadata = hydrate_video_tags({**self.metadata, "tagIds": ["game-one"]}, before)
+        self.entry = dict(self.metadata)
+        self.path.write_text(json.dumps(self.metadata), encoding="utf-8")
+        (self.local / "tags.json").write_text(json.dumps(before), encoding="utf-8")
+        (self.local / "index.json").write_text(json.dumps([self.entry]), encoding="utf-8")
+        self.writer.get_tags = lambda: {**current, "revision": "registry-current"}
+        original_finalize = self.writer.finalize
+
+        def finalized(*args, **kwargs):
+            result = original_finalize(*args, **kwargs)
+            canonical = hydrate_video_tags(result["published_metadata"], current)
+            self.writer.current.update(metadata=deepcopy(canonical), published_metadata=canonical)
+            return deepcopy(self.writer.current)
+
+        self.writer.finalize = finalized
+        self.assertTrue(self.upload())
+        saved = self.library.get_video("video")["metadata"]
+        self.assertEqual(saved["tagIds"], ["game-one"])
+        self.assertEqual(saved["tags"], ["Current name"])
+        self.assertEqual(saved["tagDefinitions"][0]["aliases"], ["Old name", "FG"])
+        self.assertFalse(self.library.mark_uploaded("video")["pending"])
+
     def test_existing_id_and_incomplete_thumbnails_fail_before_any_media(self):
         self.writer._result(self.metadata, self.entry)
         with self.assertRaises(AdminClientError):

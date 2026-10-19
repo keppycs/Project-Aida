@@ -7,7 +7,10 @@ import {
   renderVideoCard,
   detectDisplayHdr,
   attachThumbnailFallbacks,
-} from "./catalog.js?v=cdn-security-v2";
+} from "./catalog.js?v=master-tags-v1";
+import { createSearchIndex, parseSearch, removeSearchToken, searchVideos, suggestTags, tagQuery } from "./search.js?v=master-tags-v1";
+import { withBrowseQuery } from "./browse-context.js?v=master-tags-v1";
+import { normalizeTag } from "./tags.js?v=master-tags-v1";
 
 const searchInput = document.getElementById("search-input");
 const searchClear = document.getElementById("search-clear");
@@ -21,11 +24,17 @@ const resultsSummary = document.getElementById("results-summary");
 const statusPanel = document.getElementById("videos-status");
 const statusAction = document.getElementById("status-action");
 const skeletonCards = [...videosGrid.children].map((card) => card.cloneNode(true));
+const tagSearch = document.getElementById("tag-search");
+const suggestions = document.getElementById("tag-suggestions");
+const filterList = document.getElementById("search-filters");
 searchInput.value = new URLSearchParams(location.search).get("q") || "";
+// Avoid an unrelated hero skeleton flashing on a direct search link.
+hero.hidden = Boolean(searchInput.value.trim());
 
 let allVideos = [];
 let hdrCapable = false;
 let loadState = "loading";
+let searchIndex = createSearchIndex([]);
 
 function showStatus(title, description, actionText = "", onAction = null, symbol = "↗") {
   document.getElementById("status-title").textContent = title;
@@ -67,8 +76,68 @@ function renderHero(video) {
 }
 
 function renderGrid(videos) {
-  videosGrid.replaceChildren(...videos.map((video) => renderVideoCard(video, { hdrCapable })));
+  videosGrid.replaceChildren(...videos.map((video) => {
+    const card = renderVideoCard(video, { hdrCapable });
+    card.href = withBrowseQuery(card.getAttribute("href"), searchInput.value);
+    return card;
+  }));
   attachThumbnailFallbacks(videosGrid);
+}
+
+function renderTagSuggestions() {
+  const tags = suggestTags(searchIndex, tagSearch.value);
+  suggestions.replaceChildren(...tags.map(tag => {
+    const row = document.createElement("div");
+    row.className = "tag-suggestion";
+    const name = document.createElement("span");
+    name.className = "tag-suggestion-name";
+    name.textContent = tag.name;
+    const count = document.createElement("span");
+    count.className = "tag-suggestion-count";
+    count.textContent = `${tag.count} ${tag.count === 1 ? "video" : "videos"}`;
+    const copy = document.createElement("span");
+    copy.className = "tag-suggestion-copy";
+    copy.append(name, count);
+    row.append(copy);
+    for (const excluded of [false, true]) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.textContent = excluded ? "Exclude" : "Include";
+      button.setAttribute("aria-label", `${button.textContent} ${tag.name}`);
+      button.addEventListener("click", () => {
+        const token = tagQuery(tag.name, excluded);
+        const names = new Set([tag.name, ...tag.aliases].map(normalizeTag));
+        const existing = parseSearch(searchInput.value).filter(item => item.kind === "tag" && names.has(normalizeTag(item.value)));
+        let query = searchInput.value;
+        for (const item of existing.reverse()) query = `${query.slice(0, item.start)} ${query.slice(item.end)}`;
+        searchInput.value = `${query} ${token}`.trim();
+        renderResults();
+      });
+      row.append(button);
+    }
+    return row;
+  }));
+  document.getElementById("tag-suggestions-status").textContent = tags.length
+    ? "Suggestions use tags on videos in this collection."
+    : tagSearch.value.trim() ? "No matching tags." : "No tags in this collection yet.";
+}
+
+function renderFilters() {
+  const tokens = parseSearch(searchInput.value).filter(token => token.kind === "tag");
+  filterList.hidden = !tokens.length;
+  filterList.replaceChildren(...tokens.map(token => {
+    const chip = document.createElement("button");
+    chip.type = "button";
+    chip.className = "search-filter";
+    chip.textContent = `${token.excluded ? "Exclude: " : ""}${token.value} ×`;
+    chip.setAttribute("aria-label", `Remove ${token.excluded ? "excluded " : ""}tag filter ${token.value}`);
+    chip.addEventListener("click", () => {
+      searchInput.value = removeSearchToken(searchInput.value, token);
+      renderResults();
+      searchInput.focus({ preventScroll: true });
+    });
+    return chip;
+  }));
 }
 
 function clearSearch() {
@@ -85,8 +154,8 @@ function renderResults() {
   if (url.href !== location.href) history.replaceState(history.state, "", url);
   const query = searchInput.value.trim().toLocaleLowerCase();
   searchClear.hidden = !searchInput.value;
-  // Filtering must not remove the featured area above the focused search field.
-  hero.hidden = !allVideos.length;
+  hero.hidden = Boolean(query) || !allVideos.length;
+  renderFilters();
   statusPanel.hidden = true;
 
   if (!allVideos.length) {
@@ -96,16 +165,13 @@ function renderResults() {
     return;
   }
 
-  const matches = query ? allVideos.filter((video) => {
-    const tags = Array.isArray(video.tags) ? video.tags.join(" ") : "";
-    return [video.title, video.description, tags].some((value) => String(value || "").toLocaleLowerCase().includes(query));
-  }) : allVideos;
+  const matches = query ? searchVideos(searchIndex, searchInput.value) : allVideos;
 
   renderGrid(matches);
   if (query) {
     resultsSummary.textContent = `${matches.length} ${matches.length === 1 ? "video" : "videos"} found for “${searchInput.value.trim()}”`;
     if (!matches.length) {
-      showStatus("No matches this time", "Try a different title, description, or tag, or return to the full collection.", "Clear search", clearSearch, "⌕");
+      showStatus("No matches this time", "Try different words or tags, remove an exclusion, or return to the full collection.", "Clear search", clearSearch, "⌕");
     }
   } else {
     resultsSummary.textContent = "";
@@ -124,7 +190,7 @@ async function load() {
   loadState = "loading";
   searchInput.disabled = true;
   searchClear.hidden = true;
-  hero.hidden = false;
+  hero.hidden = Boolean(searchInput.value.trim());
   hero.setAttribute("aria-busy", "true");
   videosSection.setAttribute("aria-busy", "true");
   heroSkeleton.hidden = false;
@@ -137,6 +203,8 @@ async function load() {
   try {
     [allVideos, hdrCapable] = await Promise.all([fetchCatalog(), detectDisplayHdr().catch(() => false)]);
     loadState = "ready";
+    searchIndex = createSearchIndex(allVideos);
+    renderTagSuggestions();
     videosCount.textContent = String(allVideos.length);
     searchInput.disabled = false;
     if (allVideos.length) renderHero(allVideos[0]);
@@ -167,6 +235,7 @@ searchInput.addEventListener("keydown", (event) => {
   }
 });
 searchClear.addEventListener("click", clearSearch);
+tagSearch.addEventListener("input", renderTagSuggestions);
 window.addEventListener("popstate", () => {
   searchInput.value = new URLSearchParams(location.search).get("q") || "";
   renderResults();

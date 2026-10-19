@@ -83,6 +83,7 @@ def run_pipeline(
     thumbnail_frame: int | None = None,
     on_progress: Optional[Callable[[str, int, int], None]] = None,
     extra_log_handler: Optional[logging.Handler] = None,
+    tag_ids: list[str] | None = None,
 ) -> None:
     """Run the full transcode -> package -> upload pipeline."""
 
@@ -97,6 +98,7 @@ def run_pipeline(
 
     video_id = video_id or f"0{int(time.time())}"
     local_store = VideoLibrary(ROOT, LOCAL_DIR)
+    tag_fields = local_store._patch({"tagIds": tag_ids}) if tag_ids is not None else {}
     if local_store._path(video_id, "metadata.json").exists():
         raise ValueError("That video already exists. Use the video editor to change it.")
     b2 = bucket = None
@@ -296,6 +298,7 @@ def run_pipeline(
         "colorSpace":     colorspace,
         "codecs":         encoded_codecs,
         "visibility":     visibility,
+        **tag_fields,
     }
 
     # Update web/local/index.json — full local catalogue regardless of upload
@@ -314,8 +317,12 @@ def run_pipeline(
         "hdr":         is_hdr,
         "codecs":      encoded_codecs,
         "visibility":  visibility,
+        **tag_fields,
     }
-    local_store.store_encoded_video(video_id, meta, entry)
+    stored = local_store.store_encoded_video(video_id, meta, entry)
+    for field in ("tags", "tagIds", "tagDefinitions"):
+        if field in stored["metadata"]:
+            entry[field] = stored["metadata"][field]
     log.info("[METADATA]     Saved video details and local catalogue with backups")
 
     # ── Upload ─────────────────────────────────────────────────────────────────

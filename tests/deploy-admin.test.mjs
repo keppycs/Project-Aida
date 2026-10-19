@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
-import { join, resolve, sep } from "node:path";
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { dirname, join, posix, resolve, sep } from "node:path";
 import test from "node:test";
 import { ROOT, MODULES, WORKER, DeployError, deploy, loadConfig, main, prepareDeployment, validateConfig } from "../scripts/deploy-admin.mjs";
 
@@ -19,7 +19,10 @@ async function fixture(t) {
   await mkdir(join(root, "edge", "generated"), { recursive: true });
   await mkdir(join(root, "logs"));
   await writeFile(join(root, ".gitignore"), "logs/\n");
-  for (const name of MODULES) await writeFile(join(root, "edge", name), (name.startsWith("generated/") ? marker : "") + "export default {};\n");
+  for (const name of MODULES) {
+    await mkdir(dirname(join(root, name)), { recursive: true });
+    await writeFile(join(root, name), (name === "edge/generated/admin-assets.mjs" ? marker : "") + "export default {};\n");
+  }
   return root;
 }
 const ok = () => Response.json({ success: true, result: {} });
@@ -40,12 +43,25 @@ test("multipart uses module MIME, secret bindings and initial-only SQLite migrat
     const prepared = await prepareDeployment({ config, root, initial });
     assert.deepEqual([...prepared.body.keys()], ["metadata", ...MODULES]);
     const metadata = JSON.parse(await prepared.body.get("metadata").text());
-    assert.equal(metadata.main_module, "admin-worker.mjs");
+    assert.equal(metadata.main_module, "edge/admin-worker.mjs");
     assert.deepEqual(metadata.bindings.find(binding => binding.name === "LIBRARY"), { name: "LIBRARY", type: "durable_object_namespace", class_name: "AidaLibrary" });
     assert.deepEqual(metadata.bindings.find(binding => binding.name === "B2_KEY_ID"), { name: "B2_KEY_ID", type: "secret_text", text: config.B2_KEY_ID });
     if (initial) assert.deepEqual(metadata.migrations, { new_tag: "owner-library-v1", steps: [{ new_sqlite_classes: ["AidaLibrary"] }] });
     else assert.equal(Object.hasOwn(metadata, "migrations"), false);
     for (const name of MODULES) assert.equal(prepared.body.get(name).type, "application/javascript+module");
+  }
+});
+
+test("owner deployment includes every local static import with its original module path", async () => {
+  const packaged = new Set(MODULES);
+  assert.ok(packaged.has("web/js/tags.js"));
+  for (const name of MODULES) {
+    const source = await readFile(join(ROOT, name), "utf8");
+    for (const match of source.matchAll(/\bimport\s+(?:[^;]*?\s+from\s+)?["']([^"']+)["']/g)) {
+      assert.ok(match[1].startsWith("."), `Only reviewed local modules: ${name}`);
+      const imported = posix.normalize(posix.join(posix.dirname(name), match[1]));
+      assert.ok(packaged.has(imported), `${name} imports unpackaged ${imported}`);
+    }
   }
 });
 

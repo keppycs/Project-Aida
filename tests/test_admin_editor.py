@@ -156,6 +156,57 @@ class EditorHTTPTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200, response.text)
         return response.json()
 
+    def test_master_tags_require_session_and_detect_stale_or_conflicting_aliases(self):
+        registry = self.client.get("/api/tags").json()
+        self.assertEqual(registry["tags"][0]["name"], "120 fps")
+        identity = registry["tags"][0]["id"]
+        payload = {"revision": registry["revision"], "tag": {"id": identity, "name": "High frame rate", "aliases": ["120 fps", "HFR"]}}
+        before = self.detail()
+        self.assertEqual(self.client.post("/api/tags", json=payload).status_code, 403)
+        cross_site = {**self.headers, "Origin": "https://example.invalid"}
+        self.assertEqual(self.client.post("/api/tags", json=payload, headers=cross_site).status_code, 403)
+        saved = self.client.post("/api/tags", json=payload, headers=self.headers)
+        self.assertEqual(saved.status_code, 200, saved.text)
+        self.assertEqual(self.detail()["revision"], before["revision"])
+        self.assertEqual(self.detail()["tags"], ["High frame rate"])
+        stale = self.client.post("/api/tags", json=payload, headers=self.headers)
+        self.assertEqual(stale.status_code, 409, stale.text)
+        collision = {"revision": saved.json()["revision"], "tag": {"name": "Another tag", "aliases": ["hfr"]}}
+        invalid = self.client.post("/api/tags", json=collision, headers=self.headers)
+        self.assertEqual(invalid.status_code, 400, invalid.text)
+        changed = self.client.post("/api/videos/sample120", json=self.payload(tagIds=[identity]), headers=self.headers)
+        self.assertEqual(changed.status_code, 200, changed.text)
+        self.assertEqual(changed.json()["tags"], ["High frame rate"])
+        self.assertIn("HFR", changed.json()["tagDefinitions"][0]["aliases"])
+        unknown = self.client.post("/api/videos/sample120", json=self.payload(tagIds=["unknown"]), headers=self.headers)
+        self.assertEqual(unknown.status_code, 400, unknown.text)
+
+    def test_master_tag_merge_retains_assigned_ids_and_preserves_previous_files(self):
+        registry = self.client.get("/api/tags").json()
+        source = registry["tags"][0]["id"]
+        created = self.client.post("/api/tags", json={"revision": registry["revision"], "tag": {"name": "Motion", "aliases": []}}, headers=self.headers)
+        self.assertEqual(created.status_code, 200, created.text)
+        target = next(tag["id"] for tag in created.json()["tags"] if tag["name"] == "Motion")
+        assigned = self.client.post("/api/videos/sample120", json=self.payload(tagIds=[source]), headers=self.headers)
+        self.assertEqual(assigned.status_code, 200, assigned.text)
+        merged = self.client.post("/api/tags", json={"revision": created.json()["revision"], "merge": {"source": source, "target": target}}, headers=self.headers)
+        self.assertEqual(merged.status_code, 200, merged.text)
+        self.assertEqual(self.detail()["tagIds"], [target])
+        self.assertEqual(self.detail()["tags"], ["Motion"])
+        self.assertTrue(list((self.root / ".agent-trash").rglob("tags.json")))
+
+    def test_master_tag_post_retries_return_same_result_and_reused_payload_conflicts(self):
+        registry = self.client.get("/api/tags").json()
+        body = {"revision": registry["revision"], "tag": {"name": "Retry tag", "aliases": ["Retry alias"]}, "operation_id": "synthetic-http-retry-operation"}
+        first = self.client.post("/api/tags", json=body, headers=self.headers)
+        self.assertEqual(first.status_code, 200, first.text)
+        replay = self.client.post("/api/tags", json=body, headers=self.headers)
+        self.assertEqual(replay.status_code, 200, replay.text)
+        self.assertEqual(replay.json(), first.json())
+        changed = self.client.post("/api/tags", json={**body, "tag": {"name": "Different request", "aliases": []}}, headers=self.headers)
+        self.assertEqual(changed.status_code, 409, changed.text)
+        self.assertEqual(sum(tag["name"] == "Retry tag" for tag in self.client.get("/api/tags").json()["tags"]), 1)
+
     def test_automatic_online_check_discovers_legacy_private_upload_and_enables_authenticated_preview(self):
         cloud = self.use_cloud(self.metadata)
         cloud.store("sample120/AV1/init_0.mp4", b"private-origin-video")

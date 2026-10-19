@@ -1,9 +1,10 @@
 /** One durable writer owns every metadata/catalog/thumbnail change. */
 import { AdminProblem, BUCKET, VIDEO_ID, MEDIA, METADATA_LIMIT, CATALOG_LIMIT, boundedJSON, createB2Store, digest } from "./admin-b2.mjs";
 import { createUploadSigner } from "./admin-upload.mjs";
+import { hydrateVideoTags, legacyTagId, normalizeRegistry, normalizeTag, registryFromVideos, resolveVideoTags } from "../web/js/tags.js";
 
 const encoder = new TextEncoder();
-const EDITABLE = ["title", "description", "tags", "visibility"];
+const EDITABLE = ["title", "description", "tags", "tagIds", "visibility"];
 const CATALOG_FIELDS = ["id", ...EDITABLE, "date", "createdAt", "duration", "width", "height", "frameRate", "hdr", "codecs", "thumbnailMode", "thumbnailUpdatedAt"];
 const VARIANTS = { "thumbnail_sdr.webp": ["image/webp", 3840, 2160], "thumbnail_sdr_720p.webp": ["image/webp", 1280, 720], "thumbnail_share.jpg": ["image/jpeg", 1280, 720] };
 const OPERATION = /^[A-Za-z0-9_-]{16,128}$/;
@@ -35,7 +36,8 @@ function normalizeMetadata(raw, videoId, entry) {
   // prove which visibility the public CDN currently enforces.
   if (!["public", "unlisted", "private"].includes(metadata.visibility)) metadata.visibility = "unknown";
   metadata.description = typeof raw.description === "string" ? raw.description : "";
-  for (const key of ["tags", "date", "hdr"]) if (!Object.hasOwn(metadata, key) && entry && Object.hasOwn(entry, key)) metadata[key] = entry[key];
+  for (const key of ["tags", "tagIds", "date", "hdr"]) if (!Object.hasOwn(metadata, key) && entry && Object.hasOwn(entry, key) &&
+      !(key === "tagIds" && Object.hasOwn(raw, "tags"))) metadata[key] = entry[key];
   if (!Array.isArray(metadata.tags)) metadata.tags = [];
   delete metadata.unlisted;
   return metadata;
@@ -59,6 +61,29 @@ function fields(body) {
     if (!Array.isArray(tags) || tags.length > 50 || tags.some(tag => typeof tag !== "string" || tag.length > 100)) throw new AdminProblem(400, "Use up to 50 short tags.");
     result.tags = [...new Set(tags.map(tag => tag.trim()).filter(Boolean))];
   }
+  if (Object.hasOwn(result, "tagIds")) {
+    if (!Array.isArray(result.tagIds) || result.tagIds.length > 50 || result.tagIds.some(tag => typeof tag !== "string" || /\s/.test(tag) || !VIDEO_ID.test(tag))) throw new AdminProblem(400, "Use up to 50 valid tags.");
+    result.tagIds = [...new Set(result.tagIds)];
+  }
+  return result;
+}
+function tagFields(body, registry) {
+  const result = fields(body);
+  registry = registryFromVideos([result], registry);
+  if (Object.hasOwn(result, "tagIds")) {
+    const ids = new Set(registry.tags.map(tag => tag.id));
+    if (result.tagIds.some(id => !ids.has(Object.hasOwn(registry.redirects, id) ? registry.redirects[id] : id))) throw new AdminProblem(400, "A selected tag no longer exists. Refresh the tag list.");
+  }
+  if (Object.hasOwn(result, "tags") || Object.hasOwn(result, "tagIds")) {
+    const definitions = resolveVideoTags(result, registry);
+    result.tags = definitions.map(tag => tag.name);
+    result.tagIds = definitions.map(tag => tag.id);
+  }
+  return result;
+}
+function canonicalVideoTags(metadata, registry) {
+  const result = hydrateVideoTags(metadata, registry);
+  delete result.tagDefinitions;
   return result;
 }
 function checkKeys(body, allowed) {
@@ -138,22 +163,72 @@ export class AdminLibraryService {
     this.storage = storage; this.store = store; this.uploadSigner = uploadSigner; this.now = now; this.tail = Promise.resolve();
   }
   enqueue(task) { const result = this.tail.then(task); this.tail = result.catch(() => {}); return result; }
+  async tagRegistry(catalog) {
+    const raw = await this.store.readJson("tags.json", CATALOG_LIMIT);
+    catalog ??= await this.store.readJson("index.json", CATALOG_LIMIT) ?? [];
+    if (!Array.isArray(catalog)) throw new AdminProblem(502, "The cloud video list is invalid.");
+    let registry;
+    try { registry = registryFromVideos(catalog, normalizeRegistry(raw)); }
+    catch { throw new AdminProblem(502, "The saved tag list is invalid. No tags were changed."); }
+    return { raw, registry, revision: await digest(stableJSON(registry)) };
+  }
+  async tagsDetail() {
+    const { registry, revision } = await this.tagRegistry();
+    return { ...registry, revision };
+  }
+  async mutateTags(body) {
+    const operationId = checkOperation(body.operation_id), hash = await digest(stableJSON({ action: "tags", body }));
+    return this.enqueue(async () => {
+      let replay = await this.replay(operationId, hash); if (replay) return replay;
+      await this.recover(); replay = await this.replay(operationId, hash); if (replay) return replay;
+      const current = await this.tagRegistry();
+      if (body.revision !== current.revision) { const error = new AdminProblem(409, "The tag list changed. Review it before saving."); error.current = { ...current.registry, revision: current.revision }; throw error; }
+      const registry = structuredClone(current.registry);
+      try {
+        if (body.tag) {
+          checkKeys(body.tag, ["id", "name", "aliases"]);
+          if (Object.hasOwn(body.tag, "id") && (typeof body.tag.id !== "string" || /\s/.test(body.tag.id) || !VIDEO_ID.test(body.tag.id))) throw new AdminProblem(400, "Choose a valid tag identity.");
+          const previous = registry.tags.find(tag => tag.id === body.tag.id);
+          const tagId = body.tag.id || `tag-${crypto.randomUUID()}`;
+          if (body.tag.aliases !== undefined && !Array.isArray(body.tag.aliases)) throw new AdminProblem(400, "Use a list of tag aliases.");
+          const aliases = [...(body.tag.aliases || [])];
+          if (!previous && body.tag.id && (![body.tag.name, ...aliases].some(name => typeof name === "string" && tagId === legacyTagId(name)) || Object.hasOwn(registry.redirects, tagId))) throw new AdminProblem(400, "Choose an existing tag to rename.");
+          if (previous && normalizeTag(previous.name) !== normalizeTag(body.tag.name)) aliases.push(previous.name);
+          const tag = { id: tagId, name: body.tag.name, aliases };
+          registry.tags = [...registry.tags.filter(item => item.id !== tagId), tag];
+        } else {
+          checkKeys(body.merge, ["source", "target"]);
+          const sourceId = Object.hasOwn(registry.redirects, body.merge.source) ? registry.redirects[body.merge.source] : body.merge.source;
+          const targetId = Object.hasOwn(registry.redirects, body.merge.target) ? registry.redirects[body.merge.target] : body.merge.target;
+          const source = registry.tags.find(tag => tag.id === sourceId), target = registry.tags.find(tag => tag.id === targetId);
+          if (!source || !target || source.id === target.id) throw new AdminProblem(400, "Choose two different existing tags to merge.");
+          target.aliases = [...target.aliases, source.name, ...source.aliases];
+          registry.tags = registry.tags.filter(tag => tag.id !== source.id);
+          Object.defineProperty(registry.redirects, source.id, { value: target.id, enumerable: true, writable: true, configurable: true });
+        }
+        const desired = normalizeRegistry(registry);
+        bytesJSON(desired, CATALOG_LIMIT, "Tag list");
+        return this.journal({ id: operationId, hash, action: "tags", registry: desired, baseRegistryHash: await digest(stableJSON(current.raw)) }, []);
+      } catch (error) { if (error instanceof AdminProblem) throw error; throw new AdminProblem(400, error.message || "The tag definition is invalid."); }
+    });
+  }
   async origin(videoId) {
     const raw = await this.store.readJson(`${videoId}/metadata.json`);
     const catalog = await this.store.readJson("index.json", CATALOG_LIMIT) ?? [];
     if (!Array.isArray(catalog) || catalog.some(entry => !plain(entry) || typeof entry.id !== "string")) throw new AdminProblem(502, "The cloud video list is invalid.");
     const entry = catalog.find(item => item.id === videoId) || null;
     const revision = await digest(stableJSON({ metadata: raw, entry }));
-    return { raw, catalog, entry, revision, metadata: raw === null ? null : normalizeMetadata(raw, videoId, entry) };
+    const { registry } = await this.tagRegistry(catalog);
+    return { raw, catalog, entry, revision, registry, metadata: raw === null ? null : normalizeMetadata(raw, videoId, entry) };
   }
   async detail(videoId, origin) {
     origin ||= await this.origin(videoId);
     if (!origin.metadata) throw new AdminProblem(404, "Video not found.");
     const draft = await this.storage.get(`draft:${videoId}`);
-    const metadata = editorMetadata(origin.metadata, draft);
+    const metadata = hydrateVideoTags(editorMetadata(origin.metadata, draft), origin.registry);
     if (draft?.thumbnails?.length) { metadata.thumbnailMode = "sdr"; metadata.thumbnailUpdatedAt = draft.thumbnailUpdatedAt; }
     const revision = await digest(stableJSON({ origin: origin.revision, draft: draft || null }));
-    return { ...metadata, id: videoId, metadata, published_metadata: origin.metadata, entry: origin.entry,
+    return { ...metadata, id: videoId, metadata, published_metadata: hydrateVideoTags(origin.metadata, origin.registry), entry: origin.entry,
       revision, origin_revision: origin.revision, pending: Boolean(draft), remoteChanged: Boolean(draft && draft.base !== origin.revision),
       visibility_review_required: metadata.visibility === "unknown",
       has_remote: true, uploaded: true, remoteChecked: true, has_local: false, local: false, can_preview: true,
@@ -193,6 +268,15 @@ export class AdminLibraryService {
     }
   }
   async apply(journal) {
+    if (journal.action === "tags") {
+      const raw = await this.store.readJson("tags.json", CATALOG_LIMIT);
+      const currentHash = await digest(stableJSON(raw)), desiredHash = await digest(stableJSON(journal.registry));
+      if (![journal.baseRegistryHash, desiredHash].includes(currentHash)) throw new AdminProblem(409, "The tag list changed outside this save. Refresh it before retrying.");
+      if (currentHash !== desiredHash) await this.store.write("tags.json", bytesJSON(journal.registry, CATALOG_LIMIT, "Tag list"), "application/json");
+      const latest = await this.store.readJson("tags.json", CATALOG_LIMIT);
+      if (await digest(stableJSON(latest)) !== desiredHash) throw new AdminProblem(409, "The tag list changed during the save. Refresh it before retrying.");
+      return this.complete(journal, await this.tagsDetail());
+    }
     await this.stage(journal);
     if (journal.action === "draft") {
       const draft = { ...journal.draft, thumbnails: journal.staged.length ? journal.staged : journal.draft.thumbnails || [] };
@@ -251,7 +335,7 @@ export class AdminLibraryService {
     catch (error) {
       if (error instanceof AdminProblem && error.status === 409) {
         let current;
-        try { current = await this.detail(journal.videoId); } catch {}
+        try { current = journal.action === "tags" ? await this.tagsDetail() : await this.detail(journal.videoId); } catch {}
         await this.complete(journal, { detail: error.message, ...(current ? { current } : {}) }, 409);
         return;
       }
@@ -310,7 +394,7 @@ export class AdminLibraryService {
             !["public", "unlisted", "private"].includes(body.metadata.visibility) ||
             !Array.isArray(body.metadata.codecs) || !body.metadata.codecs.length || body.metadata.codecs.length > 2 || new Set(body.metadata.codecs).size !== body.metadata.codecs.length || body.metadata.codecs.some(codec => !["AV1", "HEVC"].includes(codec)) ||
             !Number.isFinite(body.metadata.duration) || body.metadata.duration <= 0 || !Number.isInteger(body.metadata.width) || !Number.isInteger(body.metadata.height) || body.metadata.width < 1 || body.metadata.height < 1 || body.metadata.width > 16384 || body.metadata.height > 16384) throw new AdminProblem(400, "New metadata must describe the completed 120 fps encode.");
-        const metadata = normalizeMetadata({ ...body.metadata, ...fields(body.metadata) }, videoId, plain(body.entry) ? body.entry : null);
+        const metadata = canonicalVideoTags(normalizeMetadata({ ...body.metadata, ...tagFields(body.metadata, origin.registry) }, videoId, plain(body.entry) ? body.entry : null), origin.registry);
         const images = validateVariants(body.variants);
         if (images.length) { metadata.thumbnailMode = "sdr"; metadata.thumbnailUpdatedAt = new Date(this.now()).toISOString(); }
         bytesJSON(metadata, METADATA_LIMIT, "Video metadata"); bytesJSON(mergeCatalog(origin.catalog, videoId, metadata), CATALOG_LIMIT, "Video list");
@@ -327,12 +411,12 @@ export class AdminLibraryService {
       }
       const previous = await this.storage.get(`draft:${videoId}`);
       const images = validateVariants(body.variants);
-      const draft = { fields: { ...(previous?.fields || {}), ...fields(body) }, base: previous?.base || origin.revision,
+      const draft = { fields: { ...(previous?.fields || {}), ...tagFields(body, origin.registry) }, base: previous?.base || origin.revision,
         thumbnails: previous?.thumbnails || [], version: (previous?.version || 0) + 1,
         ...(previous?.visibilityReviewed || (origin.metadata.visibility === "unknown" && Object.hasOwn(body, "visibility")) ? { visibilityReviewed: true } : {}),
         ...(previous?.thumbnailUpdatedAt ? { thumbnailUpdatedAt: previous.thumbnailUpdatedAt } : {}) };
       if (images.length) draft.thumbnailUpdatedAt = new Date(this.now()).toISOString();
-      const metadata = editorMetadata(origin.metadata, draft);
+      const metadata = canonicalVideoTags(editorMetadata(origin.metadata, draft), origin.registry);
       if (images.length || draft.thumbnails.length) { metadata.thumbnailMode = "sdr"; metadata.thumbnailUpdatedAt = draft.thumbnailUpdatedAt; }
       bytesJSON(metadata, METADATA_LIMIT, "Video metadata"); bytesJSON(mergeCatalog(origin.catalog, videoId, metadata), CATALOG_LIMIT, "Video list");
       if (body.publish && metadata.visibility === "unknown") { const error = new AdminProblem(409, "Review and explicitly choose this video's visibility before publishing. Your draft is kept."); error.current = current; throw error; }
@@ -355,6 +439,14 @@ export class AdminLibraryService {
         if ([...url.searchParams.keys()].some(key => !allowed.includes(key)) || allowed.some(key => url.searchParams.getAll(key).length > 1) ||
             ["remote", "refresh", "check_online"].some(key => url.searchParams.has(key) && !["true", "false", "0", "1"].includes(url.searchParams.get(key)))) throw new AdminProblem(400, "Invalid video request.");
       };
+      if (path === "/edit/api/tags" && !url.search) {
+        if (request.method === "GET") return json(await this.tagsDetail());
+        if (request.method !== "POST") throw new AdminProblem(404, "Not found.");
+        const body = await boundedJSON(request, CATALOG_LIMIT); operationId = body?.operation_id;
+        checkKeys(body, ["revision", "tag", "merge", "operation_id"]);
+        if (typeof body.revision !== "string" || body.revision.length > 128 || Boolean(body.tag) === Boolean(body.merge)) throw new AdminProblem(400, "A current tag revision and one tag operation are required.");
+        return await this.mutateTags(body);
+      }
       const draftImage = /^\/edit\/api\/internal\/draft-thumbnail\/([A-Za-z0-9_-]{1,128})\/(thumbnail_sdr(?:_720p)?\.webp|thumbnail_share\.jpg|thumbnail_hdr(?:_720p)?\.avif)$/.exec(path);
       if (request.method === "GET" && draftImage && !url.search) return json({ key: await this.readDraftThumbnail(id(draftImage[1]), draftImage[2]) });
       if (request.method === "GET" && path === "/edit/api/videos") {

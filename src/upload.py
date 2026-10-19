@@ -49,10 +49,10 @@ _CATALOG_LIMIT = 1_000_000
 _METADATA_LIMIT = 128_000
 _MISSING = object()
 _CATALOG_FIELDS = (
-    "title", "description", "tags", "date", "createdAt", "duration", "width",
+    "title", "description", "tags", "tagIds", "tagDefinitions", "date", "createdAt", "duration", "width",
     "height", "frameRate", "hdr", "codecs",
 )
-_INDEX_ONLY_FIELDS = {"tags", "date", "hdr"}
+_INDEX_ONLY_FIELDS = {"tags", "tagIds", "tagDefinitions", "date", "hdr"}
 
 
 def make_b2_client() -> tuple[Any, str]:
@@ -401,16 +401,24 @@ def _upload_central_media(writer, publication, folder, files, log, max_workers, 
 
 
 def _finalize_central_package(writer, library, video_id, state, metadata, entry, images):
-    from video_library import _digest
+    from video_library import _digest, _json_bytes
     operation = state["centralUpload"]
     result = writer.finalize(video_id, operation["lease"], metadata, entry, images=images, operation_id=operation["operation_id"])
     published = result.get("published_metadata") if isinstance(result, dict) else None
+    raw_published = published
+    compared = metadata
+    if "tagIds" in metadata and isinstance(published, dict):
+        from tags import hydrate_video_tags, normalize_registry
+        registry = normalize_registry(writer.get_tags())
+        library._write(library.local / "tags.json", _json_bytes(registry))
+        compared = hydrate_video_tags(metadata, registry)
+        published = hydrate_video_tags(published, registry)
     if (not isinstance(published, dict) or result.get("pending") is not False or not isinstance(result.get("revision"), str) or not result["revision"]
-            or any(published.get(key) != value for key, value in metadata.items() if key not in ("thumbnailMode", "thumbnailUpdatedAt"))):
+            or any(published.get(key) != value for key, value in compared.items() if key not in ("thumbnailMode", "thumbnailUpdatedAt"))):
         raise AdminClientError("The central publisher did not confirm the completed video. Your local package is kept.")
     operation["confirmed"] = True
-    canonical = library._metadata(video_id, published, result.get("entry"))
-    state.update(remoteHash=_digest(published), remoteEntryHash=_digest(result.get("entry")), remoteMetadata=canonical,
+    canonical = library._metadata(video_id, raw_published, result.get("entry"))
+    state.update(remoteHash=_digest(raw_published), remoteEntryHash=_digest(result.get("entry")), remoteMetadata=canonical,
                  uploaded=True, remoteChecked=True, remoteChanged=False, pending=False, pendingThumbnails=[], needsReview=False,
                  writerURL=writer.url, writerRevision=result["revision"], writerDraftPending=False, localAtRefresh=_digest(canonical))
     library._save_local(video_id, canonical, state)
@@ -510,14 +518,35 @@ def upload_index(b2: Any, bucket: str, index_path: Path, log: logging.Logger) ->
                 if field in metadata:
                     entry[field] = metadata[field]
                 elif field in _INDEX_ONLY_FIELDS:
+                    if field in ("tagIds", "tagDefinitions") and "tags" in metadata:
+                        continue
                     fallback = existing if existing is not None else local_entry
                     if field in fallback:
                         entry[field] = fallback[field]
             merged[video_id] = entry
         public = sorted(merged.values(), key=_created_at, reverse=True)
+        registry_publication = None
+        # A registry is owner data, not an independently public asset. The CDN
+        # scopes its definitions to each authorized video/catalogue response.
+        from video_library import VideoLibrary, _json_bytes
+        from tags import hydrate_video_tags, registry_from_videos
+        library = VideoLibrary(_PROJECT_ROOT, index_path.parent)
+        registry_path = library._safe(index_path.with_name("tags.json"))
+        if registry_path.exists():
+            registry = registry_from_videos(public, library._direct_tags(b2, bucket))
+            public = [hydrate_video_tags(item, registry) for item in public]
+            registry_body = _json_bytes(registry)
+            if len(registry_body) > _CATALOG_LIMIT:
+                raise ValueError("Master tag list is too large")
+            registry_publication = registry, registry_body
         body = json.dumps(public, indent=2, allow_nan=False).encode("utf-8")
         if len(body) > _CATALOG_LIMIT:
             raise ValueError("Merged index is too large")
+        if registry_publication is not None:
+            registry, registry_body = registry_publication
+            replace_object(b2, bucket, "tags.json", registry_body, "application/json", log)
+            library._write(registry_path, registry_body)
+            library._save_tag_state(directBaseline=registry)
         replace_object(b2, bucket, "index.json", body, "application/json", log)
         log.info(
             f"[INDEX]        Uploaded index.json -> b2://{bucket}/index.json "

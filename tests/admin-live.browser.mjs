@@ -175,12 +175,14 @@ async function runWorkflow(page, fixture, profile) {
   assert.equal(await page.locator("#editor-publish").textContent(), "Save to website");
   await page.locator("#edit-title").fill("Owner draft title");
   await page.locator("#edit-description").fill("A saved draft.\nSecond line.");
-  await page.locator("#edit-tags").fill("owner, 120 fps");
+  await page.locator('#selected-tags button[aria-label="Remove motion tag"]').click();
+  await page.locator("#tag-search").fill("owner");
+  await page.locator('#tag-suggestions button[data-tag-id="owner"]').click();
   await page.locator('input[name="edit-visibility"][value="private"]').check();
   await page.locator("#editor-save").click();
   await waitText(page, "#editor-save-state", "Draft saved");
   let mutation = posts().at(-1);
-  assert.deepEqual({ title: mutation.body.title, description: mutation.body.description, tags: mutation.body.tags, visibility: mutation.body.visibility, publish: mutation.body.publish }, { title: "Owner draft title", description: "A saved draft.\nSecond line.", tags: ["owner", "120 fps"], visibility: "private", publish: false });
+  assert.deepEqual({ title: mutation.body.title, description: mutation.body.description, tags: mutation.body.tags, visibility: mutation.body.visibility, publish: mutation.body.publish }, { title: "Owner draft title", description: "A saved draft.\nSecond line.", tags: ["120 fps", "owner"], visibility: "private", publish: false });
   assert.equal(mutation.headers.editor, "1");
   assert.equal(mutation.headers.session, undefined);
   await readyPreview(page, fixture);

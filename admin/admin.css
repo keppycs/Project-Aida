@@ -99,6 +99,22 @@ dialog::backdrop { background: #000a; }
 .card-preview-copy p { margin-top: 6px; font-size: .6875rem; }
 .editor-form { display: flex; flex-direction: column; gap: 20px; min-width: 0; }
 .field-pair { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 16px; }
+.tag-editor { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.tag-heading, .tag-library-status { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.tag-heading h3 { font-size: .875rem; font-weight: 400; color: var(--text-muted); }
+.tag-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.tag-chip { min-width: 44px; min-height: 44px; max-width: 100%; padding: 8px 12px; border: 0; border-radius: 8px; color: var(--text); background: var(--surface2); text-align: left; overflow-wrap: anywhere; }
+.tag-suggestions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px; }
+.tag-suggestion { display: flex; flex-direction: column; align-items: start; justify-content: center; min-width: 44px; min-height: 44px; padding: 9px 12px; border: 0; border-radius: 8px; background: var(--surface); text-align: left; overflow-wrap: anywhere; }
+.tag-suggestion small { color: var(--text-dim); font-size: .75rem; }
+.tag-chip:disabled, .tag-suggestion:disabled { cursor: default; opacity: .45; }
+.tag-manager { display: flex; flex-direction: column; gap: 12px; padding: 16px; border-radius: var(--radius); background: var(--surface); }
+.tag-manager .field input, .tag-manager .field select { background: var(--surface2); }
+.tag-manager > .btn { align-self: start; }
+#tag-merge-fields { display: flex; flex-direction: column; align-items: start; gap: 8px; padding-top: 12px; border-top: 1px solid var(--border); }
+#tag-merge-fields .field { width: 100%; }
+.tag-library-status .text-btn { flex-shrink: 0; }
+@media (hover: hover) and (pointer: fine) { .tag-chip:not(:disabled):hover, .tag-suggestion:not(:disabled):hover { background: #32363b; } }
 .visibility-field { border: 0; min-width: 0; }
 .visibility-field legend { color: var(--text-muted); font-size: .875rem; margin-bottom: 7px; }
 .visibility-options { display: flex; padding: 3px; gap: 2px; border-radius: 10px; background: var(--surface); }

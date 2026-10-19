@@ -1,11 +1,16 @@
 import {
   fetchCatalog, mediaBase, formatDate,
   renderVideoCard, detectDisplayHdr, attachThumbnailFallbacks,
-} from "./catalog.js?v=cdn-security-v2";
+} from "./catalog.js?v=master-tags-v1";
+import { browseQuery, videosUrl, withBrowseQuery } from "./browse-context.js?v=master-tags-v1";
+import { registryFromVideos, resolveVideoTags } from "./tags.js?v=master-tags-v1";
+import { tagQuery } from "./search.js?v=master-tags-v1";
 import { loadMetadata, VideoLoadError } from "./loader.js?v=cdn-security-v1";
 import { mountPlayer } from "./player/shell.js?v=overlay-scrollbar-v36";
 
 const id = new URLSearchParams(location.search).get("v") || "0";
+const originatingQuery = browseQuery(location.search);
+for (const link of document.querySelectorAll(".back-link, #watch-status-videos")) link.href = videosUrl(originatingQuery);
 const local = typeof window.shouldUseLocalCmaf === "function" && window.shouldUseLocalCmaf();
 const base = mediaBase(id, { local });
 const stage = document.getElementById("watch-stage");
@@ -72,12 +77,15 @@ function renderDetails(meta) {
   description.hidden = !description.textContent.trim();
   const tagList = document.getElementById("watch-tags");
   tagList.replaceChildren();
-  const tags = meta.tags ?? entry?.tags;
-  if (Array.isArray(tags)) {
-    for (const tag of tags.filter((tag) => typeof tag === "string" && tag.trim())) {
+  const taggedVideo = { ...entry, ...meta, tags: meta.tags ?? entry?.tags };
+  if (Object.hasOwn(meta, "tags") && !Object.hasOwn(meta, "tagIds")) delete taggedVideo.tagIds;
+  const registry = registryFromVideos([taggedVideo, ...catalog]);
+  const tags = resolveVideoTags(taggedVideo, registry);
+  if (tags.length) {
+    for (const tag of tags) {
       const link = document.createElement("a");
-      link.href = `./?q=${encodeURIComponent(tag)}`;
-      link.textContent = tag;
+      link.href = videosUrl(tagQuery(tag.name));
+      link.textContent = tag.name;
       tagList.append(link);
     }
   }
@@ -89,7 +97,11 @@ async function renderMoreVideos() {
   if (!others.length) return;
   const hdrCapable = await detectDisplayHdr().catch(() => false);
   const grid = document.getElementById("more-videos-grid");
-  grid.replaceChildren(...others.map((item) => renderVideoCard(item, { hdrCapable, local })));
+  grid.replaceChildren(...others.map((item) => {
+    const card = renderVideoCard(item, { hdrCapable, local });
+    card.href = withBrowseQuery(card.getAttribute("href"), originatingQuery);
+    return card;
+  }));
   attachThumbnailFallbacks(grid);
   document.getElementById("more-videos").hidden = false;
 }
