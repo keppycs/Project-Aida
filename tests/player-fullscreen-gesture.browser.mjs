@@ -94,7 +94,11 @@ try {
   await enter();
   const surface = await point("video", .2, .3);
   await unchanged("short downward movement", surface, 0, 30);
-  await unchanged("upward movement", { ...surface, y: surface.y + 120 }, 0, -110);
+  // The video element now fits the picture, so a fixed +120px offset can land
+  // on the relocated seek target. Start this picture gesture on bare video.
+  const upwardStart = await point("video", .2, .6);
+  assert.equal(await page.evaluate(point => document.elementFromPoint(point.x, point.y)?.id, upwardStart), "video");
+  await unchanged("upward movement", upwardStart, 0, -110);
   await unchanged("horizontal movement", surface, 130, 20);
   await unchanged("diagonal movement without vertical dominance", surface, 95, 100);
   await unchanged("cancelled downward swipe", surface, 0, 130, { cancel: true });

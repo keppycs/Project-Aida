@@ -14,6 +14,7 @@ function collectContext() {
   const wrap = document.getElementById("player-wrap");
   return {
     wrap,
+    picture: document.getElementById("player-picture"),
     video: document.getElementById("video"),
     bigPlay: document.getElementById("big-play"),
     spinner: document.getElementById("spinner"),
@@ -143,6 +144,36 @@ export async function mountPlayer(meta, base) {
   const isAnyMenuOpen = () => settings.isOpen;
   const closeAllMenus = (restoreFocus = false) => settings.close(restoreFocus);
   const updateMenuBounds = () => settings.resize();
+  // One fitted surface owns both media and playback UI. Its clip gives them
+  // the same painted edge; the fullscreen root and Settings remain independent.
+  function updatePictureBounds() {
+    const bounds = wrap.getBoundingClientRect();
+    const { width, height } = bounds;
+    const sourceWidth = video.videoWidth || Number(meta.width);
+    const sourceHeight = video.videoHeight || Number(meta.height);
+    const ratio = sourceWidth > 0 && sourceHeight > 0 ? sourceWidth / sourceHeight : 16 / 9;
+    const pictureWidth = Math.min(width, height * ratio);
+    const pictureHeight = Math.min(height, width / ratio);
+    // Give the shared clip integral device-pixel edges. Fractional CSS edges
+    // otherwise rasterize differently for hardware video and DOM overlays.
+    const dpr = window.devicePixelRatio || 1;
+    const left = Math.ceil((bounds.left + (width - pictureWidth) / 2) * dpr) / dpr - bounds.left;
+    const top = Math.ceil((bounds.top + (height - pictureHeight) / 2) * dpr) / dpr - bounds.top;
+    const right = Math.floor((bounds.right - (width - pictureWidth) / 2) * dpr) / dpr - bounds.left;
+    const bottom = Math.floor((bounds.bottom - (height - pictureHeight) / 2) * dpr) / dpr - bounds.top;
+    ctx.picture.style.left = `${left}px`;
+    ctx.picture.style.top = `${top}px`;
+    ctx.picture.style.width = `${Math.max(0, right - left)}px`;
+    ctx.picture.style.height = `${Math.max(0, bottom - top)}px`;
+    // Safe areas describe the device viewport. Only the portion that reaches
+    // the fitted picture needs to inset its controls.
+    ctx.picture.style.setProperty("--picture-inset-x", `${left}px`);
+    ctx.picture.style.setProperty("--picture-inset-y", `${top}px`);
+  }
+  new ResizeObserver(updatePictureBounds).observe(wrap);
+  video.addEventListener("loadedmetadata", updatePictureBounds);
+  video.addEventListener("resize", updatePictureBounds);
+  updatePictureBounds();
   document.getElementById("settings-panel").addEventListener("aida:settings-settled", () => {
     if (!isAnyMenuOpen()) syncTimeline();
     showUI();
@@ -423,6 +454,7 @@ export async function mountPlayer(meta, base) {
     if (bigPlayMotion && isMobileLayout(next)) cleanupBigPlayFlash();
     profile = next;
     applyLayoutClass(wrap, profile);
+    updatePictureBounds();
     updateMenuBounds();
     syncBigPlayOverlay();
     if (profile.hideVolumeChrome) {

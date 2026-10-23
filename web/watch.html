@@ -10,12 +10,12 @@
     <script src="https://cdn.jsdelivr.net/npm/shaka-player@5.0.7/dist/shaka-player.compiled.js" integrity="sha384-QmUMkgEfxfKsqPJEzI+KDHoe3v4Ci8Xql0RFiGN093TYQZUBJLXARMl8fVNhubqw" crossorigin="anonymous"></script>
 
     <link rel="stylesheet" href="css/site.css?v=ux-audit-v1" />
-    <link rel="stylesheet" href="css/player.css?v=overlay-scrollbar-v36" />
-    <link rel="stylesheet" href="css/player-mobile.css?v=compact-hit-v27" />
+    <link rel="stylesheet" href="css/player.css?v=picture-surface-v39" />
+    <link rel="stylesheet" href="css/player-mobile.css?v=picture-surface-v39" />
     <link rel="stylesheet" href="css/watch.css?v=ux-audit-v1" />
     <script defer src="js/site-env.js?v=ux-stability-v14"></script>
     <script defer src="js/ui.js?v=ux-baseline-v2"></script>
-    <script type="module" src="js/watch.js?v=ux-baseline-v2"></script>
+    <script type="module" src="js/watch.js?v=picture-surface-v39"></script>
   </head>
   <body>
     <a class="skip-link" href="#main-content">Skip to video</a>
@@ -42,70 +42,106 @@
           </div>
         </div>
     <div id="player-wrap" tabindex="0" aria-label="Video player" inert>
-      <video id="video" playsinline crossorigin="anonymous"></video>
+      <div id="player-picture">
+        <video id="video" playsinline crossorigin="anonymous"></video>
 
-      <div class="grad-top" aria-hidden="true"></div>
-      <div class="grad-bot" aria-hidden="true"></div>
+        <div class="grad-top" aria-hidden="true"></div>
+        <div class="grad-bot" aria-hidden="true"></div>
 
-      <!-- Title -->
-      <div id="title-bar">
-        <div id="title-text">Video Title</div>
-        <div class="title-spacer"></div>
-        <div class="badge-accent" id="hdr-badge">—</div>
-        <div class="badge-accent" id="codec-badge">—</div>
-        <div class="badge-accent" id="protocol-badge">—</div>
-        <div class="badge-accent" id="local-badge">LOCAL</div>
-      </div>
-
-      <!-- Big play -->
-      <button id="big-play" type="button" aria-label="Play video">
-        <svg viewBox="0 0 72 72" fill="none" aria-hidden="true">
-          <circle cx="36" cy="36" r="35" fill="rgba(0,0,0,.55)" />
-          <path
-            d="M26.5 21.5 L52.5 36 L26.5 50.5 Z"
-            fill="rgba(255,255,255,0.88)"
-          />
-        </svg>
-      </button>
-
-      <!-- Buffering -->
-      <div id="spinner"><div class="spin-ring"></div></div>
-
-      <!-- Seek flash -->
-      <div id="seek-flash"></div>
-      <div id="seek-ripple-left" class="seek-ripple" aria-hidden="true"></div>
-      <div id="seek-ripple-right" class="seek-ripple" aria-hidden="true"></div>
-
-      <!-- Keyboard toast -->
-      <div id="kb-toast"></div>
-
-      <!-- Controls -->
-      <div id="progress-touch-target" aria-hidden="true"></div>
-      <div id="controls">
-        <!-- Progress -->
-        <div id="progress-wrap" role="slider" tabindex="0" aria-label="Seek" aria-valuemin="0" aria-valuemax="0" aria-valuenow="0" aria-valuetext="0:00">
-          <div id="progress-track">
-            <div id="progress-buffer"></div>
-            <div id="progress-fill"></div>
-          </div>
-          <div id="progress-thumb"></div>
-          <div id="time-tooltip">0:00</div>
+        <!-- Title -->
+        <div id="title-bar">
+          <div id="title-text">Video Title</div>
+          <div class="title-spacer"></div>
+          <div class="badge-accent" id="hdr-badge">—</div>
+          <div class="badge-accent" id="codec-badge">—</div>
+          <div class="badge-accent" id="protocol-badge">—</div>
+          <div class="badge-accent" id="local-badge">LOCAL</div>
         </div>
 
-        <!-- Bottom row -->
-        <div id="ctrl-row">
-          <!-- Play/Pause -->
-          <button class="ctrl-btn" id="play-btn" type="button" title="Play (K)" aria-label="Play">
-            <svg id="play-icon" viewBox="0 0 24 24" fill="currentColor">
-              <polygon points="5,3 19,12 5,21" />
-            </svg>
-          </button>
+        <!-- Big play -->
+        <button id="big-play" type="button" aria-label="Play video">
+          <svg viewBox="0 0 72 72" fill="none" aria-hidden="true">
+            <circle cx="36" cy="36" r="35" fill="rgba(0,0,0,.55)" />
+            <path
+              d="M26.5 21.5 L52.5 36 L26.5 50.5 Z"
+              fill="rgba(255,255,255,0.88)"
+            />
+          </svg>
+        </button>
 
-          <!-- Volume -->
-          <div id="vol-cluster">
-            <button class="ctrl-btn" id="mute-btn" type="button" title="Mute (M)" aria-label="Mute">
+        <!-- Buffering -->
+        <div id="spinner"><div class="spin-ring"></div></div>
+
+        <!-- Seek flash -->
+        <div id="seek-flash"></div>
+        <div id="seek-ripple-left" class="seek-ripple" aria-hidden="true"></div>
+        <div id="seek-ripple-right" class="seek-ripple" aria-hidden="true"></div>
+
+        <!-- Keyboard toast -->
+        <div id="kb-toast"></div>
+
+        <!-- Controls -->
+        <div id="progress-touch-target" aria-hidden="true"></div>
+        <div id="controls">
+          <!-- Progress -->
+          <div id="progress-wrap" role="slider" tabindex="0" aria-label="Seek" aria-valuemin="0" aria-valuemax="0" aria-valuenow="0" aria-valuetext="0:00">
+            <div id="progress-track">
+              <div id="progress-buffer"></div>
+              <div id="progress-fill"></div>
+            </div>
+            <div id="progress-thumb"></div>
+            <div id="time-tooltip">0:00</div>
+          </div>
+
+          <!-- Bottom row -->
+          <div id="ctrl-row">
+            <!-- Play/Pause -->
+            <button class="ctrl-btn" id="play-btn" type="button" title="Play (K)" aria-label="Play">
+              <svg id="play-icon" viewBox="0 0 24 24" fill="currentColor">
+                <polygon points="5,3 19,12 5,21" />
+              </svg>
+            </button>
+
+            <!-- Volume -->
+            <div id="vol-cluster">
+              <button class="ctrl-btn" id="mute-btn" type="button" title="Mute (M)" aria-label="Mute">
+                <svg
+                  id="vol-icon"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                >
+                  <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
+                  <path id="vol-wave-1" d="M19.07 4.93a10 10 0 0 1 0 14.14" />
+                  <path id="vol-wave-2" d="M15.54 8.46a5 5 0 0 1 0 7.07" />
+                </svg>
+              </button>
+              <div id="vol-slider-wrap">
+                <input type="range" id="vol-slider" min="0" max="1" step="0.01" value="0.5" aria-label="Volume" />
+              </div>
+            </div>
+
+            <!-- Time -->
+            <div id="time-display">
+              <span id="cur-time">0:00</span><span> / </span><span id="dur-time">0:00</span>
+            </div>
+
+            <div class="spacer"></div>
+
+            <button class="ctrl-btn" id="settings-btn" type="button" title="Settings" aria-label="Settings" aria-controls="settings-panel" aria-expanded="false">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="m9.7 3-.5 2-2 .9-1.9-.6-2.4 4.2 1.5 1.5v2l-1.5 1.5 2.4 4.2 1.9-.6 2 .9.5 2h4.6l.5-2 2-.9 1.9.6 2.4-4.2-1.5-1.5v-2l1.5-1.5-2.4-4.2-1.9.6-2-.9-.5-2Z" />
+                <circle cx="12" cy="12" r="3" />
+              </svg>
+            </button>
+
+            <!-- Fullscreen -->
+            <button class="ctrl-btn" id="fs-btn" type="button" title="Fullscreen (F)" aria-label="Enter fullscreen">
               <svg
-                id="vol-icon"
+                id="fs-icon"
                 viewBox="0 0 24 24"
                 fill="none"
                 stroke="currentColor"
@@ -113,48 +149,15 @@
                 stroke-linecap="round"
                 stroke-linejoin="round"
               >
-                <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
-                <path id="vol-wave-1" d="M19.07 4.93a10 10 0 0 1 0 14.14" />
-                <path id="vol-wave-2" d="M15.54 8.46a5 5 0 0 1 0 7.07" />
+                <polyline points="15 3 21 3 21 9" />
+                <polyline points="9 21 3 21 3 15" />
+                <line x1="21" y1="3" x2="14" y2="10" />
+                <line x1="3" y1="21" x2="10" y2="14" />
               </svg>
             </button>
-            <div id="vol-slider-wrap">
-              <input type="range" id="vol-slider" min="0" max="1" step="0.01" value="0.5" aria-label="Volume" />
-            </div>
           </div>
-
-          <!-- Time -->
-          <div id="time-display">
-            <span id="cur-time">0:00</span><span> / </span><span id="dur-time">0:00</span>
-          </div>
-
-          <div class="spacer"></div>
-
-          <button class="ctrl-btn" id="settings-btn" type="button" title="Settings" aria-label="Settings" aria-controls="settings-panel" aria-expanded="false">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              <path d="m9.7 3-.5 2-2 .9-1.9-.6-2.4 4.2 1.5 1.5v2l-1.5 1.5 2.4 4.2 1.9-.6 2 .9.5 2h4.6l.5-2 2-.9 1.9.6 2.4-4.2-1.5-1.5v-2l1.5-1.5-2.4-4.2-1.9.6-2-.9-.5-2Z" />
-              <circle cx="12" cy="12" r="3" />
-            </svg>
-          </button>
-
-          <!-- Fullscreen -->
-          <button class="ctrl-btn" id="fs-btn" type="button" title="Fullscreen (F)" aria-label="Enter fullscreen">
-            <svg
-              id="fs-icon"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-            >
-              <polyline points="15 3 21 3 21 9" />
-              <polyline points="9 21 3 21 3 15" />
-              <line x1="21" y1="3" x2="14" y2="10" />
-              <line x1="3" y1="21" x2="10" y2="14" />
-            </svg>
-          </button>
         </div>
+
       </div>
 
       <div id="menu-backdrop" class="menu-backdrop" aria-hidden="true"></div>

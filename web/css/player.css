@@ -16,6 +16,7 @@
   --bar-h: 3px;
   --bar-h-hover: 5px;
   --ctrl-h: 44px;
+  --control-inset: 12px;
   --player-notice-bottom: 72px;
   --radius: 12px;
   --font: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -40,6 +41,18 @@
   height: 100dvh;
   aspect-ratio: auto;
   border-radius: 0;
+}
+#player-picture {
+  --control-left: max(var(--control-inset), calc(env(safe-area-inset-left) - var(--picture-inset-x, 0px)));
+  --control-right: max(var(--control-inset), calc(env(safe-area-inset-right) - var(--picture-inset-x, 0px)));
+  --control-bottom: max(4px, calc(env(safe-area-inset-bottom) - var(--picture-inset-y, 0px)));
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  isolation: isolate;
 }
 #player-wrap video {
   display: block;
@@ -143,9 +156,9 @@
    input.js limits mouse seeking to the 10px strip around the rail. */
 #progress-touch-target {
   position: absolute;
-  left: max(12px, env(safe-area-inset-left));
-  right: max(12px, env(safe-area-inset-right));
-  bottom: calc(max(4px, env(safe-area-inset-bottom)) + var(--ctrl-h) + 4px + var(--bar-h) / 2 - 22px);
+  left: var(--control-left);
+  right: var(--control-right);
+  bottom: calc(var(--control-bottom) + var(--ctrl-h) + 4px + var(--bar-h) / 2 - 22px);
   height: 44px;
   z-index: 9;
   visibility: hidden;
@@ -155,9 +168,9 @@
 #player-wrap.ui-visible #progress-touch-target { visibility: visible; pointer-events: auto; }
 #controls {
   position: absolute;
-  left: max(12px, env(safe-area-inset-left));
-  right: max(12px, env(safe-area-inset-right));
-  bottom: max(4px, env(safe-area-inset-bottom));
+  left: var(--control-left);
+  right: var(--control-right);
+  bottom: var(--control-bottom);
   height: var(--ctrl-h);
   z-index: 10;
   opacity: 0;

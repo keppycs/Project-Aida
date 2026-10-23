@@ -29,6 +29,7 @@ These rules apply to Aida's website, standalone video player and Studio. The vid
 
 ## Player Settings and motion
 
+- Keep playback buttons, the seek bar and its touch target over the fitted video picture, including fullscreen letterboxing, pillarboxing, rotation and embedded resizing. Video and playback UI share one clipped surface with edges aligned to device pixels; gradients retain their normal height inside it. Align the title and transport feedback with that picture too; retain control sizes and device safe areas. Mobile Settings remains outside that surface as a sheet attached to the device viewport bottom.
 - Settings page motion must not animate layout properties such as height, width, top, or padding every frame. Measure the endpoints once, then use clipped transforms and opacity without scaling live text or controls.
 - Suspend hidden timeline DOM updates while Settings is open; keep video playback and the source's frame rate intact.
 - A control pressed during motion must stay under the pointer until release. Interrupted navigation, cancelled gestures, closing and reopening must preserve the current painted pose and correct focus.
@@ -61,6 +62,7 @@ Run the relevant checks from the repository root with `node tests/<name>.browser
 | Change | Required check and inspection |
 | --- | --- |
 | Player interaction or focus | `tests/player-focus.browser.mjs`: inspect focused desktop and mobile states, pointer activation, held native touch, keyboard shortcuts, menu dismissal and fullscreen return. Preserve transparent tap-highlight checks across the videos page, player and dynamic Settings content, plus visible non-outline keyboard focus checks when changing interaction styles. |
+| Playback control placement | `tests/player-video-bounds.browser.mjs`: verify the fitted picture bounds in portrait/landscape fullscreen, fullscreen return and resized containers, with touch seeking, source dimension changes and safe areas. Compare painted edge pixels with and without the gradient to catch bright seams at fractional video bounds. Mobile Settings must remain attached to the device bottom. |
 | Settings motion | `tests/player-settings-performance.browser.mjs`: preserve the traced layout-work budget, intermediate-frame checks and native touch interruption checks. A final screenshot or a fast desktop alone is not performance verification. Do not label emulation results as measured physical-phone FPS. |
 | Mobile Settings sheet | `tests/player-sheet.browser.mjs`: verify native scrolling, drag dismissal, cancellation, interrupted motion and focus return. |
 | Fullscreen gestures | `tests/player-fullscreen-gesture.browser.mjs`: verify the downward swipe in real fullscreen and preserve the excluded controls and cancellation paths. |

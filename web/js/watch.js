@@ -6,7 +6,7 @@ import { browseQuery, videosUrl, withBrowseQuery, requestBrowseReturn } from "./
 import { registryFromVideos, resolveVideoTags } from "./tags.js?v=master-tags-v1";
 import { tagQuery } from "./search.js?v=master-tags-v1";
 import { loadMetadata, VideoLoadError } from "./loader.js?v=cdn-security-v1";
-import { mountPlayer } from "./player/shell.js?v=overlay-scrollbar-v36";
+import { mountPlayer } from "./player/shell.js?v=picture-surface-v39";
 
 const id = new URLSearchParams(location.search).get("v") || "0";
 const originatingQuery = browseQuery(location.search);
